@@ -45,7 +45,11 @@ jobs:
         with:
           key: clippy-${{ matrix.os }}
       - name: cargo clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        # --no-default-features keeps the fastembed-backend (ONNX runtime
+        # download, ~100 MB) out of CI. The trait surface is still type-checked
+        # by `cargo check` below, and the integration tests use the mock
+        # embedder.
+        run: cargo clippy --workspace --all-targets --locked --no-default-features -- -D warnings
 
   test:
     name: test / ${{ matrix.os }}
@@ -61,7 +65,7 @@ jobs:
         with:
           key: test-${{ matrix.os }}
       - name: cargo test
-        run: cargo test --workspace --locked --all-targets
+        run: cargo test --workspace --locked --all-targets --no-default-features
 
   build:
     name: build / ${{ matrix.os }}
@@ -76,8 +80,12 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: build-${{ matrix.os }}
-      - name: cargo build (release)
-        run: cargo build --workspace --release --locked
+      - name: cargo build (release, mock embedder only)
+        # We deliberately skip --features fastembed-backend here: it pulls in
+        # `ort-sys`, whose build.rs fetches a ~100 MB ONNX runtime tarball
+        # from a third-party CDN. The fastembed path is exercised by users
+        # building locally, not in CI.
+        run: cargo build --workspace --release --locked --no-default-features
       - name: conclave-cli --help (smoke test)
         shell: bash
         run: |
