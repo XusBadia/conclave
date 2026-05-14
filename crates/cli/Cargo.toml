@@ -1,0 +1,29 @@
+[package]
+name = "conclave-cli"
+description = "Command-line entry point for the Conclave virtual clinical committee."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "conclave-cli"
+path = "src/main.rs"
+
+[dependencies]
+conclave-core = { workspace = true }
+conclave-providers = { workspace = true }
+conclave-rag = { workspace = true }
+conclave-deident = { workspace = true }
+
+clap = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

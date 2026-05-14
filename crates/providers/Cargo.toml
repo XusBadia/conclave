@@ -1,0 +1,24 @@
+[package]
+name = "conclave-providers"
+description = "LLM provider abstraction used by the Conclave virtual committee."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+conclave-core = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+toml = { workspace = true }

@@ -1,0 +1,20 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Conclave runtime data (user-local workspaces, secrets)
+*.env
+.env
+.env.*
+!.env.example
+conclave.toml.local
+/data/
+/tmp/

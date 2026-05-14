@@ -1,0 +1,94 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/providers",
+    "crates/rag",
+    "crates/deident",
+    "crates/cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+authors = ["Xus Badia"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/xusbadia/conclave"
+homepage = "https://github.com/xusbadia/conclave"
+readme = "README.md"
+
+[workspace.dependencies]
+# Internal crates
+conclave-core = { path = "crates/core", version = "0.1.0" }
+conclave-providers = { path = "crates/providers", version = "0.1.0" }
+conclave-rag = { path = "crates/rag", version = "0.1.0" }
+conclave-deident = { path = "crates/deident", version = "0.1.0" }
+
+# Errors
+thiserror = "1"
+anyhow = "1"
+
+# Serialization / config
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Async
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "io-util", "sync"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# Logging / observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
+
+# Filesystem / paths
+directories = "5"
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Testing
+tempfile = "3"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+missing_docs = "allow"
+unreachable_pub = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+
+# Pragmatic relaxations for an early-stage codebase.
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+multiple_crate_versions = "allow"
+cargo_common_metadata = "allow"
+return_self_not_must_use = "allow"
+# `redundant_pub_crate` (nursery) directly conflicts with the rust-level
+# `unreachable_pub` lint we use for crate-internal items; pick one.
+redundant_pub_crate = "allow"
+# Phase-0 subcommand stubs accept owned arg structs and return `Result<()>` so
+# the surface stays stable once real implementations land in later phases.
+needless_pass_by_value = "allow"
+unnecessary_wraps = "allow"
+# False-positive-prone on small string builders.
+branches_sharing_code = "allow"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[profile.dev]
+opt-level = 0
+debug = true
