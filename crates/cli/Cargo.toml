@@ -13,6 +13,13 @@ readme.workspace = true
 [lints]
 workspace = true
 
+[features]
+# End-user binaries default to the real fastembed-backed embedder. Drop the
+# default features in CI sandboxes that cannot reach the ONNX Runtime
+# download endpoint (or rely on `embedding_model = "mock"` in the config).
+default = ["fastembed-backend"]
+fastembed-backend = ["conclave-rag/fastembed-backend"]
+
 [[bin]]
 name = "conclave-cli"
 path = "src/main.rs"
@@ -27,3 +34,6 @@ clap = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
