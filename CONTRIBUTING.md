@@ -1,80 +1,56 @@
-# Contributing to Conclave
+# Contributing
 
-Thanks for taking the time. Conclave is in **Phase 0** — the surface area is
-intentionally small. This document captures the conventions that keep the
-codebase consistent while it grows.
+This is a solo-dev project for now. These guidelines are for future me and
+for AI coding agents working in the repo.
 
-## Code of conduct
+## Workflow rules
 
-Be excellent to each other. Clinical software is sensitive — assume good
-faith, default to kindness, escalate gently.
+- Commit early, commit often. Atomic commits, conventional messages.
+- Format: `<type>(<scope>): <subject>` — e.g., `feat(rag): add semantic chunker`.
+- Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `ci`, `perf`.
+- Push directly to `main` while pre-alpha; switch to PR flow before v0.1.
+- Each phase from `docs/PLAN.md` is one logical unit. Open a tracking issue
+  with the phase’s acceptance criteria as the checklist.
 
-## Toolchain
+## Code standards
 
-- The toolchain is pinned in [`rust-toolchain.toml`](./rust-toolchain.toml)
-  to the stable channel; `rustup` will install the right version on demand.
-- The repository uses a Cargo workspace; run `cargo` commands from the
-  repository root.
+- `cargo fmt` before commit. `rustfmt.toml` is authoritative.
+- `cargo clippy -- -D warnings` must pass. If a lint is wrong, justify
+  the `allow` in code with a comment.
+- No `unwrap()` outside tests. No `expect()` without an invariant comment.
+- New public items must have rustdoc with at least one usage example.
+- Tests for new logic. Aim for behaviour tests over implementation tests.
 
-## Local checks
+## Privacy invariants (do not break)
 
-Before opening a PR, run:
+These are enforced by CI grep and by careful review:
 
-```bash
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace --all-targets
-```
+1. `core`, `rag`, `deident` crates must not depend on `reqwest`, `hyper`,
+   or any HTTP client. Network access is centralised in `providers` and
+   `evidence`.
+1. No `println!` of patient-derived text in any binary. Use `tracing` at
+   `trace` or `debug` level, which is gated by `RUST_LOG`.
+1. No telemetry. No analytics SDKs. No phone-home.
+1. Secrets must go through `keyring`. Searching the repo for plausible
+   API key patterns must return zero matches.
 
-CI runs exactly these on Linux, macOS and Windows. Match local to CI.
+## Adding a new LLM provider
 
-## Coding conventions
+1. Create `crates/providers/src/<name>.rs`.
+1. Implement `LlmProvider` trait.
+1. Add feature flag in `crates/providers/Cargo.toml`.
+1. Add to provider registry in `crates/providers/src/lib.rs`.
+1. Add a mock-network test.
+1. Document in `docs/ARCHITECTURE.md` under provider list.
 
-- **Errors**: workspace crates surface failures through
-  `conclave_core::Error`. Add new variants there when introducing a new
-  fault domain.
-- **No `unwrap` / `expect` in library code**, except in tests and in
-  conditions documented as infallible at the call site.
-- **No `unsafe`**. The workspace lint profile sets `unsafe_code = "forbid"`.
-- **Logging**: use `tracing` macros. The CLI initialises the subscriber via
-  `conclave_core::logging::init`. Don't call `tracing_subscriber` directly
-  from library crates.
-- **Config changes**: every field added to `conclave_core::Config` must
-  ship a default, be covered by a round-trip test, and be documented in
-  the README's quick-start section if user-visible.
+## Working with Claude Code
 
-## Commit style
+When delegating work, always include:
 
-Conventional-Commits-flavoured prefixes are encouraged:
+- The relevant phase doc section (`docs/PLAN.md`).
+- The relevant architecture section (`docs/ARCHITECTURE.md`).
+- Concrete acceptance criteria.
+- Instruction to commit + push when done.
 
-```
-feat(rag): hybrid BM25 + dense retriever
-fix(deident): keep dosage numbers <4 digits
-chore(ci): cache target/ across jobs
-docs(readme): note Windows paths
-```
-
-Commits should be **atomic and self-contained**. A test added alongside a
-fix is one commit; a refactor split into preparation + behaviour change is
-two.
-
-## Branches
-
-Day-to-day work happens on feature branches off `main`. Phase work uses the
-naming convention `claude/conclave-phase-<n>-<slug>` for branches authored
-through the Claude Code workflow.
-
-## Adding a new crate
-
-1. Create `crates/<name>/Cargo.toml` mirroring the existing crates'
-   `[package]` block (inherit `version`, `edition`, etc. from workspace).
-2. Add the crate to `[workspace.members]` and (if it's a library) to
-   `[workspace.dependencies]` so other crates can refer to it as
-   `<name> = { workspace = true }`.
-3. Wire `[lints] workspace = true` so the strict lint profile applies.
-4. Run `cargo check --workspace` to confirm the graph still resolves.
-
-## Releasing
-
-Releases are deferred until Phase 4. The current contract is that `main`
-must always be CI-green.
+Prefer small chunks over big ones. Claude Code is much better at coherent
+500-line tasks than 2000-line tasks.
