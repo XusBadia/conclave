@@ -1,129 +1,111 @@
-# Conclave
+# Conclave Bootstrap
 
-> Virtual multidisciplinary clinical committee, on your desk.
+Everything you need to hand to Claude Code to build Conclave end-to-end.
 
-Conclave is a desktop application — eventually built on **Tauri 2** with a
-**Rust** core and a **React + TypeScript** UI — that orchestrates a panel of
-large language models acting as a virtual multidisciplinary committee
-(*comité multidisciplinar*) to help clinicians stress-test a question, plan
-or differential against their own knowledge base.
-
-## Status
-
-**Phase 1 — Knowledge base.** This repository currently contains:
-
-- A Rust [Cargo workspace](./Cargo.toml) with five crates: `core`,
-  `providers`, `rag`, `deident` and `cli`.
-- A working **knowledge base** in `conclave-rag`: ingestion of Markdown,
-  plain text, PDF, HTML and DOCX into a per-workspace SQLite store, with
-  Unicode-safe chunking, pluggable embeddings (mock for tests / `fastembed`
-  ONNX for production) and **hybrid retrieval** — FTS5 BM25 fused with
-  dense cosine similarity via Reciprocal Rank Fusion.
-- A `conclave-cli` binary with **real** `ingest`, `search`, and
-  `workspace stats` subcommands (plus the Phase-0 placeholders for
-  `verdict` and `providers`).
-- Strict workspace-wide lints (`clippy::pedantic` + `nursery` + `cargo`),
-  formatting via `rustfmt`, 50+ unit + integration tests, and a 3-OS CI
-  matrix.
-
-Phase 2 (Providers) is next — see `ARCHITECTURE.md` for the roadmap.
-
-## Medical disclaimer
-
-**Conclave is an experimental clinical decision-support assistant. It is NOT
-a medical device and does NOT replace the judgement of a qualified
-clinician.** Outputs may be incomplete, biased, or wrong. Always validate
-any suggestion against primary sources and institutional protocols before
-acting on it.
-
-The same disclaimer is printed by `conclave-cli` on every invocation; pass
-`--no-disclaimer` to suppress it (e.g. in scripted contexts).
-
-## Quick start
-
-```bash
-# Build everything (production: includes fastembed ONNX backend)
-cargo build --workspace
-
-# Or, on machines without internet for the ONNX runtime tarball:
-cargo build --workspace --no-default-features
-
-# See the CLI surface
-cargo run -p conclave-cli -- --help
-
-# Set up a workspace under a custom root and seed it with documents
-cargo run -p conclave-cli -- \
-    --workspace-root ./.conclave-dev workspace init
-
-cargo run -p conclave-cli -- \
-    --workspace-root ./.conclave-dev \
-    ingest ./path/to/clinical-guidelines/
-
-# Query the knowledge base
-cargo run -p conclave-cli -- \
-    --workspace-root ./.conclave-dev \
-    search "manejo del IAMCEST reperfusión primaria"
-
-# Storage footprint
-cargo run -p conclave-cli -- \
-    --workspace-root ./.conclave-dev \
-    workspace stats
-```
-
-To run completely offline (no embedding-model download), set
-`knowledge.embedding_model = "mock"` in `conclave.toml`. The mock embedder
-is deterministic — useful for CI and air-gapped smoke tests.
-
-The default workspace root follows your operating system's conventions:
-
-| Platform | Config dir                                              |
-|----------|---------------------------------------------------------|
-| Linux    | `$XDG_CONFIG_HOME/conclave/` (typically `~/.config/conclave/`) |
-| macOS    | `~/Library/Application Support/dev.Conclave.conclave/`  |
-| Windows  | `%APPDATA%\Conclave\conclave\config\`                   |
-
-## Project layout
+## What’s inside
 
 ```
-crates/
-  core/         shared types, error, config, paths, logging
-  providers/    LLM provider trait + (later) concrete implementations
-  rag/          ingestion, chunking, embeddings, search
-  deident/      PII de-identification for clinical text
-  cli/          conclave-cli binary (testing entry point)
+conclave-bootstrap/
+├── README.md                  ← you are here
+├── docs/                      ← copy these into your repo at /docs
+│   ├── README.md
+│   ├── ARCHITECTURE.md
+│   ├── PLAN.md
+│   ├── PROMPTING.md
+│   ├── DISCLAIMER.md
+│   └── CONTRIBUTING.md
+└── prompts/                   ← paste one at a time to Claude Code
+    ├── phase-0-foundations.md
+    ├── phase-1-knowledge-base.md
+    ├── phase-2-providers.md
+    ├── phase-3-deidentification.md
+    ├── phase-4-verdict-engine.md
+    ├── phase-5-learning-loop.md
+    ├── phase-6-online-evidence.md
+    └── phase-7-8-ui-and-distribution.md
 ```
 
-See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the data flow and the planned
-phases.
+## How to use
 
-## Development
+### Step 1 — Seed the repo with the docs
 
-Required toolchain is pinned in [`rust-toolchain.toml`](./rust-toolchain.toml)
-to the stable channel. Common commands:
+The repo exists already. From iPhone, you have two easy ways to add
+these files:
 
-```bash
-cargo fmt --all                     # format
-cargo clippy --all-targets -- -D warnings   # lint
-cargo test --workspace              # tests
-cargo run -p conclave-cli -- --help # CLI
-```
+**Option A — Tell Claude Code to do it.**
 
-CI runs `fmt`, `clippy`, `test` and `build` on Ubuntu, macOS and Windows.
+After your current Phase 0 session ends (or in a fresh one), paste:
 
-See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for contributor guidelines.
+> “I’m attaching seven Markdown files (the ones in `docs/`). Place them
+> in the `docs/` directory at the repo root, exactly as named, and
+> commit them with message `docs: add architecture, plan and guidelines`. Push to main.”
 
-## License
+Then upload the seven files from `docs/` in the chat with Claude Code.
 
-Dual-licensed under either of:
+**Option B — Upload via GitHub mobile.**
 
-- Apache License, Version 2.0, ([LICENSE-APACHE](./LICENSE-APACHE) or
-  <https://www.apache.org/licenses/LICENSE-2.0>)
-- MIT license ([LICENSE-MIT](./LICENSE-MIT) or
-  <https://opensource.org/licenses/MIT>)
+In GitHub mobile, open the repo, tap `+` → Upload files → select the
+seven files from `docs/`. Commit directly to main. Faster but uses
+GitHub’s basic editor.
 
-at your option.
+### Step 2 — Phase 0
 
-Unless you explicitly state otherwise, any contribution intentionally
-submitted for inclusion in this work by you, as defined in the Apache-2.0
-license, shall be dual licensed as above, without any additional terms or
-conditions.
+If you’ve already kicked off Phase 0 with the earlier prompt, perfect
+— let it finish. The detailed `phase-0-foundations.md` here is the
+same spirit, fleshed out a bit more; if Phase 0 is still in progress
+you can ignore this file. If it’s not started yet, use this version.
+
+### Step 3 — Subsequent phases
+
+For each subsequent phase:
+
+1. Wait until the previous phase is fully green on CI.
+1. Open a fresh Claude Code session in the repo.
+1. Paste the corresponding `phase-N-*.md` file as the first message.
+1. Claude Code will plan, post the plan, then implement, then commit
+   and push.
+1. Come back to the Conclave chat with me (Claude) if you want to
+   refine anything before the next phase.
+
+### Step 4 — Phase 4 needs a checkpoint
+
+Phase 4 is the verdict engine and it’s the most product-defining part.
+The prompt instructs Claude Code to **stop after planning and wait for
+your review** before coding. When that happens, paste the proposed
+plan back into our chat and we iterate together. Don’t let it implement
+on autopilot — that’s the 80%-of-the-product moment.
+
+## Tips for working with Claude Code on iPhone
+
+- Push directly to `main` while solo; PR discipline later.
+- If a session is long, summarise progress as a comment in the
+  tracking issue before closing — restart Claude Code reads the issue
+  faster than the full chat history.
+- If CI fails, screenshot the failure and paste the error into a new
+  Claude Code session: “fix the CI failure shown below, then commit
+  and push”.
+- If Claude Code starts making decisions you didn’t approve (changing
+  stack, adding deps, restructuring crates), interrupt and point it
+  at `docs/ARCHITECTURE.md`.
+
+## Decisions already made (don’t relitigate)
+
+- **Stack**: Rust core + Tauri 2 UI. Not Electron, not pure Swift, not
+  pure web.
+- **Embeddings**: `multilingual-e5-small` via `fastembed-rs`.
+- **Storage**: SQLite + LanceDB, local under user data dir.
+- **Providers**: API-key first, OAuth-subscription optional, local
+  (Ollama + Apple Intelligence) supported.
+- **Privacy**: mandatory de-identification before any LLM call.
+- **License**: MIT.
+- **Phase order is fixed**: don’t skip ahead.
+
+## What’s deliberately not specified
+
+- Exact dependency versions: let Claude Code pick recent stable, then
+  pin via `Cargo.lock`.
+- UI design tokens: defined later in Phase 7 with the Mac in hand.
+- Specific NER model choice: locked in during Phase 3.
+- OAuth providers (Phase 2.5): skipped unless we hit a real need.
+
+Good luck. Ship it.
