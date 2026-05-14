@@ -10,16 +10,23 @@ or differential against their own knowledge base.
 
 ## Status
 
-**Phase 0 — Foundations.** This repository currently contains:
+**Phase 1 — Knowledge base.** This repository currently contains:
 
 - A Rust [Cargo workspace](./Cargo.toml) with five crates: `core`,
   `providers`, `rag`, `deident` and `cli`.
-- A `conclave-cli` binary used as the testing entry point until the
-  desktop UI is built (no Mac on hand yet).
+- A working **knowledge base** in `conclave-rag`: ingestion of Markdown,
+  plain text, PDF, HTML and DOCX into a per-workspace SQLite store, with
+  Unicode-safe chunking, pluggable embeddings (mock for tests / `fastembed`
+  ONNX for production) and **hybrid retrieval** — FTS5 BM25 fused with
+  dense cosine similarity via Reciprocal Rank Fusion.
+- A `conclave-cli` binary with **real** `ingest`, `search`, and
+  `workspace stats` subcommands (plus the Phase-0 placeholders for
+  `verdict` and `providers`).
 - Strict workspace-wide lints (`clippy::pedantic` + `nursery` + `cargo`),
-  formatting via `rustfmt`, unit tests, and a 3-OS CI matrix.
+  formatting via `rustfmt`, 50+ unit + integration tests, and a 3-OS CI
+  matrix.
 
-Phase 1 (Knowledge Base) is next — see `ARCHITECTURE.md` for the roadmap.
+Phase 2 (Providers) is next — see `ARCHITECTURE.md` for the roadmap.
 
 ## Medical disclaimer
 
@@ -35,22 +42,37 @@ The same disclaimer is printed by `conclave-cli` on every invocation; pass
 ## Quick start
 
 ```bash
-# Build everything
+# Build everything (production: includes fastembed ONNX backend)
 cargo build --workspace
+
+# Or, on machines without internet for the ONNX runtime tarball:
+cargo build --workspace --no-default-features
 
 # See the CLI surface
 cargo run -p conclave-cli -- --help
 
-# Initialise a workspace under a custom root (for testing)
+# Set up a workspace under a custom root and seed it with documents
 cargo run -p conclave-cli -- \
-    --workspace-root ./.conclave-dev \
-    workspace init
+    --workspace-root ./.conclave-dev workspace init
 
-# Inspect resolved paths and effective config
 cargo run -p conclave-cli -- \
     --workspace-root ./.conclave-dev \
-    workspace info
+    ingest ./path/to/clinical-guidelines/
+
+# Query the knowledge base
+cargo run -p conclave-cli -- \
+    --workspace-root ./.conclave-dev \
+    search "manejo del IAMCEST reperfusión primaria"
+
+# Storage footprint
+cargo run -p conclave-cli -- \
+    --workspace-root ./.conclave-dev \
+    workspace stats
 ```
+
+To run completely offline (no embedding-model download), set
+`knowledge.embedding_model = "mock"` in `conclave.toml`. The mock embedder
+is deterministic — useful for CI and air-gapped smoke tests.
 
 The default workspace root follows your operating system's conventions:
 

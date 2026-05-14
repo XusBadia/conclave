@@ -11,6 +11,7 @@ use clap::{Parser, Subcommand};
 use conclave_core::{logging, paths::Paths, Config, MEDICAL_DISCLAIMER};
 
 mod commands;
+mod embedder;
 
 /// `conclave-cli` argument tree.
 #[derive(Debug, Parser)]
@@ -46,6 +47,8 @@ struct Cli {
 enum Command {
     /// Ingest documents into the knowledge base.
     Ingest(commands::ingest::IngestArgs),
+    /// Search the knowledge base.
+    Search(commands::search::SearchArgs),
     /// Run a virtual committee and print its verdict.
     Verdict(commands::verdict::VerdictArgs),
     /// Inspect, list and test configured LLM providers.
@@ -78,6 +81,7 @@ fn main() -> Result<()> {
 
     match cli.command {
         Command::Ingest(args) => commands::ingest::run(&ctx, args),
+        Command::Search(args) => commands::search::run(&ctx, args),
         Command::Verdict(args) => commands::verdict::run(&ctx, args),
         Command::Providers(args) => commands::providers::run(&ctx, args),
         Command::Workspace(args) => commands::workspace::run(&ctx, args),

@@ -11,13 +11,15 @@ use serde::{Deserialize, Serialize};
 use crate::{Error, Result};
 
 /// Root configuration object.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     /// General application settings.
     pub general: GeneralConfig,
     /// RAG pipeline tuning.
     pub rag: RagConfig,
+    /// Knowledge-base (embeddings, vector store, retrieval) tuning.
+    pub knowledge: KnowledgeConfig,
     /// LLM provider routing and credentials (filled in Phase 2).
     pub providers: ProvidersConfig,
 }
@@ -72,6 +74,44 @@ impl Default for RagConfig {
             chunk_size: 1024,
             chunk_overlap: 128,
             top_k: 8,
+        }
+    }
+}
+
+/// Knowledge-base configuration: embeddings, vector store and retrieval
+/// weights for the hybrid search.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct KnowledgeConfig {
+    /// Identifier of the embedding model used by the ingestion pipeline.
+    ///
+    /// Defaults to `bge-small-en-v1.5` (384-dim) — fast to download and
+    /// adequate for English clinical literature. Use `bge-m3` for
+    /// high-quality multilingual (Spanish clinical text), at the cost of a
+    /// larger model and 1024-dim vectors.
+    pub embedding_model: String,
+    /// Output dimension of the chosen embedding model.
+    ///
+    /// Must match the model selected in `embedding_model`. The store
+    /// validates this against the column it created on first use.
+    pub embedding_dim: usize,
+    /// Weight applied to the BM25 score when fusing with the dense score
+    /// via Reciprocal Rank Fusion.
+    pub bm25_weight: f32,
+    /// Weight applied to the dense (vector) score when fusing with BM25.
+    pub dense_weight: f32,
+    /// `k` constant used in Reciprocal Rank Fusion (`1 / (k + rank)`).
+    pub rrf_k: f32,
+}
+
+impl Default for KnowledgeConfig {
+    fn default() -> Self {
+        Self {
+            embedding_model: "bge-small-en-v1.5".to_owned(),
+            embedding_dim: 384,
+            bm25_weight: 1.0,
+            dense_weight: 1.0,
+            rrf_k: 60.0,
         }
     }
 }
@@ -132,6 +172,34 @@ impl Config {
         }
         if self.rag.top_k == 0 {
             return Err(Error::invalid_config("rag.top_k must be > 0"));
+        }
+        if self.knowledge.embedding_model.trim().is_empty() {
+            return Err(Error::invalid_config(
+                "knowledge.embedding_model must not be empty",
+            ));
+        }
+        if self.knowledge.embedding_dim == 0 {
+            return Err(Error::invalid_config("knowledge.embedding_dim must be > 0"));
+        }
+        if !self.knowledge.bm25_weight.is_finite() || self.knowledge.bm25_weight < 0.0 {
+            return Err(Error::invalid_config(
+                "knowledge.bm25_weight must be a non-negative finite number",
+            ));
+        }
+        if !self.knowledge.dense_weight.is_finite() || self.knowledge.dense_weight < 0.0 {
+            return Err(Error::invalid_config(
+                "knowledge.dense_weight must be a non-negative finite number",
+            ));
+        }
+        if !(self.knowledge.bm25_weight > 0.0 || self.knowledge.dense_weight > 0.0) {
+            return Err(Error::invalid_config(
+                "at least one of knowledge.bm25_weight or knowledge.dense_weight must be > 0",
+            ));
+        }
+        if !self.knowledge.rrf_k.is_finite() || self.knowledge.rrf_k <= 0.0 {
+            return Err(Error::invalid_config(
+                "knowledge.rrf_k must be a positive finite number",
+            ));
         }
         Ok(())
     }
