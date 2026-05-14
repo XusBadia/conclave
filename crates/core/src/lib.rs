@@ -15,7 +15,7 @@ pub mod error;
 pub mod logging;
 pub mod paths;
 
-pub use config::{Config, GeneralConfig, LogFormat, ProvidersConfig, RagConfig};
+pub use config::{Config, GeneralConfig, KnowledgeConfig, LogFormat, ProvidersConfig, RagConfig};
 pub use error::{Error, Result};
 pub use paths::Paths;
 
