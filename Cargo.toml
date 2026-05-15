@@ -45,31 +45,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"]
 
 # Filesystem / paths
 directories = "5"
-walkdir = "2"
-
-# Hashing (content dedup)
-blake3 = "1"
 
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
-
-# Knowledge base
-#
-# Phase 1 deliberately avoids `sqlite-vec` even though it is the obvious
-# fit: it requires an `unsafe` FFI shim to register the C extension and a
-# cross-OS build of the extension itself. We get the same on-disk layout
-# (vectors as BLOB columns) by computing cosine similarity in a Rust scalar
-# function registered on the connection. Migrating to `sqlite-vec` later
-# only changes the `search_dense` query path.
-rusqlite = { version = "0.32", features = ["bundled", "blob", "functions", "trace"] }
-fastembed = "4"
-
-# Document loaders
-pulldown-cmark = "0.12"
-pdf-extract = "0.7"
-scraper = "0.20"
-html2text = "0.12"
-docx-rs = "0.4"
 
 # Testing
 tempfile = "3"

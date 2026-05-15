@@ -13,34 +13,8 @@ readme.workspace = true
 [lints]
 workspace = true
 
-[features]
-# `fastembed-backend` pulls in the `fastembed` + `ort` toolchain, which
-# downloads an ONNX Runtime binary at build time. Default is OFF so the
-# library is buildable in air-gapped environments (and our tests stay
-# hermetic against `MockEmbedder`). The CLI re-enables it via its own
-# default feature.
-default = []
-fastembed-backend = ["dep:fastembed"]
-
 [dependencies]
 conclave-core = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-
-# Knowledge base
-rusqlite = { workspace = true }
-fastembed = { workspace = true, optional = true }
-blake3 = { workspace = true }
-walkdir = { workspace = true }
-
-# Loaders
-pulldown-cmark = { workspace = true }
-pdf-extract = { workspace = true }
-scraper = { workspace = true }
-html2text = { workspace = true }
-docx-rs = { workspace = true }
-
-[dev-dependencies]
-tempfile = { workspace = true }
