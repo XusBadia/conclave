@@ -23,12 +23,6 @@ pub(crate) enum WorkspaceAction {
         #[arg(long)]
         force: bool,
     },
-    /// Report knowledge-base statistics for a workspace.
-    Stats {
-        /// Workspace to inspect (defaults to the configured one).
-        #[arg(long, value_name = "NAME")]
-        workspace: Option<String>,
-    },
 }
 
 /// Execute the `workspace` subcommand.
@@ -47,10 +41,6 @@ pub(crate) fn run(ctx: &CommandContext, args: WorkspaceArgs) -> Result<()> {
                 "default provider: {}",
                 ctx.config.providers.default.as_deref().unwrap_or("<unset>"),
             );
-            println!(
-                "embedding model: {}  (dim={})",
-                ctx.config.knowledge.embedding_model, ctx.config.knowledge.embedding_dim,
-            );
         }
         WorkspaceAction::Init { force } => {
             let path = ctx.paths.config_file();
@@ -62,23 +52,6 @@ pub(crate) fn run(ctx: &CommandContext, args: WorkspaceArgs) -> Result<()> {
             }
             ctx.config.save(&path)?;
             println!("wrote default config to {}", path.display());
-        }
-        WorkspaceAction::Stats { workspace } => {
-            let db = ctx.workspace_db(workspace.as_deref());
-            if !db.exists() {
-                println!(
-                    "no knowledge base yet at {} — run `conclave-cli ingest` to create one",
-                    db.display()
-                );
-                return Ok(());
-            }
-            let store =
-                conclave_rag::KnowledgeStore::open(&db, ctx.config.knowledge.embedding_dim)?;
-            let stats = store.stats()?;
-            println!("knowledge base: {}", db.display());
-            println!("  documents:  {}", stats.documents);
-            println!("  chunks:     {}", stats.chunks);
-            println!("  disk size:  {} bytes", stats.disk_bytes);
         }
     }
     Ok(())
