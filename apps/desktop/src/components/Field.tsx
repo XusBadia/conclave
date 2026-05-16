@@ -37,7 +37,7 @@ export function Field({
 }
 
 export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
-  return <input className={cn(ringBase, "no-drag", className)} {...rest} />;
+  return <input className={cn(ringBase, className)} {...rest} />;
 }
 
 export function Textarea({
@@ -46,7 +46,7 @@ export function Textarea({
 }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return (
     <textarea
-      className={cn(ringBase, "no-drag font-mono leading-6", className)}
+      className={cn(ringBase, "font-mono leading-6", className)}
       {...rest}
     />
   );

@@ -144,7 +144,7 @@ export function KnowledgePage({ workspace }: { workspace: Workspace }) {
           />
           <CardBody className="p-0">
             {ingestStatus && (
-              <div className="mx-5 mt-4 rounded-md border border-accent/40 bg-accent/5 px-3 py-2 text-[13px] text-accent">
+              <div className="mx-5 mt-4 border border-border bg-surface px-3 py-2 text-[13px] text-ink-dim">
                 {ingestStatus}
               </div>
             )}

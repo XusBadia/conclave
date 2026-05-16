@@ -39,7 +39,7 @@ export function CardHeader({
           </p>
         )}
       </div>
-      {right && <div className="no-drag ml-3 shrink-0">{right}</div>}
+      {right && <div className="ml-3 shrink-0">{right}</div>}
     </div>
   );
 }

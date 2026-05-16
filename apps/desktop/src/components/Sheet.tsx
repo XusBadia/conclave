@@ -126,7 +126,7 @@ export function Sheet({
         style={{ width }}
         className={cn(
           "absolute right-0 top-0 flex h-full max-w-[92vw] flex-col border-l border-border",
-          "bg-bg-elevated shadow-soft no-drag",
+          "bg-bg-elevated shadow-soft",
           "transition-transform duration-[220ms] ease-[cubic-bezier(0.16,1,0.3,1)]",
           open ? "translate-x-0" : "translate-x-full",
         )}

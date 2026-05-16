@@ -54,25 +54,47 @@ export function App() {
       )}
 
       {/* macOS overlay title bar — spans the full window so the user can
-          drag from anywhere and traffic lights stay out of content. */}
-      <header className="titlebar titlebar-pad-mac flex items-center gap-3 pr-5 text-[12px] text-ink-faint">
-        <div className="text-[13px] font-semibold tracking-tight text-ink">
+          drag from anywhere. Uses Tauri 2's data-tauri-drag-region; any
+          interactive descendant must set data-tauri-drag-region="false". */}
+      <header
+        data-tauri-drag-region
+        className="titlebar titlebar-pad-mac flex items-center gap-4 pr-5 text-[11px] text-ink-faint"
+      >
+        <div
+          data-tauri-drag-region
+          className="font-mono text-[11px] uppercase tracking-[0.16em] text-ink"
+        >
           {t("app.brand")}
         </div>
-        <span className="text-ink-faint/60">·</span>
-        <div className="text-[12px] uppercase tracking-[0.08em] text-ink-subtle">
+        <span
+          data-tauri-drag-region
+          aria-hidden
+          className="h-3 w-px bg-border"
+        />
+        <div
+          data-tauri-drag-region
+          className="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-dim"
+        >
           {t(`section.${section}`)}
         </div>
-        <div className="flex-1" />
+        <div data-tauri-drag-region className="flex-1" />
         {active ? (
-          <div className="flex items-center gap-2 rounded-md border border-border-subtle bg-surface/70 px-2.5 py-1 text-[11px] text-ink-dim">
+          <div
+            data-tauri-drag-region="false"
+            className="flex items-center gap-2 border border-border bg-surface/70 px-2.5 py-1 text-[11px] text-ink-dim"
+          >
             <span className="h-1.5 w-1.5 rounded-full bg-ok" />
             <span className="truncate max-w-[200px]">{active.name}</span>
             <span className="text-ink-faint">·</span>
             <span className="font-mono text-ink-faint">{active.id}</span>
           </div>
         ) : (
-          <span className="text-ink-faint">{t("app.no_workspace")}</span>
+          <span
+            data-tauri-drag-region
+            className="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-faint"
+          >
+            {t("app.no_workspace")}
+          </span>
         )}
       </header>
 
@@ -84,7 +106,7 @@ export function App() {
           workspaceLabel={active ? active.name : null}
         />
 
-        <main className="canvas-grain flex min-w-0 flex-1 flex-col overflow-hidden">
+        <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <div className="min-h-0 flex-1 overflow-y-auto">
             {section === "workspaces" && (
               <WorkspacesPage

@@ -12,6 +12,7 @@ import { Card, CardBody, CardHeader } from "../components/Card";
 import { Field, Input } from "../components/Field";
 import { cn } from "../lib/cn";
 import { getLocale, setLocale, type Locale } from "../i18n";
+import { useTheme } from "../lib/theme";
 import {
   activeProvider,
   connectedSlotProviders,
@@ -346,6 +347,7 @@ function LanguageCard() {
     const lng = i18n.language;
     return lng === "en" ? "en" : "es";
   });
+  const [themeMode, setThemeMode] = useTheme();
 
   const update = (loc: Locale) => {
     setCurrent(loc);
@@ -362,9 +364,9 @@ function LanguageCard() {
         title={t("settings.interface_title")}
         subtitle={t("settings.interface_subtitle")}
       />
-      <CardBody>
+      <CardBody className="space-y-4">
         <Field label={t("settings.interface_field")}>
-          <div className="inline-flex rounded-lg border border-border bg-bg p-0.5 no-drag">
+          <div className="inline-flex rounded-lg border border-border bg-bg p-0.5">
             <LangPill
               active={current === "es"}
               onClick={() => update("es")}
@@ -376,6 +378,28 @@ function LanguageCard() {
               onClick={() => update("en")}
             >
               {t("settings.language_en")}
+            </LangPill>
+          </div>
+        </Field>
+        <Field label={t("settings.theme_field")}>
+          <div className="inline-flex rounded-lg border border-border bg-bg p-0.5">
+            <LangPill
+              active={themeMode === "system"}
+              onClick={() => setThemeMode("system")}
+            >
+              {t("settings.theme_system")}
+            </LangPill>
+            <LangPill
+              active={themeMode === "light"}
+              onClick={() => setThemeMode("light")}
+            >
+              {t("settings.theme_light")}
+            </LangPill>
+            <LangPill
+              active={themeMode === "dark"}
+              onClick={() => setThemeMode("dark")}
+            >
+              {t("settings.theme_dark")}
             </LangPill>
           </div>
         </Field>
@@ -398,7 +422,7 @@ function LangPill({
       type="button"
       onClick={onClick}
       className={cn(
-        "rounded-md px-3 py-1.5 text-[13px] font-medium transition no-drag",
+        "rounded-md px-3 py-1.5 text-[13px] font-medium transition",
         "focus:outline-none focus-visible:ring-conclave",
         active
           ? "bg-surface text-ink shadow-soft"
@@ -477,7 +501,7 @@ function PickerTile({
       disabled={disabled}
       aria-label={t("settings.picker_connect_aria", { name: meta.name })}
       className={cn(
-        "group relative flex w-full items-start gap-3 rounded-lg border border-border bg-bg p-3.5 text-left transition-all no-drag",
+        "group relative flex w-full items-start gap-3 rounded-lg border border-border bg-bg p-3.5 text-left transition-all",
         "hover:bg-surface-hover focus:outline-none focus-visible:ring-conclave",
         "disabled:cursor-not-allowed disabled:opacity-50",
         BRAND_HOVER[meta.brand],
@@ -490,7 +514,7 @@ function PickerTile({
             {meta.name}
           </div>
           {meta.recommended && (
-            <span className="rounded bg-accent/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent">
+            <span className="border border-ink px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.08em] text-ink">
               {t("settings.picker_recommended")}
             </span>
           )}
@@ -666,7 +690,7 @@ function ConnectFlowView({
           disabled={busy}
           aria-label={t("settings.back_aria")}
           className={cn(
-            "grid h-8 w-8 place-content-center rounded-md border border-border-subtle text-ink-subtle transition no-drag",
+            "grid h-8 w-8 place-content-center rounded-md border border-border-subtle text-ink-subtle transition",
             "hover:bg-surface hover:text-ink focus:outline-none focus-visible:ring-conclave",
             "disabled:cursor-not-allowed disabled:opacity-50",
           )}
@@ -790,8 +814,8 @@ function AnthropicOAuthFlow({
       }}
       className="space-y-3"
     >
-      <div className="flex items-start gap-2 rounded-md border border-accent/30 bg-accent/5 p-3 text-[12px] leading-relaxed text-ink-dim">
-        <span className="mt-0.5 text-accent">
+      <div className="flex items-start gap-2 border border-border bg-surface p-3 text-[12px] leading-relaxed text-ink-dim">
+        <span className="mt-0.5 text-ink-subtle">
           <InfoIcon />
         </span>
         <span>
@@ -899,10 +923,10 @@ function MigrationDialog({
                 type="button"
                 onClick={() => setSelected(p.id)}
                 className={cn(
-                  "flex w-full items-center gap-3 rounded-lg border p-3 text-left transition no-drag",
+                  "flex w-full items-center gap-3 rounded-lg border p-3 text-left transition",
                   "focus:outline-none focus-visible:ring-conclave",
                   isSelected
-                    ? "border-accent/60 bg-accent/5"
+                    ? "border-ink bg-surface-active"
                     : "border-border bg-bg hover:bg-surface-hover",
                 )}
               >
@@ -969,10 +993,10 @@ function Radio({ selected }: { selected: boolean }) {
       aria-hidden
       className={cn(
         "grid h-4 w-4 shrink-0 place-content-center rounded-full border transition",
-        selected ? "border-accent" : "border-border-strong",
+        selected ? "border-ink" : "border-border-strong",
       )}
     >
-      {selected && <span className="h-1.5 w-1.5 rounded-full bg-accent" />}
+      {selected && <span className="h-1.5 w-1.5 rounded-full bg-ink" />}
     </span>
   );
 }

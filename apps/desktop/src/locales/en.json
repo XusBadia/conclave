@@ -131,11 +131,15 @@
     }
   },
   "settings": {
-    "interface_title": "Interface language",
-    "interface_subtitle": "Affects only the app · each workspace keeps its own verdict language",
+    "interface_title": "Interface",
+    "interface_subtitle": "Language and theme · each workspace keeps its own verdict language",
     "interface_field": "Language",
     "language_es": "Spanish (es)",
     "language_en": "English (en)",
+    "theme_field": "Theme",
+    "theme_system": "System",
+    "theme_light": "Light",
+    "theme_dark": "Dark",
     "ai_title": "Your AI",
     "ai_subtitle_empty": "Connect a provider — you can change it whenever you want",
     "ai_subtitle_active": "One AI active at a time · switch whenever you want",
