@@ -32,6 +32,19 @@ tiktoken-rs = { workspace = true }
 # Embeddings (Phase 1 §4): fastembed wraps ONNX Runtime + HuggingFace Hub.
 fastembed = { workspace = true }
 
+# Storage (Phase 1 §5): SQLite for metadata, LanceDB for vectors, sha2 for
+# file hashing, chrono for timestamps, tokio for async, arrow for the lance
+# record-batch interop.
+rusqlite = { workspace = true }
+lancedb = { workspace = true }
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+sha2 = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+slug = { workspace = true }
+
 # OCR backends (Phase 1 §2). Activated by the `ocr` feature below. They
 # pull in heavy native dependencies (Pdfium, libtesseract), so we keep
 # them strictly opt-in.

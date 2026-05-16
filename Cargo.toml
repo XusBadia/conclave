@@ -75,8 +75,14 @@ fastembed = { version = "5", default-features = false, features = [
     "ort-download-binaries-rustls-tls",
     "hf-hub-rustls-tls",
 ] }
-lancedb = "0.29"
+# `lancedb` defaults pull AWS/GCS/Azure/DynamoDB/OSS object-store SDKs;
+# we only need local-filesystem mode.
+lancedb = { version = "0.29", default-features = false }
 rusqlite = { version = "0.39", features = ["bundled"] }
+# Arrow types for talking to lancedb. Pin the major version that lancedb
+# 0.29 uses internally so they share Rc'd type definitions.
+arrow-array = "58"
+arrow-schema = "58"
 
 # Phase 1 — OCR (feature-gated in `conclave-rag`)
 pdfium-render = "0.9"

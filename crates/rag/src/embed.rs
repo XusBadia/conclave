@@ -201,7 +201,10 @@ mod tests {
         assert_eq!(a[0].len(), E5_SMALL_DIM);
         // Vectors should be unit-length.
         let norm: f32 = a[0].iter().map(|x| x * x).sum::<f32>().sqrt();
-        assert!((norm - 1.0).abs() < 1e-3, "expected unit vector, got norm={norm}");
+        assert!(
+            (norm - 1.0).abs() < 1e-3,
+            "expected unit vector, got norm={norm}"
+        );
     }
 
     #[test]
