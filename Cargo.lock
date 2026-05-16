@@ -946,7 +946,9 @@ name = "conclave-deident"
 version = "0.1.0"
 dependencies = [
  "conclave-core",
+ "regex",
  "serde",
+ "serde_json",
  "thiserror 1.0.69",
  "tracing",
 ]

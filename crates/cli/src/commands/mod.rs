@@ -13,6 +13,7 @@ use conclave_rag::{
     ChunkParams, DocumentRepository, Embedder, FastEmbedEmbedder, RepositoryLayout,
 };
 
+pub(crate) mod deident;
 pub(crate) mod documents;
 pub(crate) mod ingest;
 pub(crate) mod providers;

@@ -51,6 +51,8 @@ enum Command {
     Documents(commands::documents::DocumentsArgs),
     /// Vector-search the active workspace.
     Search(commands::search::SearchArgs),
+    /// De-identify free-text input (Phase 3 — privacy-critical step).
+    Deident(commands::deident::DeidentArgs),
     /// Run a virtual committee and print its verdict.
     Verdict(commands::verdict::VerdictArgs),
     /// Inspect, list and test configured LLM providers.
@@ -90,6 +92,7 @@ async fn main() -> Result<()> {
         Command::Ingest(args) => commands::ingest::run(&ctx, args).await,
         Command::Documents(args) => commands::documents::run(&ctx, args).await,
         Command::Search(args) => commands::search::run(&ctx, args).await,
+        Command::Deident(args) => commands::deident::run(&ctx, args),
         Command::Verdict(args) => commands::verdict::run(&ctx, args),
         Command::Providers(args) => commands::providers::run(&ctx, args).await,
         Command::Workspace(args) => commands::workspace::run(&ctx, args),
