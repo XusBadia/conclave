@@ -153,13 +153,25 @@ fn parse_pasted_code(raw: &str) -> (String, Option<String>) {
 
 /// Public client id used by the official OpenAI Codex CLI.
 pub const OPENAI_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
-const OPENAI_AUTHORIZE_URL: &str = "https://auth.openai.com/authorize";
+const OPENAI_AUTHORIZE_URL: &str = "https://auth.openai.com/oauth/authorize";
 const OPENAI_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 /// Codex CLI uses a fixed port; we re-use it so the redirect URI lines up
 /// with what the OpenAI app expects for this client id.
 const OPENAI_CALLBACK_PORT: u16 = 1455;
 const OPENAI_REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
-const OPENAI_SCOPES: &str = "openid profile email offline_access";
+// Scopes (and the four extra query params below) mirror what the official
+// Codex CLI sends. The critical one is `codex_cli_simplified_flow=true`:
+// without it OpenAI's auth page treats the request as a generic web-OAuth
+// hit, and when the user is not already signed into auth.openai.com it
+// shows a "Your session has ended" screen whose Log-in link goes to
+// `chatgpt.com/auth/login_with?callback_path=/` — discarding the OAuth
+// state and dropping the user on chatgpt.com instead of completing the
+// redirect. With the simplified-flow flag, OpenAI routes the user into
+// `auth.openai.com/log-in` (its first-party login) which preserves the
+// authorize context.
+const OPENAI_SCOPES: &str =
+    "openid profile email offline_access api.connectors.read api.connectors.invoke";
+const OPENAI_ORIGINATOR_PARAM: &str = "codex_cli_rs";
 
 /// State carried between [`OpenAILoginFlow::start`] and
 /// [`OpenAILoginFlow::wait_for_callback`].
@@ -193,6 +205,9 @@ impl OpenAILoginFlow {
                 ("scope", OPENAI_SCOPES),
                 ("code_challenge", &pkce.challenge),
                 ("code_challenge_method", "S256"),
+                ("id_token_add_organizations", "true"),
+                ("codex_cli_simplified_flow", "true"),
+                ("originator", OPENAI_ORIGINATOR_PARAM),
                 ("state", &state),
             ],
         );

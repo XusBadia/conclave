@@ -923,16 +923,9 @@ function OpenAIOAuthFlow({ url }: { url: string }) {
         </button>
       </div>
 
-      <details className="text-[11.5px] text-ink-faint">
-        <summary className="cursor-pointer select-none transition hover:text-ink-subtle">
-          {t("settings.oauth_openai_trouble_summary")}
-        </summary>
-        <ul className="mt-2 space-y-1 pl-4 leading-relaxed list-disc marker:text-ink-faint">
-          <li>{t("settings.oauth_openai_trouble_brave")}</li>
-          <li>{t("settings.oauth_openai_trouble_copy")}</li>
-          <li>{t("settings.oauth_openai_trouble_login_first")}</li>
-        </ul>
-      </details>
+      <p className="text-[11.5px] leading-relaxed text-ink-faint">
+        {t("settings.oauth_openai_trouble_hint")}
+      </p>
     </div>
   );
 }
