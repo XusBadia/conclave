@@ -96,16 +96,13 @@ impl AnthropicOAuthProvider {
                 .map_err(|_| ProviderError::Other("oauth cache poisoned".into()))?;
             guard.clone()
         };
-        let credentials = match snapshot {
-            Some(c) => c,
-            None => {
-                let fresh = load_credentials(&self.credentials_path)?;
-                let token = fresh.access_token.clone();
-                if let Ok(mut g) = self.cached.lock() {
-                    *g = Some(fresh);
-                }
-                return Ok(token);
+        let Some(credentials) = snapshot else {
+            let fresh = load_credentials(&self.credentials_path)?;
+            let token = fresh.access_token.clone();
+            if let Ok(mut g) = self.cached.lock() {
+                *g = Some(fresh);
             }
+            return Ok(token);
         };
 
         // Refresh with 60s of safety margin.

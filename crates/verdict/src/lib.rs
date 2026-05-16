@@ -55,7 +55,10 @@ pub mod prompt;
 pub mod schema;
 pub mod validation;
 
-pub use persistence::{CaseRecord, CaseStatus, CaseStore, VerdictRecord};
+pub use persistence::{
+    CaseRecord, CaseStatus, CaseStore, ExportedCase, ExportedFeedback, PastCaseHit, StoreStats,
+    VerdictRecord,
+};
 pub use pipeline::{VerdictOptions, VerdictPipeline, VerdictRun};
 pub use prompt::{PromptInputs, PromptTemplate, VERDICT_PROMPT_VERSION};
 pub use schema::{Alternative, CertaintyLevel, EvidenceClaim, KeyValue, Recommendation, Verdict};

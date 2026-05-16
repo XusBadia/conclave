@@ -53,6 +53,13 @@ CREATE TABLE IF NOT EXISTS feedback (
     modified_verdict_json TEXT,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS case_memory (
+    case_id TEXT PRIMARY KEY REFERENCES cases(id) ON DELETE CASCADE,
+    embedding BLOB NOT NULL,
+    case_summary TEXT NOT NULL,
+    verdict_summary TEXT NOT NULL
+);
 ";
 
 /// Outcome flag for a case lifecycle.
@@ -138,14 +145,14 @@ pub enum FeedbackKind {
 }
 
 impl FeedbackKind {
-    const fn as_db_str(self) -> &'static str {
+    pub const fn as_db_str(self) -> &'static str {
         match self {
             Self::Accept => "accept",
             Self::Modify => "modify",
             Self::Reject => "reject",
         }
     }
-    fn from_db_str(s: &str) -> Option<Self> {
+    pub fn from_db_str(s: &str) -> Option<Self> {
         match s {
             "accept" => Some(Self::Accept),
             "modify" => Some(Self::Modify),
@@ -331,6 +338,272 @@ impl CaseStore {
             )
             .optional()
             .map_err(map_sql)
+    }
+
+    // ----- case memory (Phase 5) ---------------------------------------
+
+    /// Upsert a case-memory entry with its embedding.
+    pub fn upsert_case_memory(
+        &self,
+        case_id: &str,
+        embedding: &[f32],
+        case_summary: &str,
+        verdict_summary: &str,
+    ) -> Result<()> {
+        let blob = vec_to_bytes(embedding);
+        self.conn
+            .execute(
+                "INSERT INTO case_memory (case_id, embedding, case_summary, verdict_summary)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(case_id) DO UPDATE SET
+                   embedding = excluded.embedding,
+                   case_summary = excluded.case_summary,
+                   verdict_summary = excluded.verdict_summary",
+                params![case_id, blob, case_summary, verdict_summary],
+            )
+            .map_err(map_sql)?;
+        Ok(())
+    }
+
+    /// Find the top-K past cases most similar to `query`, filtered by a
+    /// minimum cosine similarity. Results are sorted by similarity desc.
+    pub fn similar_past_cases(
+        &self,
+        query: &[f32],
+        k: usize,
+        min_similarity: f32,
+    ) -> Result<Vec<PastCaseHit>> {
+        if query.is_empty() || k == 0 {
+            return Ok(Vec::new());
+        }
+        let query_norm = vec_norm(query);
+        if query_norm == 0.0 {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT m.case_id, m.embedding, m.case_summary, m.verdict_summary,
+                        f.kind, f.reason
+                 FROM case_memory m
+                 LEFT JOIN feedback f ON f.case_id = m.case_id",
+            )
+            .map_err(map_sql)?;
+        let rows = stmt
+            .query_map([], |r| {
+                let case_id: String = r.get(0)?;
+                let blob: Vec<u8> = r.get(1)?;
+                let case_summary: String = r.get(2)?;
+                let verdict_summary: String = r.get(3)?;
+                let feedback_kind: Option<String> = r.get(4)?;
+                let feedback_reason: Option<String> = r.get(5)?;
+                Ok((
+                    case_id,
+                    blob,
+                    case_summary,
+                    verdict_summary,
+                    feedback_kind,
+                    feedback_reason,
+                ))
+            })
+            .map_err(map_sql)?;
+        let mut all = Vec::new();
+        for row in rows {
+            let (case_id, blob, case_summary, verdict_summary, feedback_kind, feedback_reason) =
+                row.map_err(map_sql)?;
+            let embedding = bytes_to_vec(&blob);
+            if embedding.len() != query.len() {
+                // dim drift — skip.
+                continue;
+            }
+            let sim = cosine_norm(query, &embedding, query_norm);
+            if sim < min_similarity {
+                continue;
+            }
+            all.push(PastCaseHit {
+                case_id,
+                case_summary,
+                verdict_summary,
+                feedback_kind: feedback_kind.as_deref().and_then(FeedbackKind::from_db_str),
+                feedback_reason,
+                similarity: sim,
+            });
+        }
+        all.sort_by(|a, b| {
+            b.similarity
+                .partial_cmp(&a.similarity)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        all.truncate(k);
+        Ok(all)
+    }
+
+    // ----- stats + export (Phase 5) ------------------------------------
+
+    /// Aggregate counters for the `stats` CLI.
+    pub fn stats(&self) -> Result<StoreStats> {
+        let total_cases: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM cases", [], |r| r.get(0))
+            .map_err(map_sql)?;
+        let completed: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM cases WHERE status = 'completed'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(map_sql)?;
+        let failed: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM cases WHERE status = 'failed'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(map_sql)?;
+
+        let mut feedback_counts = std::collections::BTreeMap::new();
+        let mut stmt = self
+            .conn
+            .prepare("SELECT kind, COUNT(*) FROM feedback GROUP BY kind")
+            .map_err(map_sql)?;
+        let rows = stmt
+            .query_map([], |r| {
+                let kind: String = r.get(0)?;
+                let n: i64 = r.get(1)?;
+                Ok((kind, n))
+            })
+            .map_err(map_sql)?;
+        for row in rows {
+            let (kind, n) = row.map_err(map_sql)?;
+            feedback_counts.insert(kind, n as u64);
+        }
+
+        let avg_latency: Option<f64> = self
+            .conn
+            .query_row("SELECT AVG(latency_ms) FROM verdicts", [], |r| r.get(0))
+            .optional()
+            .map_err(map_sql)?
+            .flatten();
+        let recent_count: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM cases
+                 WHERE julianday('now') - julianday(created_at) <= 7",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(map_sql)?;
+
+        Ok(StoreStats {
+            total_cases: total_cases.max(0) as u64,
+            completed: completed.max(0) as u64,
+            failed: failed.max(0) as u64,
+            feedback_counts,
+            avg_latency_ms: avg_latency,
+            cases_last_7d: recent_count.max(0) as u64,
+        })
+    }
+
+    /// JSON-friendly dump of every case + latest verdict + feedback.
+    /// Uses **masked** case text only; the original is never exported.
+    pub fn export(&self) -> Result<Vec<ExportedCase>> {
+        let cases = self.list_cases(usize::MAX)?;
+        let mut out = Vec::with_capacity(cases.len());
+        for c in cases {
+            let verdict = self.latest_verdict(&c.id)?;
+            let feedback = self.get_feedback(&c.id)?;
+            out.push(ExportedCase {
+                case_id: c.id,
+                created_at: c.created_at,
+                workspace_id: c.workspace_id,
+                question: c.question,
+                masked_text: c.masked_text,
+                deident_pipeline_id: c.deident_pipeline_id,
+                status: c.status,
+                verdict_json: verdict.map(|v| v.output_json),
+                feedback: feedback.map(|f| ExportedFeedback {
+                    kind: f.kind,
+                    reason: f.reason,
+                    modified_verdict_json: f.modified_verdict_json,
+                    created_at: f.created_at,
+                }),
+            });
+        }
+        Ok(out)
+    }
+}
+
+/// One similar-case hit returned by [`CaseStore::similar_past_cases`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PastCaseHit {
+    pub case_id: String,
+    pub case_summary: String,
+    pub verdict_summary: String,
+    pub feedback_kind: Option<FeedbackKind>,
+    pub feedback_reason: Option<String>,
+    pub similarity: f32,
+}
+
+/// Aggregate counters surfaced by the `stats` command.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoreStats {
+    pub total_cases: u64,
+    pub completed: u64,
+    pub failed: u64,
+    pub feedback_counts: std::collections::BTreeMap<String, u64>,
+    pub avg_latency_ms: Option<f64>,
+    pub cases_last_7d: u64,
+}
+
+/// Row in the JSON export.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportedCase {
+    pub case_id: String,
+    pub created_at: DateTime<Utc>,
+    pub workspace_id: String,
+    pub question: String,
+    pub masked_text: String,
+    pub deident_pipeline_id: String,
+    pub status: CaseStatus,
+    pub verdict_json: Option<String>,
+    pub feedback: Option<ExportedFeedback>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportedFeedback {
+    pub kind: FeedbackKind,
+    pub reason: Option<String>,
+    pub modified_verdict_json: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+fn vec_to_bytes(v: &[f32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(v.len() * 4);
+    for f in v {
+        out.extend_from_slice(&f.to_le_bytes());
+    }
+    out
+}
+
+fn bytes_to_vec(b: &[u8]) -> Vec<f32> {
+    b.chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
+}
+
+fn vec_norm(v: &[f32]) -> f32 {
+    v.iter().map(|x| x * x).sum::<f32>().sqrt()
+}
+
+fn cosine_norm(a: &[f32], b: &[f32], norm_a: f32) -> f32 {
+    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    let norm_b = vec_norm(b);
+    if norm_a == 0.0 || norm_b == 0.0 {
+        0.0
+    } else {
+        dot / (norm_a * norm_b)
     }
 }
 

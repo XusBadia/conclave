@@ -1,3 +1,40 @@
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::module_name_repetitions,
+    clippy::too_many_lines,
+    clippy::doc_markdown,
+    clippy::similar_names,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_lossless,
+    clippy::needless_pass_by_value,
+    clippy::struct_field_names,
+    clippy::items_after_statements,
+    clippy::significant_drop_tightening,
+    clippy::single_match_else,
+    clippy::map_unwrap_or,
+    clippy::option_if_let_else,
+    clippy::redundant_clone,
+    clippy::unnecessary_wraps,
+    clippy::wildcard_imports,
+    clippy::missing_const_for_fn,
+    clippy::assigning_clones,
+    clippy::implicit_hasher,
+    clippy::format_push_string,
+    clippy::redundant_closure_for_method_calls,
+    clippy::unnecessary_join,
+    clippy::needless_collect,
+    clippy::bool_assert_comparison,
+    clippy::single_char_pattern,
+    clippy::or_fun_call,
+    clippy::option_map_unit_fn,
+    clippy::needless_match,
+    clippy::single_match,
+    clippy::if_then_some_else_none
+)]
+
 //! LLM provider abstraction used by the Conclave virtual committee.
 //!
 //! Phase 2 introduces a real implementation set: `Anthropic`, `OpenAI`,
@@ -12,8 +49,6 @@
 //!   text. They log only model ids, latency, status codes, and token usage.
 //! - Secrets never touch on-disk config files. They live in the OS keychain
 //!   exclusively, under the `Conclave` service.
-
-#![allow(clippy::similar_names)]
 
 use async_trait::async_trait;
 

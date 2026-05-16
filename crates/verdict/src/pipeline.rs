@@ -34,7 +34,9 @@ use conclave_deident::Deidentifier;
 use conclave_providers::{CompletionRequest, LlmProvider, Message};
 use conclave_rag::{DocumentRepository, Embedder};
 
-use crate::persistence::{CaseRecord, CaseStatus, CaseStore, RetrievalTrace, VerdictRecord};
+use crate::persistence::{
+    CaseRecord, CaseStatus, CaseStore, PastCaseHit, RetrievalTrace, VerdictRecord,
+};
 use crate::prompt::{
     EvidenceChunkInput, PastCaseInput, PromptInputs, PromptTemplate, VERDICT_PROMPT_VERSION,
 };
@@ -54,6 +56,10 @@ pub struct VerdictOptions {
     pub temperature: f32,
     /// Max output tokens cap.
     pub max_output_tokens: u32,
+    /// How many past cases to inject. 0 disables Phase 5 memory.
+    pub past_cases_k: usize,
+    /// Minimum cosine similarity for a past case to be considered.
+    pub past_cases_min_similarity: f32,
 }
 
 impl Default for VerdictOptions {
@@ -64,6 +70,8 @@ impl Default for VerdictOptions {
             output_language: "es".into(),
             temperature: 0.2,
             max_output_tokens: 2048,
+            past_cases_k: 3,
+            past_cases_min_similarity: 0.65,
         }
     }
 }
@@ -129,11 +137,21 @@ impl VerdictPipeline {
         let masked_text = deident_result.masked_text.clone();
         let deident_pipeline_id = deident_result.pipeline_id.to_owned();
 
-        // 2) Retrieve evidence.
-        let chunks = self.retrieve_evidence(&masked_text, options.top_k).await?;
+        // 2) Embed the case once — reused for both KB retrieval and past
+        //    case retrieval.
+        let case_embedding = self.embed_case(&masked_text).await?;
+
+        // 3) Retrieve evidence.
+        let chunks = self
+            .retrieve_evidence_with_vec(&case_embedding, options.top_k)
+            .await?;
         let evidence_refs: Vec<String> = (1..=chunks.len()).map(|i| format!("E{i}")).collect();
 
-        // 3) Assemble prompt.
+        // 4) Retrieve past cases (Phase 5).
+        let past_hits = self.retrieve_past_cases(&case_embedding, options)?;
+        let past_refs: Vec<String> = (1..=past_hits.len()).map(|i| format!("P{i}")).collect();
+
+        // 5) Assemble prompt.
         let evidence_inputs: Vec<EvidenceChunkInput<'_>> = chunks
             .iter()
             .enumerate()
@@ -145,7 +163,18 @@ impl VerdictPipeline {
                 snippet: &c.snippet,
             })
             .collect();
-        let past_cases_inputs: Vec<PastCaseInput<'_>> = Vec::new();
+        let past_cases_inputs: Vec<PastCaseInput<'_>> = past_hits
+            .iter()
+            .enumerate()
+            .map(|(i, h)| PastCaseInput {
+                index: i + 1,
+                feedback: h.feedback_kind.map_or("none", |k| k.as_db_str()),
+                feedback_reason: h.feedback_reason.as_deref().unwrap_or(""),
+                case_summary: &h.case_summary,
+                previous_verdict_summary: &h.verdict_summary,
+                user_modifications: "",
+            })
+            .collect();
         let specialty = self
             .workspace
             .specialty
@@ -225,9 +254,20 @@ Return the JSON object only, citing only the supplied evidence ids."
         let trace = RetrievalTrace {
             verdict_id: verdict_record.id.clone(),
             evidence_refs,
-            past_cases_refs: Vec::new(),
+            past_cases_refs: past_refs,
             online_evidence_refs: Vec::new(),
         };
+
+        // Case memory (Phase 5): persist the case summary embedding so it
+        // can be retrieved as a past case in future runs.
+        let verdict_summary = truncate(
+            &format!(
+                "{} | {}",
+                verdict.primary_recommendation.action, verdict.certainty_justification
+            ),
+            1_200,
+        );
+        let case_memory_summary = truncate(&verdict.case_summary, 1_200);
 
         {
             let store = self
@@ -237,6 +277,12 @@ Return the JSON object only, citing only the supplied evidence ids."
             store.insert_case(&case)?;
             store.insert_verdict(&verdict_record)?;
             store.insert_trace(&trace)?;
+            store.upsert_case_memory(
+                &case.id,
+                &case_embedding,
+                &case_memory_summary,
+                &verdict_summary,
+            )?;
         }
 
         Ok(VerdictRun {
@@ -247,23 +293,27 @@ Return the JSON object only, citing only the supplied evidence ids."
         })
     }
 
-    async fn retrieve_evidence(
-        &self,
-        masked_text: &str,
-        top_k: usize,
-    ) -> Result<Vec<EvidenceChunk>> {
-        if top_k == 0 {
-            return Ok(Vec::new());
-        }
+    async fn embed_case(&self, masked_text: &str) -> Result<Vec<f32>> {
         let embedder = Arc::clone(&self.embedder);
         let text = masked_text.to_owned();
         let vectors = tokio::task::spawn_blocking(move || embedder.embed(&[text]))
             .await
             .map_err(|e| Error::Rag(format!("embed task join: {e}")))??;
-        let Some(query_vec) = vectors.into_iter().next() else {
+        vectors
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::Rag("embedder returned no vectors".into()))
+    }
+
+    async fn retrieve_evidence_with_vec(
+        &self,
+        query_vec: &[f32],
+        top_k: usize,
+    ) -> Result<Vec<EvidenceChunk>> {
+        if top_k == 0 {
             return Ok(Vec::new());
-        };
-        let hits = self.repository.search(&query_vec, top_k).await?;
+        }
+        let hits = self.repository.search(query_vec, top_k).await?;
         let mut out = Vec::with_capacity(hits.len());
         for h in hits {
             let details = self.repository.show(&h.document_id)?;
@@ -281,6 +331,25 @@ Return the JSON object only, citing only the supplied evidence ids."
             });
         }
         Ok(out)
+    }
+
+    fn retrieve_past_cases(
+        &self,
+        case_embedding: &[f32],
+        options: &VerdictOptions,
+    ) -> Result<Vec<PastCaseHit>> {
+        if options.past_cases_k == 0 {
+            return Ok(Vec::new());
+        }
+        let store = self
+            .store
+            .lock()
+            .map_err(|_| Error::Rag("case store mutex poisoned".into()))?;
+        store.similar_past_cases(
+            case_embedding,
+            options.past_cases_k,
+            options.past_cases_min_similarity,
+        )
     }
 
     async fn call_llm(

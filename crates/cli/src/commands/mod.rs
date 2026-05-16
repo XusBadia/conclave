@@ -16,10 +16,12 @@ use conclave_rag::{
 pub(crate) mod case;
 pub(crate) mod deident;
 pub(crate) mod documents;
+pub(crate) mod export;
 pub(crate) mod feedback;
 pub(crate) mod ingest;
 pub(crate) mod providers;
 pub(crate) mod search;
+pub(crate) mod stats;
 pub(crate) mod workspace;
 
 /// Runtime context handed to each subcommand.

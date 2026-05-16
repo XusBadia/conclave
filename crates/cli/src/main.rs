@@ -6,7 +6,26 @@
     clippy::missing_errors_doc,
     clippy::missing_panics_doc,
     clippy::module_name_repetitions,
-    clippy::doc_markdown
+    clippy::doc_markdown,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_lossless,
+    clippy::similar_names,
+    clippy::option_if_let_else,
+    clippy::map_unwrap_or,
+    clippy::needless_pass_by_value,
+    clippy::items_after_statements,
+    clippy::redundant_closure_for_method_calls,
+    clippy::struct_field_names,
+    clippy::single_match_else,
+    clippy::unnecessary_wraps,
+    clippy::redundant_clone,
+    clippy::assigning_clones,
+    clippy::format_push_string,
+    clippy::or_fun_call,
+    clippy::needless_collect,
+    clippy::unnecessary_join
 )]
 
 //! `conclave-cli` — terminal entry point for the Conclave virtual committee.
@@ -68,6 +87,10 @@ enum Command {
     Case(commands::case::CaseArgs),
     /// Record feedback on a previously generated case (Phase 5).
     Feedback(commands::feedback::FeedbackArgs),
+    /// Aggregate counts / rates / latency over the active workspace.
+    Stats(commands::stats::StatsArgs),
+    /// Export cases + verdicts + feedback as JSON (masked text only).
+    Export(commands::export::ExportArgs),
     /// Inspect, list and test configured LLM providers.
     Providers(commands::providers::ProvidersArgs),
     /// Manage Conclave workspaces (the per-project config + data root).
@@ -108,6 +131,8 @@ async fn main() -> Result<()> {
         Command::Deident(args) => commands::deident::run(&ctx, args),
         Command::Case(args) => commands::case::run(&ctx, args).await,
         Command::Feedback(args) => commands::feedback::run(&ctx, args),
+        Command::Stats(args) => commands::stats::run(&ctx, args),
+        Command::Export(args) => commands::export::run(&ctx, args),
         Command::Providers(args) => commands::providers::run(&ctx, args).await,
         Command::Workspace(args) => commands::workspace::run(&ctx, args),
     }
