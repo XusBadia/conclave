@@ -1,20 +1,31 @@
 import { useEffect, useMemo, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 
 import { Button } from "../components/Button";
 import { Card, CardBody, CardHeader } from "../components/Card";
 import { Field, Input, Textarea } from "../components/Field";
+import { cn } from "../lib/cn";
 import {
   ipc,
+  usableProviders,
   type CaseDetail,
   type CaseRecord,
   type ProviderInfo,
   type Verdict,
   type Workspace,
 } from "../lib/ipc";
+import { metaFor } from "../lib/providers";
 
 type View = "list" | "new" | "show";
 
-export function CasesPage({ workspace }: { workspace: Workspace }) {
+export function CasesPage({
+  workspace,
+  onGoToSettings,
+}: {
+  workspace: Workspace;
+  onGoToSettings?: () => void;
+}) {
+  const { t } = useTranslation();
   const [view, setView] = useState<View>("list");
   const [cases, setCases] = useState<CaseRecord[]>([]);
   const [selected, setSelected] = useState<CaseDetail | null>(null);
@@ -44,6 +55,7 @@ export function CasesPage({ workspace }: { workspace: Workspace }) {
       <NewCase
         workspace={workspace}
         onCancel={() => setView("list")}
+        onGoToSettings={onGoToSettings}
         onDone={async (id) => {
           await refresh();
           const det = await ipc.showCase(workspace.id, id);
@@ -71,19 +83,22 @@ export function CasesPage({ workspace }: { workspace: Workspace }) {
     <div className="mx-auto w-full max-w-5xl space-y-4 p-6">
       <Card>
         <CardHeader
-          title="Cases"
-          subtitle={`${cases.length} stored in ${workspace.name}`}
+          title={t("cases.page_title")}
+          subtitle={t("cases.page_subtitle", {
+            count: cases.length,
+            workspace: workspace.name,
+          })}
           right={
             <div className="flex gap-2">
               <Button size="sm" variant="ghost" onClick={refresh} loading={loading}>
-                Refresh
+                {t("common.refresh")}
               </Button>
               <Button
                 size="sm"
                 variant="primary"
                 onClick={() => setView("new")}
               >
-                New case
+                {t("cases.new_button")}
               </Button>
             </div>
           }
@@ -97,11 +112,11 @@ export function CasesPage({ workspace }: { workspace: Workspace }) {
           {cases.length === 0 && !loading && (
             <div className="px-6 py-12 text-center">
               <p className="text-[13px] text-ink-subtle">
-                No cases yet. Run your first virtual committee.
+                {t("cases.empty_title")}
               </p>
               <div className="mt-4">
                 <Button variant="primary" onClick={() => setView("new")}>
-                  New case
+                  {t("cases.new_button")}
                 </Button>
               </div>
             </div>
@@ -121,7 +136,7 @@ export function CasesPage({ workspace }: { workspace: Workspace }) {
                   <div className="flex items-center justify-between gap-4">
                     <div className="min-w-0">
                       <div className="truncate text-[14px] font-medium text-ink">
-                        {c.question || "(no question)"}
+                        {c.question || t("cases.no_question")}
                       </div>
                       <div className="mt-0.5 truncate text-[12px] text-ink-faint">
                         <span className="font-mono">{c.id}</span> · {new Date(
@@ -136,7 +151,7 @@ export function CasesPage({ workspace }: { workspace: Workspace }) {
                           : "rounded bg-danger/15 px-2 py-0.5 text-[11px] font-medium text-danger"
                       }
                     >
-                      {c.status}
+                      {t(`cases.status.${c.status}`)}
                     </span>
                   </div>
                 </button>
@@ -153,15 +168,18 @@ function NewCase({
   workspace,
   onCancel,
   onDone,
+  onGoToSettings,
 }: {
   workspace: Workspace;
   onCancel: () => void;
   onDone: (caseId: string) => void;
+  onGoToSettings?: () => void;
 }) {
+  const { t } = useTranslation();
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [providerId, setProviderId] = useState<string>("");
   const [text, setText] = useState("");
-  const [question, setQuestion] = useState("¿Cuál es el manejo recomendado?");
+  const [question, setQuestion] = useState(t("cases.default_question"));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [maskedPreview, setMaskedPreview] = useState<string | null>(null);
@@ -179,10 +197,7 @@ function NewCase({
     })();
   }, []);
 
-  const usable = useMemo(
-    () => providers.filter((p) => p.configured || p.id === "ollama"),
-    [providers],
-  );
+  const usable = useMemo(() => usableProviders(providers), [providers]);
 
   const previewDeident = async () => {
     if (!text.trim()) return;
@@ -198,7 +213,7 @@ function NewCase({
   const run = async () => {
     if (!text.trim()) return;
     if (!providerId) {
-      setError("No provider configured");
+      setError(t("cases.no_provider_configured"));
       return;
     }
     setBusy(true);
@@ -222,11 +237,11 @@ function NewCase({
     <div className="mx-auto grid w-full max-w-6xl grid-cols-1 gap-5 p-6 xl:grid-cols-[1fr,420px]">
       <Card>
         <CardHeader
-          title="New case"
-          subtitle="Paste a clinical note — it will be de-identified before any LLM call"
+          title={t("cases.new_title")}
+          subtitle={t("cases.new_subtitle")}
           right={
             <Button size="sm" variant="ghost" onClick={onCancel}>
-              Cancel
+              {t("common.cancel")}
             </Button>
           }
         />
@@ -236,34 +251,26 @@ function NewCase({
               {error}
             </div>
           )}
-          <Field label="Case text">
+          <Field label={t("cases.field_text")}>
             <Textarea
               value={text}
               onChange={(e) => setText(e.target.value)}
               rows={14}
-              placeholder="Mujer de 67 años con disnea progresiva y edemas en MMII..."
+              placeholder={t("cases.field_text_placeholder")}
             />
           </Field>
-          <Field label="Question">
+          <Field label={t("cases.field_question")}>
             <Input value={question} onChange={(e) => setQuestion(e.target.value)} />
           </Field>
-          <Field label="Provider" hint="Configure providers under Settings">
-            <select
-              value={providerId}
-              onChange={(e) => setProviderId(e.target.value)}
-              className="block w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-ink no-drag focus:outline-none focus:ring-conclave focus:border-accent"
-            >
-              {usable.length === 0 && <option value="">(no providers)</option>}
-              {usable.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.id} · {p.default_model}
-                </option>
-              ))}
-            </select>
-          </Field>
+          <ProviderField
+            providers={usable}
+            providerId={providerId}
+            onChange={setProviderId}
+            onGoToSettings={onGoToSettings}
+          />
           <div className="flex gap-2 pt-1">
             <Button onClick={previewDeident} disabled={!text.trim()}>
-              Preview de-id
+              {t("cases.preview_button")}
             </Button>
             <Button
               variant="primary"
@@ -271,7 +278,7 @@ function NewCase({
               loading={busy}
               disabled={!text.trim() || !providerId}
             >
-              Run committee
+              {t("cases.run_button")}
             </Button>
           </div>
         </CardBody>
@@ -279,15 +286,15 @@ function NewCase({
 
       <Card>
         <CardHeader
-          title="De-id preview"
-          subtitle="Layer A regex + Layer C heuristics"
+          title={t("cases.deid_title")}
+          subtitle={t("cases.deid_subtitle")}
         />
         <CardBody>
           {preview ? (
             <div className="space-y-3">
               <div className="flex items-center gap-3 text-[12px]">
                 <span className="rounded bg-surface px-2 py-0.5 text-ink-subtle">
-                  {preview.spanCount} spans masked
+                  {t("cases.deid_spans", { count: preview.spanCount })}
                 </span>
                 <span
                   className={
@@ -296,7 +303,9 @@ function NewCase({
                       : "rounded bg-warn/15 px-2 py-0.5 text-warn"
                   }
                 >
-                  strict {preview.strictClean ? "clean" : "dirty"}
+                  {preview.strictClean
+                    ? t("cases.deid_strict_clean")
+                    : t("cases.deid_strict_dirty")}
                 </span>
               </div>
               <pre className="max-h-[460px] overflow-auto whitespace-pre-wrap rounded-md border border-border-subtle bg-bg p-3 font-mono text-[12px] leading-relaxed text-ink-dim">
@@ -305,14 +314,128 @@ function NewCase({
             </div>
           ) : (
             <p className="text-[13px] text-ink-subtle">
-              Paste a case on the left and hit{" "}
-              <span className="font-medium text-ink-dim">Preview de-id</span> to
-              see exactly what will leave this device.
+              <Trans
+                i18nKey="cases.deid_hint"
+                components={[
+                  <span key="0" className="font-medium text-ink-dim" />,
+                ]}
+              />
             </p>
           )}
         </CardBody>
       </Card>
     </div>
+  );
+}
+
+// Provider field for the new-case form.
+//
+// Adapts to the single-active-provider rule:
+//   • 0 usable → empty state with CTA back to Settings
+//   • 1 usable → readonly summary chip + change link
+//   • 2+      → labelled <select> with friendly names
+function ProviderField({
+  providers,
+  providerId,
+  onChange,
+  onGoToSettings,
+}: {
+  providers: ProviderInfo[];
+  providerId: string;
+  onChange: (id: string) => void;
+  onGoToSettings?: () => void;
+}) {
+  const { t } = useTranslation();
+
+  if (providers.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed border-border bg-bg-subtle p-4 text-center">
+        <div className="text-[13.5px] font-medium text-ink">
+          {t("cases.provider_empty_title")}
+        </div>
+        <p className="mx-auto mt-1 max-w-sm text-[12px] text-ink-subtle">
+          {t("cases.provider_empty_body")}
+        </p>
+        {onGoToSettings && (
+          <div className="mt-3">
+            <Button size="sm" variant="primary" onClick={onGoToSettings}>
+              {t("cases.provider_empty_cta")}
+            </Button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (providers.length === 1) {
+    const p = providers[0];
+    const meta = metaFor(p.id);
+    return (
+      <Field label={t("cases.field_provider")}>
+        <div
+          className={cn(
+            "flex items-center gap-3 rounded-lg border border-border bg-bg px-3 py-2.5",
+          )}
+        >
+          <span
+            aria-hidden
+            className="grid h-8 w-8 shrink-0 place-content-center rounded-md bg-slate-400/10 text-[12px] font-semibold text-ink-dim ring-1 ring-border-subtle"
+          >
+            {meta.monogram}
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[13px] font-medium text-ink">
+              {meta.name}
+            </div>
+            <div className="truncate text-[11.5px] text-ink-faint">
+              <span className="font-mono">{p.default_model}</span>
+              {" · "}
+              {meta.authLabel}
+            </div>
+          </div>
+          {onGoToSettings && (
+            <button
+              type="button"
+              onClick={onGoToSettings}
+              className="rounded-md px-2 py-1 text-[12px] text-ink-subtle transition no-drag hover:bg-surface hover:text-ink focus:outline-none focus-visible:ring-conclave"
+            >
+              {t("cases.provider_change_link")}
+            </button>
+          )}
+        </div>
+      </Field>
+    );
+  }
+
+  return (
+    <Field
+      label={t("cases.field_provider")}
+      hint={onGoToSettings ? undefined : t("cases.field_provider_hint")}
+    >
+      <select
+        value={providerId}
+        onChange={(e) => onChange(e.target.value)}
+        className="block w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-ink no-drag focus:outline-none focus:ring-conclave focus:border-accent"
+      >
+        {providers.map((p) => {
+          const meta = metaFor(p.id);
+          return (
+            <option key={p.id} value={p.id}>
+              {meta.name} · {p.default_model}
+            </option>
+          );
+        })}
+      </select>
+      {onGoToSettings && (
+        <button
+          type="button"
+          onClick={onGoToSettings}
+          className="mt-1.5 text-[12px] text-ink-faint transition no-drag hover:text-ink focus:outline-none focus-visible:underline"
+        >
+          {t("cases.provider_change_link")}
+        </button>
+      )}
+    </Field>
   );
 }
 
@@ -325,6 +448,7 @@ function ShowCase({
   detail: CaseDetail;
   onBack: () => void;
 }) {
+  const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -337,7 +461,7 @@ function ShowCase({
         case_id: detail.case.id,
         kind,
       });
-      alert(`Feedback "${kind}" recorded.`);
+      alert(t("cases.feedback_recorded", { kind }));
     } catch (e) {
       setError(String(e));
     } finally {
@@ -349,18 +473,18 @@ function ShowCase({
     <div className="mx-auto w-full max-w-5xl space-y-5 p-6">
       <div className="flex items-center justify-between">
         <Button size="sm" variant="ghost" onClick={onBack}>
-          ← Back to cases
+          {t("cases.back")}
         </Button>
         {detail.verdict && (
           <div className="flex gap-2">
             <Button size="sm" onClick={() => feedback("accept")} loading={busy}>
-              Accept
+              {t("cases.accept")}
             </Button>
             <Button size="sm" variant="ghost" onClick={() => feedback("modify")} loading={busy}>
-              Mark modified
+              {t("cases.modify")}
             </Button>
             <Button size="sm" variant="danger" onClick={() => feedback("reject")} loading={busy}>
-              Reject
+              {t("cases.reject")}
             </Button>
           </div>
         )}
@@ -374,7 +498,7 @@ function ShowCase({
 
       <Card>
         <CardHeader
-          title={detail.case.question || "(no question)"}
+          title={detail.case.question || t("cases.no_question")}
           subtitle={`${detail.case.id} · ${new Date(detail.case.created_at).toLocaleString()}`}
           right={
             detail.verdict_record && (
@@ -391,14 +515,14 @@ function ShowCase({
             <VerdictRenderer verdict={detail.verdict} />
           ) : (
             <p className="text-[13px] text-ink-subtle">
-              No verdict on file for this case.
+              {t("cases.no_verdict")}
             </p>
           )}
         </CardBody>
       </Card>
 
       <Card>
-        <CardHeader title="De-identified case text" />
+        <CardHeader title={t("cases.masked_text_title")} />
         <CardBody>
           <pre className="max-h-[300px] overflow-auto whitespace-pre-wrap rounded-md border border-border-subtle bg-bg p-3 font-mono text-[12px] leading-relaxed text-ink-dim">
             {detail.case.masked_text}
@@ -410,6 +534,7 @@ function ShowCase({
 }
 
 function VerdictRenderer({ verdict }: { verdict: Verdict }) {
+  const { t } = useTranslation();
   const certaintyColor =
     verdict.certainty_level === "high"
       ? "text-ok"
@@ -420,13 +545,13 @@ function VerdictRenderer({ verdict }: { verdict: Verdict }) {
   return (
     <div className="space-y-6">
       <section>
-        <SectionTitle>Case summary</SectionTitle>
+        <SectionTitle>{t("cases.verdict.case_summary")}</SectionTitle>
         <p>{verdict.case_summary}</p>
       </section>
 
       {verdict.key_clinical_data.length > 0 && (
         <section>
-          <SectionTitle>Key clinical data</SectionTitle>
+          <SectionTitle>{t("cases.verdict.key_clinical_data")}</SectionTitle>
           <ul className="grid grid-cols-1 gap-2 md:grid-cols-2">
             {verdict.key_clinical_data.map((kv, i) => (
               <li
@@ -444,7 +569,7 @@ function VerdictRenderer({ verdict }: { verdict: Verdict }) {
       )}
 
       <section>
-        <SectionTitle>Primary recommendation</SectionTitle>
+        <SectionTitle>{t("cases.verdict.primary_recommendation")}</SectionTitle>
         <div className="rounded-lg border border-accent/30 bg-accent/5 px-4 py-3">
           <div className="text-[14px] font-semibold text-ink">
             {verdict.primary_recommendation.action}
@@ -457,7 +582,7 @@ function VerdictRenderer({ verdict }: { verdict: Verdict }) {
 
       {verdict.alternatives.length > 0 && (
         <section>
-          <SectionTitle>Alternatives</SectionTitle>
+          <SectionTitle>{t("cases.verdict.alternatives")}</SectionTitle>
           <ul className="space-y-2">
             {verdict.alternatives.map((alt, i) => (
               <li
@@ -466,7 +591,9 @@ function VerdictRenderer({ verdict }: { verdict: Verdict }) {
               >
                 <div className="text-[13px] text-ink-dim">{alt.action}</div>
                 <div className="mt-0.5 text-[12px] text-ink-faint">
-                  when: {alt.when_to_consider}
+                  {t("cases.verdict.alternative_when", {
+                    when: alt.when_to_consider,
+                  })}
                 </div>
               </li>
             ))}
@@ -475,7 +602,7 @@ function VerdictRenderer({ verdict }: { verdict: Verdict }) {
       )}
 
       <section>
-        <SectionTitle>Certainty</SectionTitle>
+        <SectionTitle>{t("cases.verdict.certainty")}</SectionTitle>
         <div className={`text-[14px] font-semibold ${certaintyColor}`}>
           {verdict.certainty_level.toUpperCase()}
         </div>
@@ -484,7 +611,7 @@ function VerdictRenderer({ verdict }: { verdict: Verdict }) {
 
       {verdict.red_flags.length > 0 && (
         <section>
-          <SectionTitle>Red flags</SectionTitle>
+          <SectionTitle>{t("cases.verdict.red_flags")}</SectionTitle>
           <ul className="space-y-1.5">
             {verdict.red_flags.map((rf, i) => (
               <li
@@ -500,10 +627,10 @@ function VerdictRenderer({ verdict }: { verdict: Verdict }) {
 
       {verdict.follow_up_triggers.length > 0 && (
         <section>
-          <SectionTitle>Follow-up triggers</SectionTitle>
+          <SectionTitle>{t("cases.verdict.follow_up_triggers")}</SectionTitle>
           <ul className="list-inside list-disc space-y-1 text-[13px] text-ink-dim">
-            {verdict.follow_up_triggers.map((t, i) => (
-              <li key={i}>{t}</li>
+            {verdict.follow_up_triggers.map((tr, i) => (
+              <li key={i}>{tr}</li>
             ))}
           </ul>
         </section>
@@ -511,7 +638,7 @@ function VerdictRenderer({ verdict }: { verdict: Verdict }) {
 
       {verdict.applied_evidence.length > 0 && (
         <section>
-          <SectionTitle>Applied evidence</SectionTitle>
+          <SectionTitle>{t("cases.verdict.applied_evidence")}</SectionTitle>
           <ul className="space-y-1.5">
             {verdict.applied_evidence.map((ev, i) => (
               <li
@@ -529,7 +656,7 @@ function VerdictRenderer({ verdict }: { verdict: Verdict }) {
       )}
 
       <section>
-        <SectionTitle>Disclaimer</SectionTitle>
+        <SectionTitle>{t("cases.verdict.disclaimer")}</SectionTitle>
         <p className="text-[12px] leading-relaxed text-ink-subtle">
           {verdict.disclaimer}
         </p>

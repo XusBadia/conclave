@@ -28,13 +28,32 @@ pub const APP_ORGANIZATION: &str = "Conclave";
 /// Application name used to derive OS-standard directory paths.
 pub const APP_NAME: &str = "conclave";
 
-/// Medical-use disclaimer surfaced by every Conclave entry point.
+/// Medical-use disclaimer surfaced by every Conclave entry point — English.
 ///
 /// Conclave is a research and decision-support tool. It does not make clinical
 /// decisions and must not be used as a substitute for qualified medical
 /// judgement.
-pub const MEDICAL_DISCLAIMER: &str = "\
+pub const MEDICAL_DISCLAIMER_EN: &str = "\
 Conclave is an experimental clinical decision-support assistant. It is NOT a \
 medical device and does NOT replace the judgement of a qualified clinician. \
 Outputs may be incomplete, biased, or wrong. Always validate any suggestion \
 against primary sources and institutional protocols before acting on it.";
+
+/// Spanish translation of the medical-use disclaimer.
+///
+/// Used by the desktop frontend when the active UI locale is `es`. Keeping
+/// both versions in the core crate ensures the text never drifts between
+/// the CLI (English by default) and the GUI (locale-aware).
+pub const MEDICAL_DISCLAIMER_ES: &str = "\
+Conclave es un asistente experimental de soporte a la decisión clínica. NO es \
+un dispositivo médico y NO sustituye el criterio de un profesional sanitario \
+cualificado. Las respuestas pueden ser incompletas, sesgadas o erróneas. \
+Verifica siempre cualquier sugerencia frente a las fuentes primarias y los \
+protocolos institucionales antes de actuar.";
+
+/// Backwards-compatible alias pointing at the English disclaimer.
+///
+/// Existing call sites (CLI, server logs, tests) keep working without changes.
+/// New code paths that need a locale-aware string should pick between
+/// [`MEDICAL_DISCLAIMER_EN`] and [`MEDICAL_DISCLAIMER_ES`] explicitly.
+pub const MEDICAL_DISCLAIMER: &str = MEDICAL_DISCLAIMER_EN;

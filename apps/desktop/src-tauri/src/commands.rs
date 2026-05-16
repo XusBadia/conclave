@@ -43,7 +43,11 @@ const DISCLAIMER_MARKER: &str = "disclaimer-accepted-v1";
 #[derive(Debug, Serialize)]
 pub struct OnboardingStatus {
     pub accepted: bool,
+    /// English disclaimer copy — kept for backwards compatibility with the
+    /// previous frontend contract.
     pub disclaimer: String,
+    pub disclaimer_en: String,
+    pub disclaimer_es: String,
 }
 
 #[tauri::command]
@@ -51,7 +55,9 @@ pub fn onboarding_status(state: State<'_, AppState>) -> CommandResult<Onboarding
     let path = state.paths.config_dir().join(DISCLAIMER_MARKER);
     Ok(OnboardingStatus {
         accepted: path.exists(),
-        disclaimer: conclave_core::MEDICAL_DISCLAIMER.to_owned(),
+        disclaimer: conclave_core::MEDICAL_DISCLAIMER_EN.to_owned(),
+        disclaimer_en: conclave_core::MEDICAL_DISCLAIMER_EN.to_owned(),
+        disclaimer_es: conclave_core::MEDICAL_DISCLAIMER_ES.to_owned(),
     })
 }
 

@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
+import { isOccupyingSlot } from "./providers";
+
 // ---------------------------------------------------------------------------
 // Types — mirror the Tauri command return values in
 // `apps/desktop/src-tauri/src/commands.rs`.
@@ -15,7 +17,10 @@ export interface Workspace {
 
 export interface OnboardingStatus {
   accepted: boolean;
+  /** English disclaimer copy (legacy field — equal to `disclaimer_en`). */
   disclaimer: string;
+  disclaimer_en: string;
+  disclaimer_es: string;
 }
 
 export interface DocumentRecord {
@@ -186,3 +191,23 @@ export const ipc = {
     reason?: string;
   }) => invoke<void>("submit_feedback", { request: req }),
 };
+
+// ---------------------------------------------------------------------------
+// Provider-slot helpers
+//
+// Conclave enforces a single active provider at the UI layer: at most one
+// configured non-always-available provider may occupy the slot. Ollama is
+// always available (local) and never counts.
+// ---------------------------------------------------------------------------
+
+export function activeProvider(list: ProviderInfo[]): ProviderInfo | null {
+  return list.find((p) => p.configured && isOccupyingSlot(p.id)) ?? null;
+}
+
+export function connectedSlotProviders(list: ProviderInfo[]): ProviderInfo[] {
+  return list.filter((p) => p.configured && isOccupyingSlot(p.id));
+}
+
+export function usableProviders(list: ProviderInfo[]): ProviderInfo[] {
+  return list.filter((p) => p.configured || p.id === "ollama");
+}

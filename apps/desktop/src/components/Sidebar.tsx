@@ -1,14 +1,13 @@
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 
 import { cn } from "../lib/cn";
 
 export type Section = "workspaces" | "knowledge" | "cases" | "settings";
 
-const items: { id: Section; label: string; icon: ReactNode; hint: string }[] = [
+const items: { id: Section; icon: ReactNode }[] = [
   {
     id: "workspaces",
-    label: "Workspaces",
-    hint: "Per-specialty libraries and rules",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
         <path
@@ -23,8 +22,6 @@ const items: { id: Section; label: string; icon: ReactNode; hint: string }[] = [
   },
   {
     id: "knowledge",
-    label: "Knowledge",
-    hint: "Protocols, guidelines, papers",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
         <path
@@ -39,8 +36,6 @@ const items: { id: Section; label: string; icon: ReactNode; hint: string }[] = [
   },
   {
     id: "cases",
-    label: "Cases",
-    hint: "Run a virtual committee",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
         <path
@@ -55,8 +50,6 @@ const items: { id: Section; label: string; icon: ReactNode; hint: string }[] = [
   },
   {
     id: "settings",
-    label: "Settings",
-    hint: "Providers and routing",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
         <path
@@ -80,6 +73,7 @@ export function Sidebar({
   onSelect: (s: Section) => void;
   workspaceLabel: string | null;
 }) {
+  const { t } = useTranslation();
   return (
     <aside className="flex h-full w-[220px] shrink-0 flex-col border-r border-border bg-bg-subtle">
       <div className="flex items-center gap-2 px-4 pb-2 pt-3">
@@ -87,8 +81,10 @@ export function Sidebar({
           C
         </div>
         <div className="leading-tight">
-          <div className="text-[13px] font-semibold text-ink">Conclave</div>
-          <div className="text-[11px] text-ink-faint">virtual committee</div>
+          <div className="text-[13px] font-semibold text-ink">
+            {t("app.brand")}
+          </div>
+          <div className="text-[11px] text-ink-faint">{t("sidebar.tagline")}</div>
         </div>
       </div>
 
@@ -124,7 +120,7 @@ export function Sidebar({
               </span>
               <span className="min-w-0">
                 <span className="block text-[13px] font-medium">
-                  {it.label}
+                  {t(`section.${it.id}`)}
                 </span>
                 <span
                   className={cn(
@@ -132,7 +128,7 @@ export function Sidebar({
                     selected ? "text-ink-subtle" : "text-ink-faint",
                   )}
                 >
-                  {it.hint}
+                  {t(`section_hint.${it.id}`)}
                 </span>
               </span>
             </button>
@@ -141,7 +137,7 @@ export function Sidebar({
       </nav>
 
       <div className="border-t border-border-subtle px-4 py-3 text-[11px] leading-snug text-ink-faint">
-        Not a medical device. Decisions remain with the clinician.
+        {t("sidebar.footer")}
       </div>
     </aside>
   );

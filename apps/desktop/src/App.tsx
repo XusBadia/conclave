@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { Onboarding } from "./components/Onboarding";
 import { Sidebar, type Section } from "./components/Sidebar";
@@ -8,25 +9,24 @@ import { SettingsPage } from "./routes/Settings";
 import { WorkspacesPage } from "./routes/Workspaces";
 import { ipc, type Workspace } from "./lib/ipc";
 
-const SECTION_LABEL: Record<Section, string> = {
-  workspaces: "Workspaces",
-  knowledge: "Knowledge",
-  cases: "Cases",
-  settings: "Settings",
-};
-
 export function App() {
+  const { t } = useTranslation();
   const [section, setSection] = useState<Section>("workspaces");
   const [active, setActive] = useState<Workspace | null>(null);
   const [bootstrap, setBootstrap] = useState<{
     accepted: boolean;
-    disclaimer: string;
+    disclaimerEn: string;
+    disclaimerEs: string;
   } | null>(null);
 
   useEffect(() => {
     (async () => {
       const status = await ipc.onboardingStatus();
-      setBootstrap({ accepted: status.accepted, disclaimer: status.disclaimer });
+      setBootstrap({
+        accepted: status.accepted,
+        disclaimerEn: status.disclaimer_en,
+        disclaimerEs: status.disclaimer_es,
+      });
       try {
         setActive(await ipc.activeWorkspace());
       } catch {
@@ -38,7 +38,7 @@ export function App() {
   if (!bootstrap) {
     return (
       <div className="grid h-full w-full place-content-center text-ink-faint">
-        loading…
+        {t("common.loading")}
       </div>
     );
   }
@@ -47,7 +47,8 @@ export function App() {
     <div className="flex h-full w-full flex-col">
       {!bootstrap.accepted && (
         <Onboarding
-          disclaimer={bootstrap.disclaimer}
+          disclaimerEn={bootstrap.disclaimerEn}
+          disclaimerEs={bootstrap.disclaimerEs}
           onAccepted={() => setBootstrap({ ...bootstrap, accepted: true })}
         />
       )}
@@ -56,11 +57,11 @@ export function App() {
           drag from anywhere and traffic lights stay out of content. */}
       <header className="titlebar titlebar-pad-mac flex items-center gap-3 pr-5 text-[12px] text-ink-faint">
         <div className="text-[13px] font-semibold tracking-tight text-ink">
-          Conclave
+          {t("app.brand")}
         </div>
         <span className="text-ink-faint/60">·</span>
         <div className="text-[12px] uppercase tracking-[0.08em] text-ink-subtle">
-          {SECTION_LABEL[section]}
+          {t(`section.${section}`)}
         </div>
         <div className="flex-1" />
         {active ? (
@@ -71,7 +72,7 @@ export function App() {
             <span className="font-mono text-ink-faint">{active.id}</span>
           </div>
         ) : (
-          <span className="text-ink-faint">no workspace</span>
+          <span className="text-ink-faint">{t("app.no_workspace")}</span>
         )}
       </header>
 
@@ -99,7 +100,10 @@ export function App() {
               ))}
             {section === "cases" &&
               (active ? (
-                <CasesPage workspace={active} />
+                <CasesPage
+                  workspace={active}
+                  onGoToSettings={() => setSection("settings")}
+                />
               ) : (
                 <EmptyWorkspaceHint onCreate={() => setSection("workspaces")} />
               ))}
@@ -112,21 +116,21 @@ export function App() {
 }
 
 function EmptyWorkspaceHint({ onCreate }: { onCreate: () => void }) {
+  const { t } = useTranslation();
   return (
     <div className="mx-auto max-w-md p-12 text-center">
       <div className="mb-2 text-[14px] font-semibold text-ink">
-        No active workspace
+        {t("app.empty_hint_title")}
       </div>
       <p className="mb-4 text-[13px] text-ink-subtle">
-        Pick or create a workspace first — every document and case lives inside
-        one.
+        {t("app.empty_hint_body")}
       </p>
       <button
         type="button"
         onClick={onCreate}
         className="rounded-md border border-border bg-surface px-3 py-1.5 text-[13px] text-ink hover:bg-surface-hover"
       >
-        Open Workspaces
+        {t("app.empty_hint_button")}
       </button>
     </div>
   );

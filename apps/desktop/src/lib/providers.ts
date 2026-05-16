@@ -1,0 +1,127 @@
+// Human-readable metadata for every backend `ProviderInfo.id`.
+// The Rust side only returns stable ids; UI labels live here so the same
+// strings can be reused from Settings and Cases without drift.
+
+export type ProviderId =
+  | "anthropic"
+  | "openai"
+  | "openrouter"
+  | "ollama"
+  | "anthropic-oauth"
+  | "openai-oauth";
+
+export type ProviderMeta = {
+  id: ProviderId;
+  name: string;
+  tagline: string;
+  authLabel: "OAuth" | "API key" | "Local";
+  monogram: string;
+  // Tailwind color stem (e.g. "amber") used for the monogram tint and hover ring.
+  brand: "amber" | "emerald" | "sky" | "violet" | "slate";
+  // `true` when the provider is available without a credential and should not
+  // count against the one-active-provider rule. Only ollama qualifies today.
+  alwaysAvailable?: boolean;
+  recommended?: boolean;
+};
+
+export const PROVIDER_META: Record<string, ProviderMeta> = {
+  "anthropic-oauth": {
+    id: "anthropic-oauth",
+    name: "Claude Max",
+    tagline: "Suscripción Anthropic",
+    authLabel: "OAuth",
+    monogram: "C",
+    brand: "amber",
+    recommended: true,
+  },
+  "openai-oauth": {
+    id: "openai-oauth",
+    name: "ChatGPT",
+    tagline: "Suscripción OpenAI",
+    authLabel: "OAuth",
+    monogram: "G",
+    brand: "emerald",
+  },
+  anthropic: {
+    id: "anthropic",
+    name: "Anthropic API",
+    tagline: "Clave de developer",
+    authLabel: "API key",
+    monogram: "A",
+    brand: "amber",
+  },
+  openai: {
+    id: "openai",
+    name: "OpenAI API",
+    tagline: "Clave de developer",
+    authLabel: "API key",
+    monogram: "O",
+    brand: "emerald",
+  },
+  openrouter: {
+    id: "openrouter",
+    name: "OpenRouter",
+    tagline: "Pasarela multi-modelo",
+    authLabel: "API key",
+    monogram: "R",
+    brand: "violet",
+  },
+  ollama: {
+    id: "ollama",
+    name: "Ollama",
+    tagline: "Modelos locales en tu Mac",
+    authLabel: "Local",
+    monogram: "·",
+    brand: "slate",
+    alwaysAvailable: true,
+  },
+};
+
+export function metaFor(id: string): ProviderMeta {
+  return (
+    PROVIDER_META[id] ?? {
+      id: id as ProviderId,
+      name: id,
+      tagline: "",
+      authLabel: "API key",
+      monogram: id.slice(0, 1).toUpperCase(),
+      brand: "slate",
+    }
+  );
+}
+
+export function isOccupyingSlot(id: string): boolean {
+  return !PROVIDER_META[id]?.alwaysAvailable;
+}
+
+// Tailwind class fragments per brand. Inline (rather than computed) so the
+// JIT picks them up without a safelist.
+export const BRAND_TINT: Record<ProviderMeta["brand"], string> = {
+  amber: "bg-amber-400/12 text-amber-200 ring-amber-400/30",
+  emerald: "bg-emerald-400/12 text-emerald-200 ring-emerald-400/30",
+  sky: "bg-sky-400/12 text-sky-200 ring-sky-400/30",
+  violet: "bg-violet-400/12 text-violet-200 ring-violet-400/30",
+  slate: "bg-slate-400/12 text-slate-200 ring-slate-400/30",
+};
+
+export const BRAND_HOVER: Record<ProviderMeta["brand"], string> = {
+  amber: "hover:border-amber-400/40",
+  emerald: "hover:border-emerald-400/40",
+  sky: "hover:border-sky-400/40",
+  violet: "hover:border-violet-400/40",
+  slate: "hover:border-slate-400/40",
+};
+
+// Display order in the picker grid. OAuth (subscription) first because that's
+// the friendliest onboarding path — no API keys required. Group titles are
+// expressed as i18n keys so the UI stays locale-aware.
+export const PICKER_GROUPS: { titleKey: string; ids: ProviderId[] }[] = [
+  {
+    titleKey: "settings.picker_group_oauth",
+    ids: ["anthropic-oauth", "openai-oauth"],
+  },
+  {
+    titleKey: "settings.picker_group_api",
+    ids: ["anthropic", "openai", "openrouter"],
+  },
+];

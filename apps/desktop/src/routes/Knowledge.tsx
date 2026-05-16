@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
 import { Button } from "../components/Button";
@@ -12,6 +13,7 @@ import {
 } from "../lib/ipc";
 
 export function KnowledgePage({ workspace }: { workspace: Workspace }) {
+  const { t } = useTranslation();
   const [docs, setDocs] = useState<DocumentRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -41,16 +43,20 @@ export function KnowledgePage({ workspace }: { workspace: Workspace }) {
     const path = await openDialog({
       multiple: false,
       directory: false,
-      title: "Pick a file or directory to ingest",
+      title: t("knowledge.pick_file_title"),
     });
     if (!path) return;
     setIngesting(true);
-    setIngestStatus("Embedding model warming up — first run downloads ~470 MB.");
+    setIngestStatus(t("knowledge.ingest_warming"));
     setError(null);
     try {
       const summary = await ipc.ingestPath(workspace.id, String(path));
       setIngestStatus(
-        `Ingested ${summary.ingested} · skipped ${summary.skipped} · failed ${summary.failed}`,
+        t("knowledge.ingest_summary", {
+          ingested: summary.ingested,
+          skipped: summary.skipped,
+          failed: summary.failed,
+        }),
       );
       await refresh();
     } catch (e) {
@@ -65,7 +71,7 @@ export function KnowledgePage({ workspace }: { workspace: Workspace }) {
     const path = await openDialog({
       multiple: false,
       directory: true,
-      title: "Pick a folder to ingest (recursive)",
+      title: t("knowledge.pick_folder_title"),
     });
     if (!path) return;
     setIngesting(true);
@@ -73,7 +79,11 @@ export function KnowledgePage({ workspace }: { workspace: Workspace }) {
     try {
       const summary = await ipc.ingestPath(workspace.id, String(path));
       setIngestStatus(
-        `Ingested ${summary.ingested} · skipped ${summary.skipped} · failed ${summary.failed}`,
+        t("knowledge.ingest_summary", {
+          ingested: summary.ingested,
+          skipped: summary.skipped,
+          failed: summary.failed,
+        }),
       );
       await refresh();
     } catch (e) {
@@ -97,7 +107,7 @@ export function KnowledgePage({ workspace }: { workspace: Workspace }) {
   };
 
   const remove = async (id: string) => {
-    if (!confirm("Remove this document and its chunks?")) return;
+    if (!confirm(t("knowledge.confirm_remove"))) return;
     try {
       await ipc.removeDocument(workspace.id, id);
       await refresh();
@@ -111,12 +121,12 @@ export function KnowledgePage({ workspace }: { workspace: Workspace }) {
       <div className="space-y-5">
         <Card>
           <CardHeader
-            title="Documents"
-            subtitle={`${docs.length} documents in this workspace`}
+            title={t("knowledge.documents")}
+            subtitle={t("knowledge.documents_count", { count: docs.length })}
             right={
               <div className="flex gap-2">
                 <Button size="sm" onClick={ingest} loading={ingesting}>
-                  Ingest file…
+                  {t("knowledge.ingest_file")}
                 </Button>
                 <Button
                   size="sm"
@@ -124,10 +134,10 @@ export function KnowledgePage({ workspace }: { workspace: Workspace }) {
                   onClick={ingestFolder}
                   disabled={ingesting}
                 >
-                  Ingest folder…
+                  {t("knowledge.ingest_folder")}
                 </Button>
                 <Button size="sm" variant="ghost" onClick={refresh}>
-                  Refresh
+                  {t("common.refresh")}
                 </Button>
               </div>
             }
@@ -145,8 +155,7 @@ export function KnowledgePage({ workspace }: { workspace: Workspace }) {
             )}
             {docs.length === 0 && !loading && (
               <div className="px-6 py-10 text-center text-[13px] text-ink-subtle">
-                No documents yet. Ingest a PDF, DOCX, TXT, MD or HTML file to
-                start.
+                {t("knowledge.empty_docs")}
               </div>
             )}
             <ul className="divide-y divide-border-subtle">
@@ -170,7 +179,7 @@ export function KnowledgePage({ workspace }: { workspace: Workspace }) {
                     </div>
                   </div>
                   <Button size="sm" variant="danger" onClick={() => remove(d.id)}>
-                    Remove
+                    {t("common.remove")}
                   </Button>
                 </li>
               ))}
@@ -180,14 +189,17 @@ export function KnowledgePage({ workspace }: { workspace: Workspace }) {
       </div>
 
       <Card>
-        <CardHeader title="Vector search" subtitle="Top-K similarity over the workspace" />
+        <CardHeader
+          title={t("knowledge.search_title")}
+          subtitle={t("knowledge.search_subtitle")}
+        />
         <CardBody className="space-y-4">
-          <Field label="Query">
+          <Field label={t("knowledge.field_query")}>
             <Input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && search()}
-              placeholder="e.g. furosemida insuficiencia cardiaca"
+              placeholder={t("knowledge.field_query_placeholder")}
             />
           </Field>
           <Button
@@ -197,12 +209,14 @@ export function KnowledgePage({ workspace }: { workspace: Workspace }) {
             loading={searching}
             disabled={!query.trim()}
           >
-            Search
+            {t("knowledge.search_button")}
           </Button>
           {hits && (
             <div className="space-y-3 pt-1">
               {hits.length === 0 && (
-                <div className="text-[13px] text-ink-subtle">No hits.</div>
+                <div className="text-[13px] text-ink-subtle">
+                  {t("knowledge.no_hits")}
+                </div>
               )}
               {hits.map((h, i) => (
                 <div
@@ -210,7 +224,12 @@ export function KnowledgePage({ workspace }: { workspace: Workspace }) {
                   className="rounded-md border border-border-subtle bg-bg p-3"
                 >
                   <div className="mb-1 flex items-center justify-between text-[11px] text-ink-faint">
-                    <span>#{i + 1} · distance {h.distance.toFixed(3)}</span>
+                    <span>
+                      {t("knowledge.hit_meta", {
+                        index: i + 1,
+                        distance: h.distance.toFixed(3),
+                      })}
+                    </span>
                     <span className="font-mono">{h.chunk_id}</span>
                   </div>
                   <p className="line-clamp-4 text-[13px] leading-snug text-ink-dim">

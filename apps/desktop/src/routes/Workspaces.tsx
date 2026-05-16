@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "../components/Button";
 import { Card, CardBody, CardHeader } from "../components/Card";
@@ -12,6 +13,7 @@ export function WorkspacesPage({
   activeId: string | null;
   onActiveChange: (ws: Workspace) => void;
 }) {
+  const { t } = useTranslation();
   const [list, setList] = useState<Workspace[]>([]);
   const [loading, setLoading] = useState(true);
   const [name, setName] = useState("");
@@ -68,8 +70,7 @@ export function WorkspacesPage({
   };
 
   const remove = async (ws: Workspace) => {
-    if (!confirm(`Delete workspace "${ws.name}"? This is irreversible.`))
-      return;
+    if (!confirm(t("workspaces.confirm_delete", { name: ws.name }))) return;
     try {
       await ipc.deleteWorkspace(ws.id);
       await refresh();
@@ -82,11 +83,11 @@ export function WorkspacesPage({
     <div className="mx-auto grid w-full max-w-5xl grid-cols-1 gap-5 p-6 lg:grid-cols-[1fr,380px]">
       <Card>
         <CardHeader
-          title="Workspaces"
-          subtitle="Per-specialty knowledge bases and rules"
+          title={t("workspaces.page_title")}
+          subtitle={t("workspaces.page_subtitle")}
           right={
             <Button size="sm" variant="ghost" onClick={refresh} loading={loading}>
-              Refresh
+              {t("common.refresh")}
             </Button>
           }
         />
@@ -98,7 +99,7 @@ export function WorkspacesPage({
           )}
           {list.length === 0 && !loading && (
             <div className="px-6 py-10 text-center text-[13px] text-ink-subtle">
-              No workspaces yet. Create your first one on the right.
+              {t("workspaces.empty")}
             </div>
           )}
           <ul className="divide-y divide-border-subtle">
@@ -135,7 +136,7 @@ export function WorkspacesPage({
                   <div className="flex shrink-0 items-center gap-2">
                     {!active && (
                       <Button size="sm" onClick={() => switchTo(ws)}>
-                        Activate
+                        {t("workspaces.activate")}
                       </Button>
                     )}
                     <Button
@@ -143,7 +144,7 @@ export function WorkspacesPage({
                       variant="danger"
                       onClick={() => remove(ws)}
                     >
-                      Delete
+                      {t("common.delete")}
                     </Button>
                   </div>
                 </li>
@@ -155,32 +156,32 @@ export function WorkspacesPage({
 
       <Card>
         <CardHeader
-          title="Create workspace"
-          subtitle="Each workspace gets its own SQLite + vector store"
+          title={t("workspaces.create_title")}
+          subtitle={t("workspaces.create_subtitle")}
         />
         <CardBody className="space-y-4">
-          <Field label="Name">
+          <Field label={t("workspaces.field_name")}>
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Cardiology — internal protocols"
+              placeholder={t("workspaces.field_name_placeholder")}
             />
           </Field>
-          <Field label="Specialty (optional)">
+          <Field label={t("workspaces.field_specialty")}>
             <Input
               value={specialty}
               onChange={(e) => setSpecialty(e.target.value)}
-              placeholder="cardiology"
+              placeholder={t("workspaces.field_specialty_placeholder")}
             />
           </Field>
           <Field
-            label="Default output language"
-            hint="ISO code · used by the verdict prompt"
+            label={t("workspaces.field_language")}
+            hint={t("workspaces.field_language_hint")}
           >
             <Input
               value={language}
               onChange={(e) => setLanguage(e.target.value)}
-              placeholder="es"
+              placeholder={t("workspaces.field_language_placeholder")}
             />
           </Field>
           <div className="pt-1">
@@ -191,7 +192,7 @@ export function WorkspacesPage({
               loading={creating}
               disabled={!name.trim()}
             >
-              Create workspace
+              {t("workspaces.create_button")}
             </Button>
           </div>
         </CardBody>
