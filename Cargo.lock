@@ -914,11 +914,13 @@ name = "conclave-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "conclave-core",
  "conclave-deident",
  "conclave-providers",
  "conclave-rag",
+ "conclave-verdict",
  "indicatif",
  "rpassword",
  "serde_json",
@@ -996,6 +998,26 @@ dependencies = [
  "tiktoken-rs",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "conclave-verdict"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "conclave-core",
+ "conclave-deident",
+ "conclave-providers",
+ "conclave-rag",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

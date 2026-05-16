@@ -1,3 +1,14 @@
+#![allow(
+    clippy::too_many_lines,
+    clippy::significant_drop_tightening,
+    clippy::field_reassign_with_default,
+    clippy::unused_async,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::module_name_repetitions,
+    clippy::doc_markdown
+)]
+
 //! `conclave-cli` — terminal entry point for the Conclave virtual committee.
 
 use std::path::PathBuf;
@@ -53,8 +64,10 @@ enum Command {
     Search(commands::search::SearchArgs),
     /// De-identify free-text input (Phase 3 — privacy-critical step).
     Deident(commands::deident::DeidentArgs),
-    /// Run a virtual committee and print its verdict.
-    Verdict(commands::verdict::VerdictArgs),
+    /// Run the verdict engine on a clinical case (Phase 4).
+    Case(commands::case::CaseArgs),
+    /// Record feedback on a previously generated case (Phase 5).
+    Feedback(commands::feedback::FeedbackArgs),
     /// Inspect, list and test configured LLM providers.
     Providers(commands::providers::ProvidersArgs),
     /// Manage Conclave workspaces (the per-project config + data root).
@@ -93,7 +106,8 @@ async fn main() -> Result<()> {
         Command::Documents(args) => commands::documents::run(&ctx, args).await,
         Command::Search(args) => commands::search::run(&ctx, args).await,
         Command::Deident(args) => commands::deident::run(&ctx, args),
-        Command::Verdict(args) => commands::verdict::run(&ctx, args),
+        Command::Case(args) => commands::case::run(&ctx, args).await,
+        Command::Feedback(args) => commands::feedback::run(&ctx, args),
         Command::Providers(args) => commands::providers::run(&ctx, args).await,
         Command::Workspace(args) => commands::workspace::run(&ctx, args),
     }

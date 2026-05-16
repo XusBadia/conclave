@@ -1,0 +1,34 @@
+[package]
+name = "conclave-verdict"
+description = "Verdict pipeline — retrieves evidence, calls an LLM provider, validates and persists the structured recommendation."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+conclave-core = { workspace = true }
+conclave-rag = { workspace = true }
+conclave-deident = { workspace = true }
+conclave-providers = { workspace = true }
+
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+chrono = { workspace = true }
+uuid = { workspace = true }
+rusqlite = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

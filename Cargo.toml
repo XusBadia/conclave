@@ -5,6 +5,7 @@ members = [
     "crates/providers",
     "crates/rag",
     "crates/deident",
+    "crates/verdict",
     "crates/cli",
 ]
 
@@ -24,6 +25,7 @@ conclave-core = { path = "crates/core", version = "0.1.0" }
 conclave-providers = { path = "crates/providers", version = "0.1.0" }
 conclave-rag = { path = "crates/rag", version = "0.1.0" }
 conclave-deident = { path = "crates/deident", version = "0.1.0" }
+conclave-verdict = { path = "crates/verdict", version = "0.1.0" }
 
 # Errors
 thiserror = "1"
@@ -72,6 +74,9 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 keyring = "3"
 rpassword = "7"
 url = "2"
+
+# Phase 4 — verdict engine
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
 
 # Phase 1 — tokenisation, embeddings, vector + metadata stores
 tiktoken-rs = "0.11"
