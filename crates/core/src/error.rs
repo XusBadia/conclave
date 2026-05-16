@@ -39,6 +39,14 @@ pub enum Error {
     #[error("could not resolve OS-standard application directories")]
     MissingAppDirs,
 
+    /// Requested workspace could not be located by id or name.
+    #[error("workspace not found: {0}")]
+    WorkspaceNotFound(String),
+
+    /// Workspace cannot be created because the slug is already in use.
+    #[error("workspace already exists: {0}")]
+    WorkspaceExists(String),
+
     /// Error originating in the providers layer (LLM I/O, auth, etc.).
     #[error("provider error: {0}")]
     Provider(String),

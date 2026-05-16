@@ -65,6 +65,16 @@ impl Paths {
         self.config_dir.join("conclave.toml")
     }
 
+    /// Directory containing every workspace, one subdirectory per id.
+    pub fn workspaces_dir(&self) -> PathBuf {
+        self.data_dir.join("workspaces")
+    }
+
+    /// Directory for an individual workspace identified by `id`.
+    pub fn workspace_dir(&self, id: &str) -> PathBuf {
+        self.workspaces_dir().join(id)
+    }
+
     /// Create every directory in this set if it does not already exist.
     pub fn ensure_exists(&self) -> Result<()> {
         for dir in [&self.config_dir, &self.data_dir, &self.cache_dir] {
