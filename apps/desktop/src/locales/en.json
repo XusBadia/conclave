@@ -167,7 +167,7 @@
     "oauth_code_placeholder": "code#state",
     "oauth_finish": "Finish connection",
     "oauth_openai_waiting_title": "Waiting for browser authorization…",
-    "oauth_openai_waiting_body": "Complete sign-in and come back here — Conclave will detect the connection automatically.",
+    "oauth_openai_waiting_body": "Complete sign-in and come back here — Conclave will detect the connection automatically. If something goes wrong, press the back arrow to cancel and retry.",
     "confirm_disconnect": "Disconnect {{name}}?",
     "confirm_switch": "Switching AI will disconnect {{name}}. Continue?",
     "migration_title": "Conclave now uses one AI at a time",

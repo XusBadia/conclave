@@ -128,21 +128,46 @@ export function SettingsPage() {
     }
   };
 
+  // Kick off OpenAI's localhost-redirect flow as a fire-and-forget. The
+  // backend spawns a background task that owns the :1455 listener; we just
+  // transition the UI into "waiting" and let the polling effect detect
+  // completion (or the back arrow trigger a cancel).
   const startOpenAIOAuth = async () => {
-    setFlow({ kind: "oauth-openai" });
-    setBusy(true);
     setError(null);
+    setFlow({ kind: "oauth-openai" });
     try {
-      await ipc.oauthOpenaiLogin();
-      setFlow({ kind: "idle" });
-      await refresh();
+      await ipc.oauthOpenaiStart();
     } catch (e) {
       setError(String(e));
       setFlow({ kind: "idle" });
-    } finally {
-      setBusy(false);
     }
   };
+
+  // While we're showing the OpenAI "waiting" overlay, poll list_providers
+  // every 2 s so we notice when the background task persisted the token.
+  // The effect's cleanup tells the backend to abort if the user backs out
+  // of the flow without completing it — that's what releases :1455.
+  useEffect(() => {
+    if (flow.kind !== "oauth-openai") return;
+    let cancelled = false;
+    const interval = window.setInterval(async () => {
+      try {
+        const list = await ipc.listProviders();
+        if (cancelled) return;
+        setProviders(list);
+        if (list.find((p) => p.id === "openai-oauth")?.configured) {
+          setFlow({ kind: "idle" });
+        }
+      } catch {
+        // best-effort polling; ignore transient errors
+      }
+    }, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      void ipc.oauthOpenaiCancel().catch(() => {});
+    };
+  }, [flow.kind]);
 
   const pickProvider = (id: string) => {
     const meta = metaFor(id);
@@ -823,17 +848,15 @@ function AnthropicOAuthFlow({
   );
 }
 
-function OpenAIOAuthFlow({ busy }: { busy: boolean }) {
+function OpenAIOAuthFlow(_: { busy: boolean }) {
   const { t } = useTranslation();
   return (
     <div className="flex items-center gap-3 py-2">
-      {busy && (
-        <span className="inline-flex items-center gap-1.5">
-          <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulseDot" />
-          <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulseDot [animation-delay:120ms]" />
-          <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulseDot [animation-delay:240ms]" />
-        </span>
-      )}
+      <span className="inline-flex items-center gap-1.5">
+        <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulseDot" />
+        <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulseDot [animation-delay:120ms]" />
+        <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulseDot [animation-delay:240ms]" />
+      </span>
       <div className="text-[13px] text-ink-dim">
         {t("settings.oauth_openai_waiting_title")}
         <div className="mt-1 text-[12px] text-ink-faint">

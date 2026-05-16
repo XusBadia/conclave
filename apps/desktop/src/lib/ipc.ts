@@ -169,7 +169,11 @@ export const ipc = {
     ),
   oauthAnthropicComplete: (code: string) =>
     invoke<void>("oauth_anthropic_complete", { code }),
-  oauthOpenaiLogin: () => invoke<void>("oauth_openai_login"),
+  // Opens the browser and spawns a background task that owns the
+  // localhost:1455 listener. Returns immediately — poll listProviders to
+  // detect completion, call oauthOpenaiCancel to release the port.
+  oauthOpenaiStart: () => invoke<void>("oauth_openai_start"),
+  oauthOpenaiCancel: () => invoke<void>("oauth_openai_cancel"),
   oauthLogout: (id: string) => invoke<void>("oauth_logout", { id }),
 
   // Verdict

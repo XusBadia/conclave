@@ -501,16 +501,62 @@ pub async fn oauth_anthropic_complete(
     Ok(())
 }
 
+/// Begin an OpenAI OAuth login.
+///
+/// Spawns a background task that owns the localhost:1455 listener and waits
+/// up to 5 min for the browser to redirect. Returns immediately after
+/// opening the browser; the UI polls `list_providers` to know when it
+/// completes. The task's abort handle is stored in [`AppState::openai_login`]
+/// so [`oauth_openai_cancel`] can release the port if the redirect never
+/// arrives.
 #[tauri::command]
-pub async fn oauth_openai_login(state: State<'_, AppState>) -> CommandResult<()> {
+pub async fn oauth_openai_start(state: State<'_, AppState>) -> CommandResult<()> {
+    // Cancel any previous in-flight flow so its listener gets dropped
+    // before we try to bind. The drop happens on the runtime's next tick,
+    // so we yield and briefly sleep to give the socket a chance to release.
+    {
+        let mut guard = state.openai_login.lock().map_err(|_| "state poisoned")?;
+        if let Some(handle) = guard.take() {
+            handle.abort();
+        }
+    }
+    tokio::task::yield_now().await;
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
     let started = OpenAILoginFlow::start().await.map_err(|e| e.to_string())?;
     let _ = open_in_browser(&started.url);
-    let tokens = started
-        .flow
-        .wait_for_callback(std::time::Duration::from_secs(300))
-        .await
-        .map_err(|e| e.to_string())?;
-    persist_tokens(state.paths.config_dir(), "openai-oauth", &tokens).map_err(|e| e.to_string())?;
+
+    let config_dir = state.paths.config_dir().to_owned();
+    let task = tokio::spawn(async move {
+        match started
+            .flow
+            .wait_for_callback(std::time::Duration::from_secs(300))
+            .await
+        {
+            Ok(tokens) => {
+                if let Err(e) = persist_tokens(&config_dir, "openai-oauth", &tokens) {
+                    eprintln!("openai oauth persist failed: {e}");
+                }
+            }
+            Err(e) => {
+                eprintln!("openai oauth flow failed: {e}");
+            }
+        }
+    });
+
+    *state.openai_login.lock().map_err(|_| "state poisoned")? = Some(task.abort_handle());
+    Ok(())
+}
+
+/// Abort an in-flight OpenAI OAuth flow. Releases the localhost:1455
+/// listener so the next attempt can bind. No-op if no flow is in progress
+/// or the flow has already completed.
+#[tauri::command]
+pub fn oauth_openai_cancel(state: State<'_, AppState>) -> CommandResult<()> {
+    let mut guard = state.openai_login.lock().map_err(|_| "state poisoned")?;
+    if let Some(handle) = guard.take() {
+        handle.abort();
+    }
     Ok(())
 }
 
