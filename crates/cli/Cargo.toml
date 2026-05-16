@@ -27,3 +27,4 @@ clap = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+indicatif = { workspace = true }

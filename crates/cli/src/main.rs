@@ -1,7 +1,4 @@
 //! `conclave-cli` — terminal entry point for the Conclave virtual committee.
-//!
-//! Phase 0 only wires the command surface; every subcommand returns a
-//! `not yet implemented` notice. Real behaviour lands in later phases.
 
 use std::path::PathBuf;
 
@@ -34,6 +31,10 @@ struct Cli {
     )]
     workspace_root: Option<PathBuf>,
 
+    /// Override the active workspace name for this invocation.
+    #[arg(long, global = true, value_name = "NAME", env = "CONCLAVE_WORKSPACE")]
+    workspace: Option<String>,
+
     /// Suppress the medical disclaimer printed on every invocation.
     #[arg(long, global = true)]
     no_disclaimer: bool,
@@ -46,6 +47,10 @@ struct Cli {
 enum Command {
     /// Ingest documents into the knowledge base.
     Ingest(commands::ingest::IngestArgs),
+    /// Inspect documents already ingested into a workspace.
+    Documents(commands::documents::DocumentsArgs),
+    /// Vector-search the active workspace.
+    Search(commands::search::SearchArgs),
     /// Run a virtual committee and print its verdict.
     Verdict(commands::verdict::VerdictArgs),
     /// Inspect, list and test configured LLM providers.
@@ -54,7 +59,8 @@ enum Command {
     Workspace(commands::workspace::WorkspaceArgs),
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let paths = resolve_paths(cli.workspace_root.as_deref())?;
@@ -74,10 +80,16 @@ fn main() -> Result<()> {
         "resolved workspace paths"
     );
 
-    let ctx = commands::CommandContext { paths, config };
+    let ctx = commands::CommandContext {
+        paths,
+        config,
+        workspace_override: cli.workspace,
+    };
 
     match cli.command {
-        Command::Ingest(args) => commands::ingest::run(&ctx, args),
+        Command::Ingest(args) => commands::ingest::run(&ctx, args).await,
+        Command::Documents(args) => commands::documents::run(&ctx, args).await,
+        Command::Search(args) => commands::search::run(&ctx, args).await,
         Command::Verdict(args) => commands::verdict::run(&ctx, args),
         Command::Providers(args) => commands::providers::run(&ctx, args),
         Command::Workspace(args) => commands::workspace::run(&ctx, args),

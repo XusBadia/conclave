@@ -919,6 +919,7 @@ dependencies = [
  "conclave-deident",
  "conclave-providers",
  "conclave-rag",
+ "indicatif",
  "tokio",
  "tracing",
 ]
