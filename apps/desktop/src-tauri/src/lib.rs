@@ -33,7 +33,7 @@
     clippy::format_push_string,
     clippy::bool_assert_comparison
 )]
-#![allow(unreachable_pub)]
+#![allow(unreachable_pub, dead_code)]
 
 //! Conclave desktop — Tauri 2 entry point.
 //!
@@ -89,6 +89,10 @@ pub fn run() {
             commands::set_provider_key,
             commands::test_provider,
             commands::remove_provider_key,
+            commands::oauth_anthropic_start,
+            commands::oauth_anthropic_complete,
+            commands::oauth_openai_login,
+            commands::oauth_logout,
             commands::run_case,
             commands::list_cases,
             commands::show_case,

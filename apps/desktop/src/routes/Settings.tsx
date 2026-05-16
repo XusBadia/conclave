@@ -138,6 +138,7 @@ export function SettingsPage() {
               busy={!!busy[p.id]}
               onTest={() => testKey(p.id)}
               onRefresh={refresh}
+              onChange={refresh}
             />
           ))}
         </CardBody>
@@ -233,23 +234,82 @@ function OAuthRow({
   busy,
   onTest,
   onRefresh,
+  onChange,
 }: {
   provider: ProviderInfo;
   busy: boolean;
   onTest: () => void;
   onRefresh: () => void;
+  onChange: () => void;
 }) {
-  const loginCmd =
-    p.id === "anthropic-oauth" ? "claude login" : "codex login";
+  const [signingIn, setSigningIn] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [pasteCode, setPasteCode] = useState<string | null>(null);
+  const [code, setCode] = useState("");
+
+  const signInAnthropic = async () => {
+    setError(null);
+    setSigningIn(true);
+    try {
+      const r = await ipc.oauthAnthropicStart();
+      setPasteCode(r.instructions);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSigningIn(false);
+    }
+  };
+
+  const submitCode = async () => {
+    if (!code.trim()) return;
+    setError(null);
+    setSigningIn(true);
+    try {
+      await ipc.oauthAnthropicComplete(code.trim());
+      setPasteCode(null);
+      setCode("");
+      onChange();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSigningIn(false);
+    }
+  };
+
+  const signInOpenAI = async () => {
+    setError(null);
+    setSigningIn(true);
+    try {
+      await ipc.oauthOpenaiLogin();
+      onChange();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSigningIn(false);
+    }
+  };
+
+  const logout = async () => {
+    if (!confirm(`Sign out of ${p.id}?`)) return;
+    setError(null);
+    try {
+      await ipc.oauthLogout(p.id);
+      onChange();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const friendly =
+    p.id === "anthropic-oauth"
+      ? "Anthropic — Claude Max subscription"
+      : "OpenAI — ChatGPT subscription";
+
   return (
     <div className="rounded-lg border border-border-subtle bg-bg p-4">
       <div className="mb-3 flex items-center justify-between">
         <div>
-          <div className="text-[14px] font-semibold text-ink">
-            {p.id === "anthropic-oauth"
-              ? "Anthropic — Claude Max subscription"
-              : "OpenAI — ChatGPT subscription"}
-          </div>
+          <div className="text-[14px] font-semibold text-ink">{friendly}</div>
           <div className="mt-0.5 text-[12px] text-ink-faint">
             default model:{" "}
             <span className="font-mono text-ink-subtle">{p.default_model}</span>
@@ -264,18 +324,79 @@ function OAuthRow({
         <StatusPills configured={p.configured} available={p.available} />
       </div>
 
-      {!p.configured && (
-        <div className="mb-3 rounded-md border border-warn/30 bg-warn/5 px-3 py-2 text-[12px] text-ink-subtle">
-          Not detected. In a terminal run:{" "}
-          <span className="font-mono text-ink">{loginCmd}</span>
-          {" "}then come back and click <em>Refresh</em>.
+      {error && (
+        <div className="mb-3 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-[12px] text-danger">
+          {error}
         </div>
       )}
 
-      <div className="flex items-center gap-2">
-        <Button size="sm" onClick={onTest} loading={busy} disabled={!p.configured}>
-          Test
-        </Button>
+      {pasteCode && (
+        <div className="mb-3 space-y-2 rounded-md border border-accent/30 bg-accent/5 p-3">
+          <p className="text-[12px] text-ink-dim">{pasteCode}</p>
+          <Field label="One-time code">
+            <Input
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              placeholder="paste here (format: code#state)"
+            />
+          </Field>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={submitCode}
+              loading={signingIn}
+              disabled={!code.trim()}
+            >
+              Finish sign in
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setPasteCode(null);
+                setCode("");
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-2">
+        {!p.configured && !pasteCode && (
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={
+              p.id === "anthropic-oauth" ? signInAnthropic : signInOpenAI
+            }
+            loading={signingIn || busy}
+          >
+            Sign in with browser
+          </Button>
+        )}
+        {p.configured && (
+          <>
+            <Button size="sm" onClick={onTest} loading={busy}>
+              Test
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={
+                p.id === "anthropic-oauth" ? signInAnthropic : signInOpenAI
+              }
+              loading={signingIn}
+            >
+              Re-sign in
+            </Button>
+            <Button size="sm" variant="danger" onClick={logout}>
+              Sign out
+            </Button>
+          </>
+        )}
         <Button size="sm" variant="ghost" onClick={onRefresh}>
           Refresh
         </Button>

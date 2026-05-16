@@ -78,6 +78,11 @@ keyring = "3"
 rpassword = "7"
 url = "2"
 
+# Phase 2.5 OAuth in-app flow
+base64 = "0.22"
+rand = "0.8"
+open = "5"
+
 # Phase 4 — verdict engine
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
 

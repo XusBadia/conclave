@@ -158,6 +158,14 @@ export const ipc = {
     invoke<string>("test_provider", { id, prompt }),
   removeProviderKey: (id: string) =>
     invoke<void>("remove_provider_key", { id }),
+  oauthAnthropicStart: () =>
+    invoke<{ url: string; provider_id: string; instructions: string }>(
+      "oauth_anthropic_start",
+    ),
+  oauthAnthropicComplete: (code: string) =>
+    invoke<void>("oauth_anthropic_complete", { code }),
+  oauthOpenaiLogin: () => invoke<void>("oauth_openai_login"),
+  oauthLogout: (id: string) => invoke<void>("oauth_logout", { id }),
 
   // Verdict
   runCase: (req: {

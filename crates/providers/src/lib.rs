@@ -32,7 +32,9 @@
     clippy::option_map_unit_fn,
     clippy::needless_match,
     clippy::single_match,
-    clippy::if_then_some_else_none
+    clippy::if_then_some_else_none,
+    clippy::manual_let_else,
+    unreachable_pub
 )]
 
 //! LLM provider abstraction used by the Conclave virtual committee.
@@ -56,6 +58,7 @@ mod anthropic_api;
 mod anthropic_oauth;
 mod error;
 mod mock;
+mod oauth_flow;
 mod ollama_local;
 mod openai_api;
 mod openai_oauth;
@@ -68,6 +71,10 @@ pub use anthropic_api::AnthropicProvider;
 pub use anthropic_oauth::AnthropicOAuthProvider;
 pub use error::ProviderError;
 pub use mock::MockProvider;
+pub use oauth_flow::{
+    conclave_oauth_path, open_in_browser, persist_tokens, AnthropicLoginFlow, OAuthTokens,
+    OpenAILoginFlow, Started,
+};
 pub use ollama_local::OllamaProvider;
 pub use openai_api::OpenAiProvider;
 pub use openai_oauth::OpenAIOAuthProvider;

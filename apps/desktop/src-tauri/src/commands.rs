@@ -9,9 +9,9 @@ use tauri::State;
 use conclave_core::{Workspace, WorkspaceManager};
 use conclave_deident::{Deidentifier, PipelineDeidentifier};
 use conclave_providers::{
-    secrets, AnthropicOAuthProvider, AnthropicProvider, CompletionRequest, LlmProvider, Message,
-    OllamaProvider, OpenAIOAuthProvider, OpenAiProvider, OpenRouterProvider, KNOWN_PROVIDERS,
-    OAUTH_PROVIDERS,
+    open_in_browser, persist_tokens, secrets, AnthropicLoginFlow, AnthropicOAuthProvider,
+    AnthropicProvider, CompletionRequest, LlmProvider, Message, OllamaProvider, OpenAILoginFlow,
+    OpenAIOAuthProvider, OpenAiProvider, OpenRouterProvider, KNOWN_PROVIDERS, OAUTH_PROVIDERS,
 };
 use conclave_rag::{
     ChunkParams, DocumentRecord, DocumentRepository, Embedder, FastEmbedEmbedder, IngestionEvent,
@@ -323,7 +323,7 @@ pub struct ProviderInfo {
 }
 
 #[tauri::command]
-pub async fn list_providers() -> CommandResult<Vec<ProviderInfo>> {
+pub async fn list_providers(state: State<'_, AppState>) -> CommandResult<Vec<ProviderInfo>> {
     let mut out = Vec::new();
     for id in KNOWN_PROVIDERS {
         let configured = secrets::load(id).unwrap_or(None).is_some();
@@ -353,16 +353,25 @@ pub async fn list_providers() -> CommandResult<Vec<ProviderInfo>> {
         });
     }
     for id in OAUTH_PROVIDERS {
-        let (configured, available, hint) = match *id {
-            "anthropic-oauth" => match AnthropicOAuthProvider::from_default_location() {
-                Ok(p) => (true, true, p.subscription_type()),
-                Err(_) => (false, false, Some("run `claude login`".into())),
-            },
-            "openai-oauth" => match OpenAIOAuthProvider::from_default_location() {
-                Ok(p) => (true, true, p.account_id()),
-                Err(_) => (false, false, Some("run `codex login`".into())),
-            },
-            _ => (false, false, None),
+        let conclave_path = state
+            .paths
+            .config_dir()
+            .join("oauth")
+            .join(format!("{id}.json"));
+        let (configured, available, hint) = if conclave_path.exists() {
+            (true, true, Some("signed in via Conclave".into()))
+        } else {
+            match *id {
+                "anthropic-oauth" => match AnthropicOAuthProvider::from_default_location() {
+                    Ok(p) => (true, true, p.subscription_type()),
+                    Err(_) => (false, false, Some("sign in to start".into())),
+                },
+                "openai-oauth" => match OpenAIOAuthProvider::from_default_location() {
+                    Ok(p) => (true, true, p.account_id()),
+                    Err(_) => (false, false, Some("sign in to start".into())),
+                },
+                _ => (false, false, None),
+            }
         };
         let default_model = match *id {
             "anthropic-oauth" => "claude-sonnet-4-6-20250929".into(),
@@ -426,11 +435,93 @@ pub fn remove_provider_key(id: String) -> CommandResult<()> {
     secrets::delete(&id).map_err(|e| e.to_string())
 }
 
+// ---------------------------------------------------------------------------
+// OAuth subscription login (Phase 2.5)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+pub struct OAuthStartResponse {
+    pub url: String,
+    pub provider_id: String,
+    pub instructions: String,
+}
+
+#[tauri::command]
+pub async fn oauth_anthropic_start(
+    state: State<'_, AppState>,
+) -> CommandResult<OAuthStartResponse> {
+    let started = AnthropicLoginFlow::start().map_err(|e| e.to_string())?;
+    let _ = open_in_browser(&started.url);
+    {
+        let mut guard = state
+            .anthropic_login
+            .lock()
+            .map_err(|_| "anthropic login mutex poisoned".to_string())?;
+        *guard = Some(started.flow);
+    }
+    Ok(OAuthStartResponse {
+        url: started.url,
+        provider_id: "anthropic-oauth".into(),
+        instructions: "Anthropic will show you a one-time code on the callback page. \
+            Paste it back here to finish signing in."
+            .into(),
+    })
+}
+
+#[tauri::command]
+pub async fn oauth_anthropic_complete(
+    state: State<'_, AppState>,
+    code: String,
+) -> CommandResult<()> {
+    let flow = {
+        let mut guard = state
+            .anthropic_login
+            .lock()
+            .map_err(|_| "anthropic login mutex poisoned".to_string())?;
+        guard
+            .take()
+            .ok_or_else(|| "no active Anthropic login — click Sign in first".to_string())?
+    };
+    let tokens = flow.complete(&code).await.map_err(|e| e.to_string())?;
+    persist_tokens(state.paths.config_dir(), "anthropic-oauth", &tokens)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn oauth_openai_login(state: State<'_, AppState>) -> CommandResult<()> {
+    let started = OpenAILoginFlow::start().await.map_err(|e| e.to_string())?;
+    let _ = open_in_browser(&started.url);
+    let tokens = started
+        .flow
+        .wait_for_callback(std::time::Duration::from_secs(300))
+        .await
+        .map_err(|e| e.to_string())?;
+    persist_tokens(state.paths.config_dir(), "openai-oauth", &tokens).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn oauth_logout(state: State<'_, AppState>, id: String) -> CommandResult<()> {
+    let path = state
+        .paths
+        .config_dir()
+        .join("oauth")
+        .join(format!("{id}.json"));
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 fn build_provider(
     id: &str,
     api_key: &str,
     model: Option<String>,
 ) -> Result<Arc<dyn LlmProvider>, String> {
+    let config_dir = std::path::PathBuf::new();
+    let _ = &config_dir;
     Ok(match id {
         "anthropic" => {
             let mut p = AnthropicProvider::new(api_key.to_owned());

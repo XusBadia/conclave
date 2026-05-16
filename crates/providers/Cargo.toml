@@ -27,6 +27,15 @@ reqwest = { workspace = true }
 # Windows, libsecret on Linux).
 keyring = { workspace = true }
 
+# In-app OAuth flow (Phase 2.5) — PKCE generator + localhost listener +
+# browser opener for the Claude Max / ChatGPT subscription providers.
+base64 = { workspace = true }
+rand = { workspace = true }
+sha2 = { workspace = true }
+chrono = { workspace = true }
+open = { workspace = true }
+tokio = { workspace = true }
+
 [dev-dependencies]
 toml = { workspace = true }
 tokio = { workspace = true }

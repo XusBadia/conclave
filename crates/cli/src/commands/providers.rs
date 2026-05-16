@@ -6,9 +6,10 @@ use anyhow::{anyhow, Context, Result};
 use clap::{Args, Subcommand};
 
 use conclave_providers::{
-    secrets, AnthropicOAuthProvider, AnthropicProvider, CompletionRequest, LlmProvider, Message,
-    MockProvider, OllamaProvider, OpenAIOAuthProvider, OpenAiProvider, OpenRouterProvider,
-    KNOWN_PROVIDERS, OAUTH_PROVIDERS,
+    open_in_browser, persist_tokens, secrets, AnthropicLoginFlow, AnthropicOAuthProvider,
+    AnthropicProvider, CompletionRequest, LlmProvider, Message, MockProvider, OllamaProvider,
+    OpenAILoginFlow, OpenAIOAuthProvider, OpenAiProvider, OpenRouterProvider, KNOWN_PROVIDERS,
+    OAUTH_PROVIDERS,
 };
 
 use super::CommandContext;
@@ -30,6 +31,17 @@ pub(crate) enum ProvidersAction {
         /// Provider id (`anthropic`, `openai`, `openrouter`, …). For
         /// `ollama` no key is needed; running `set` just verifies the
         /// local server.
+        id: String,
+    },
+    /// Sign in with the user's Claude Max / ChatGPT subscription via
+    /// browser-based OAuth (PKCE).
+    Login {
+        /// Provider id (`anthropic-oauth`, `openai-oauth`).
+        id: String,
+    },
+    /// Forget the OAuth tokens stored for an OAuth provider.
+    Logout {
+        /// Provider id.
         id: String,
     },
     /// Run a one-shot completion against a configured provider.
@@ -55,9 +67,75 @@ pub(crate) async fn run(ctx: &CommandContext, args: ProvidersArgs) -> Result<()>
     match args.action {
         ProvidersAction::List => list(ctx).await,
         ProvidersAction::Set { id } => set(&id).await,
-        ProvidersAction::Test { id, prompt, model } => test(&id, prompt, model).await,
+        ProvidersAction::Login { id } => login(ctx, &id).await,
+        ProvidersAction::Logout { id } => logout(ctx, &id),
+        ProvidersAction::Test { id, prompt, model } => test(ctx, &id, prompt, model).await,
         ProvidersAction::Remove { id } => remove(&id),
     }
+}
+
+async fn login(ctx: &CommandContext, id: &str) -> Result<()> {
+    let config_dir = ctx.paths.config_dir().to_path_buf();
+    match id {
+        "anthropic-oauth" => {
+            let started = AnthropicLoginFlow::start()?;
+            println!("Opening your browser to sign in with your Anthropic account…");
+            println!(
+                "If it does not open, paste this URL into a browser:\n  {}\n",
+                started.url
+            );
+            let _ = open_in_browser(&started.url);
+            println!(
+                "After signing in, Anthropic will show a one-time code. Copy + paste \
+                 it below (format `<code>#<state>`):"
+            );
+            let code = rpassword::prompt_password("code: ")
+                .context("could not read code from terminal")?;
+            let tokens = started.flow.complete(&code).await?;
+            persist_tokens(&config_dir, "anthropic-oauth", &tokens)?;
+            println!(
+                "✓ Anthropic OAuth tokens stored in {}",
+                config_dir.display()
+            );
+        }
+        "openai-oauth" => {
+            let started = OpenAILoginFlow::start().await?;
+            println!("Opening your browser to sign in with your ChatGPT account…");
+            println!(
+                "If it does not open, paste this URL into a browser:\n  {}\n",
+                started.url
+            );
+            let _ = open_in_browser(&started.url);
+            println!("Waiting for the redirect (timeout: 5 minutes)…");
+            let tokens = started
+                .flow
+                .wait_for_callback(std::time::Duration::from_secs(300))
+                .await?;
+            persist_tokens(&config_dir, "openai-oauth", &tokens)?;
+            println!("✓ OpenAI OAuth tokens stored in {}", config_dir.display());
+        }
+        other => anyhow::bail!(
+            "unknown OAuth provider `{other}` — supported: {}",
+            OAUTH_PROVIDERS.join(", ")
+        ),
+    }
+    Ok(())
+}
+
+fn logout(ctx: &CommandContext, id: &str) -> Result<()> {
+    let path = ctx
+        .paths
+        .config_dir()
+        .join("oauth")
+        .join(format!("{id}.json"));
+    match std::fs::remove_file(&path) {
+        Ok(()) => println!("removed {}", path.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            println!("nothing to remove at {}", path.display());
+        }
+        Err(e) => anyhow::bail!("could not remove {}: {e}", path.display()),
+    }
+    Ok(())
 }
 
 async fn list(ctx: &CommandContext) -> Result<()> {
@@ -188,13 +266,13 @@ async fn set(id: &str) -> Result<()> {
     Ok(())
 }
 
-async fn test(id: &str, prompt: String, model: Option<String>) -> Result<()> {
+async fn test(ctx: &CommandContext, id: &str, prompt: String, model: Option<String>) -> Result<()> {
     let api_key = match id {
         "ollama" | "anthropic-oauth" | "openai-oauth" => String::new(),
         _ => secrets::load(id)?
             .ok_or_else(|| anyhow!("no API key configured for {id} — run `providers set {id}`"))?,
     };
-    let provider = build_provider(id, &api_key, model.clone())?;
+    let provider = build_provider_with_ctx(ctx, id, &api_key, model.clone())?;
 
     let start = Instant::now();
     let resp = provider
@@ -224,6 +302,35 @@ fn remove(id: &str) -> Result<()> {
     secrets::delete(id).with_context(|| format!("could not remove API key for {id}"))?;
     println!("removed API key for {id} from keychain");
     Ok(())
+}
+
+fn build_provider_with_ctx(
+    ctx: &CommandContext,
+    id: &str,
+    api_key: &str,
+    model: Option<String>,
+) -> Result<Box<dyn LlmProvider>> {
+    let config_dir = ctx.paths.config_dir();
+    match id {
+        "anthropic-oauth" => {
+            let mut p = AnthropicOAuthProvider::from_conclave_or_cli(config_dir)
+                .map_err(|e| anyhow!("{e}"))?;
+            if let Some(m) = model {
+                p = p.with_model(m);
+            }
+            return Ok(Box::new(p));
+        }
+        "openai-oauth" => {
+            let mut p = OpenAIOAuthProvider::from_conclave_or_cli(config_dir)
+                .map_err(|e| anyhow!("{e}"))?;
+            if let Some(m) = model {
+                p = p.with_model(m);
+            }
+            return Ok(Box::new(p));
+        }
+        _ => {}
+    }
+    build_provider(id, api_key, model)
 }
 
 fn build_provider(id: &str, api_key: &str, model: Option<String>) -> Result<Box<dyn LlmProvider>> {

@@ -65,6 +65,50 @@ impl AnthropicOAuthProvider {
         })
     }
 
+    /// Build from Conclave's own OAuth store (preferred) with a fallback
+    /// to the Claude Code CLI credentials file. This is the path used by
+    /// the in-app login flow.
+    pub fn from_conclave_or_cli(config_dir: &Path) -> Result<Self, ProviderError> {
+        let conclave_path = config_dir.join("oauth").join("anthropic-oauth.json");
+        if conclave_path.exists() {
+            return Self::from_conclave_tokens(conclave_path);
+        }
+        Self::from_default_location()
+    }
+
+    /// Build from Conclave's `<config_dir>/oauth/anthropic-oauth.json`.
+    pub fn from_conclave_tokens(path: impl Into<PathBuf>) -> Result<Self, ProviderError> {
+        let path = path.into();
+        let raw = std::fs::read_to_string(&path)
+            .map_err(|e| ProviderError::Other(format!("read {}: {e}", path.display())))?;
+        #[derive(serde::Deserialize)]
+        struct Stored {
+            access_token: String,
+            refresh_token: String,
+            expires_at_ms: u64,
+            #[serde(default)]
+            scopes: Vec<String>,
+            #[serde(default)]
+            subscription_type: Option<String>,
+        }
+        let parsed: Stored = serde_json::from_str(&raw)
+            .map_err(|e| ProviderError::Other(format!("parse {}: {e}", path.display())))?;
+        let credentials = OAuthCredentials {
+            access_token: parsed.access_token,
+            refresh_token: parsed.refresh_token,
+            expires_at: parsed.expires_at_ms,
+            scopes: parsed.scopes,
+            subscription_type: parsed.subscription_type,
+        };
+        Ok(Self {
+            credentials_path: path,
+            base_url: DEFAULT_BASE_URL.to_owned(),
+            default_model: DEFAULT_MODEL.to_owned(),
+            client: reqwest::Client::new(),
+            cached: Mutex::new(Some(credentials)),
+        })
+    }
+
     /// Override the API base URL (testing).
     #[must_use]
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
