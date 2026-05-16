@@ -72,8 +72,7 @@ fn resolve_from_env() -> ResolvedStyle {
 
 fn is_truthy_env(name: &str) -> bool {
     std::env::var(name)
-        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
-        .unwrap_or(false)
+        .is_ok_and(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
 }
 
 #[cfg(test)]
