@@ -54,8 +54,9 @@ tesseract-rs = { workspace = true, optional = true }
 [features]
 default = []
 ocr = ["dep:pdfium-render", "dep:tesseract-rs"]
-# Exposes `MockEmbedder` so downstream crates (notably the CLI integration
-# test) can pin a deterministic embedder without touching the network.
+# Reserved for future test-only API expansion. `MockEmbedder` is exposed
+# unconditionally; this flag stays so callers can opt into heavier
+# helpers without re-shaping the manifest later.
 test-utils = []
 
 [dev-dependencies]

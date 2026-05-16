@@ -122,11 +122,9 @@ impl Embedder for FastEmbedEmbedder {
 /// hash of the input. Identical inputs yield identical vectors; different
 /// inputs are very likely to point in different directions, which is enough
 /// to drive ANN search end-to-end without touching the network.
-#[cfg(any(test, feature = "test-utils"))]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MockEmbedder;
 
-#[cfg(any(test, feature = "test-utils"))]
 impl MockEmbedder {
     /// Build a new mock embedder. No state is held.
     pub const fn new() -> Self {
@@ -134,7 +132,6 @@ impl MockEmbedder {
     }
 }
 
-#[cfg(any(test, feature = "test-utils"))]
 impl Embedder for MockEmbedder {
     fn id(&self) -> &'static str {
         "mock:hash"
@@ -149,7 +146,6 @@ impl Embedder for MockEmbedder {
     }
 }
 
-#[cfg(any(test, feature = "test-utils"))]
 fn hash_vector(text: &str) -> Vec<f32> {
     let mut out = vec![0f32; E5_SMALL_DIM];
     let bytes = text.as_bytes();

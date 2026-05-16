@@ -109,6 +109,18 @@ impl IngestionPipeline {
         })
     }
 
+    /// Access the underlying repository — primarily for callers that need
+    /// to issue searches or list/remove documents against the same workspace.
+    pub const fn repository(&self) -> &Arc<DocumentRepository> {
+        &self.repository
+    }
+
+    /// Embedder driving this pipeline. Useful when callers want to embed
+    /// query strings with the same backend.
+    pub const fn embedder(&self) -> &Arc<dyn Embedder> {
+        &self.embedder
+    }
+
     /// Process `path` (a single file or a directory walked recursively),
     /// streaming events to `on_event`. Returns an aggregate report.
     pub async fn ingest_path<F>(&self, path: &Path, mut on_event: F) -> Result<IngestionReport>
