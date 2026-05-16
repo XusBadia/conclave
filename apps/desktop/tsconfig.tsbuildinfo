@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/components/button.tsx","./src/components/card.tsx","./src/components/field.tsx","./src/components/onboarding.tsx","./src/components/sidebar.tsx","./src/lib/cn.ts","./src/lib/ipc.ts","./src/routes/cases.tsx","./src/routes/knowledge.tsx","./src/routes/settings.tsx","./src/routes/workspaces.tsx"],"version":"5.9.3"}
