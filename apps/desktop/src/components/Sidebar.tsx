@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import { cn } from "../lib/cn";
+import { Logo } from "./Logo";
 
 export type Section = "workspaces" | "knowledge" | "cases" | "settings";
 
@@ -77,9 +78,7 @@ export function Sidebar({
   return (
     <aside className="flex h-full w-[220px] shrink-0 flex-col border-r border-border bg-bg-subtle">
       <div className="flex items-center gap-2.5 px-4 pb-2 pt-3">
-        <div className="grid h-7 w-7 place-content-center border border-ink text-[11px] font-mono uppercase tracking-[0.1em] text-ink">
-          C
-        </div>
+        <Logo size={28} />
         <div className="leading-tight">
           <div className="font-mono text-[11px] uppercase tracking-[0.14em] text-ink">
             {t("app.brand")}
