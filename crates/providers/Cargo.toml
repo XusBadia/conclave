@@ -17,8 +17,16 @@ workspace = true
 conclave-core = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
+# HTTP client used by every cloud provider implementation.
+reqwest = { workspace = true }
+# OS-native secret storage (Keychain on macOS, Credential Manager on
+# Windows, libsecret on Linux).
+keyring = { workspace = true }
+
 [dev-dependencies]
 toml = { workspace = true }
+tokio = { workspace = true }

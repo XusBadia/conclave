@@ -91,7 +91,7 @@ async fn main() -> Result<()> {
         Command::Documents(args) => commands::documents::run(&ctx, args).await,
         Command::Search(args) => commands::search::run(&ctx, args).await,
         Command::Verdict(args) => commands::verdict::run(&ctx, args),
-        Command::Providers(args) => commands::providers::run(&ctx, args),
+        Command::Providers(args) => commands::providers::run(&ctx, args).await,
         Command::Workspace(args) => commands::workspace::run(&ctx, args),
     }
 }

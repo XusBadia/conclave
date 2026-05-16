@@ -1,138 +1,77 @@
 //! LLM provider abstraction used by the Conclave virtual committee.
 //!
-//! Phase 0 only defines the trait surface and the shared message/role types.
-//! Concrete implementations (`Anthropic`, `OpenAI`, local `llama.cpp`, etc.)
-//! are introduced in Phase 2.
+//! Phase 2 introduces a real implementation set: `Anthropic`, `OpenAI`,
+//! `OpenRouter` and `Ollama`. Every concrete provider implements the
+//! [`LlmProvider`] trait; secrets live in the OS keychain via the
+//! [`secrets`] module; the [`ProviderRegistry`] composes them at runtime
+//! for callers (verdict pipeline, CLI subcommands).
+//!
+//! ## Privacy invariants
+//!
+//! - No provider implementation logs the user message body or the response
+//!   text. They log only model ids, latency, status codes, and token usage.
+//! - Secrets never touch on-disk config files. They live in the OS keychain
+//!   exclusively, under the `Conclave` service.
+
+#![allow(clippy::similar_names)]
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 
-use conclave_core::Result;
+mod anthropic_api;
+mod error;
+mod mock;
+mod ollama_local;
+mod openai_api;
+mod openrouter_api;
+mod registry;
+pub mod secrets;
+mod types;
 
-/// Role of a chat message in a provider conversation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Role {
-    /// Instruction-level system message.
-    System,
-    /// Human / clinician input.
-    User,
-    /// Model output.
-    Assistant,
-}
+pub use anthropic_api::AnthropicProvider;
+pub use error::ProviderError;
+pub use mock::MockProvider;
+pub use ollama_local::OllamaProvider;
+pub use openai_api::OpenAiProvider;
+pub use openrouter_api::OpenRouterProvider;
+pub use registry::{ProviderRegistry, KNOWN_PROVIDERS};
+pub use types::{
+    CompletionRequest, CompletionResponse, Message, MessageRole, ProviderCapabilities, Usage,
+};
 
-/// A single message inside a provider request.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Message {
-    /// Role of the message author.
-    pub role: Role,
-    /// Verbatim content of the message.
-    pub content: String,
-}
-
-impl Message {
-    /// Build a system-role message.
-    pub fn system(content: impl Into<String>) -> Self {
-        Self {
-            role: Role::System,
-            content: content.into(),
-        }
-    }
-    /// Build a user-role message.
-    pub fn user(content: impl Into<String>) -> Self {
-        Self {
-            role: Role::User,
-            content: content.into(),
-        }
-    }
-    /// Build an assistant-role message.
-    pub fn assistant(content: impl Into<String>) -> Self {
-        Self {
-            role: Role::Assistant,
-            content: content.into(),
-        }
-    }
-}
-
-/// Generation request sent to a provider.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GenerationRequest {
-    /// Ordered conversation history.
-    pub messages: Vec<Message>,
-    /// Sampling temperature, when supported by the underlying model.
-    pub temperature: Option<f32>,
-    /// Maximum number of output tokens, when supported.
-    pub max_output_tokens: Option<u32>,
-}
-
-/// Generation response returned by a provider.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GenerationResponse {
-    /// The assistant message produced by the provider.
-    pub message: Message,
-    /// Token accounting, when reported.
-    pub usage: Option<Usage>,
-    /// Reason the provider stopped generating, when reported.
-    pub stop_reason: Option<String>,
-}
-
-/// Token accounting reported by a provider.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub struct Usage {
-    /// Tokens consumed by the prompt.
-    pub input_tokens: u32,
-    /// Tokens produced by the model.
-    pub output_tokens: u32,
-}
-
-/// Capability flags advertised by a provider.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Capabilities {
-    /// Identifier the user references in config (`anthropic`, `openai`, ...).
-    pub id: String,
-    /// Human-readable provider name.
-    pub display_name: String,
-    /// Whether the provider streams partial output.
-    pub supports_streaming: bool,
-    /// Whether the provider can call tools.
-    pub supports_tools: bool,
-}
-
-/// Trait every concrete LLM provider implements.
+/// Anything that can take a structured request and return generated text.
 #[async_trait]
-pub trait Provider: Send + Sync + std::fmt::Debug {
-    /// Stable, machine-readable identifier (matches `Capabilities::id`).
+pub trait LlmProvider: Send + Sync + std::fmt::Debug {
+    /// Stable identifier (`anthropic`, `openai`, `openrouter`, `ollama`,
+    /// `mock`). Used as the keychain account suffix and as the on-disk
+    /// routing key.
     fn id(&self) -> &'static str;
 
-    /// Capabilities advertised by this provider.
-    fn capabilities(&self) -> Capabilities;
+    /// Capability flags so the caller can fail-fast on context overflow or
+    /// reject JSON-mode requests against a provider that can't honour them.
+    fn capabilities(&self) -> ProviderCapabilities;
 
-    /// Run a single-shot generation request.
-    async fn generate(&self, request: GenerationRequest) -> Result<GenerationResponse>;
+    /// `true` when the provider needs an internet connection at call time.
+    fn requires_network(&self) -> bool;
+
+    /// Run a one-shot completion.
+    async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse, ProviderError>;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn message_constructors_set_role() {
-        assert_eq!(Message::system("a").role, Role::System);
-        assert_eq!(Message::user("a").role, Role::User);
-        assert_eq!(Message::assistant("a").role, Role::Assistant);
+    #[tokio::test]
+    async fn mock_provider_round_trip() {
+        let p = MockProvider::with_response("hola");
+        let resp = p.complete(CompletionRequest::user("hi")).await.unwrap();
+        assert_eq!(resp.text, "hola");
+        assert_eq!(p.captured_requests().len(), 1);
     }
 
     #[test]
-    fn role_serializes_lowercase() {
-        let raw = toml::to_string(&Wrap {
-            role: Role::Assistant,
-        })
-        .unwrap();
-        assert!(raw.contains("role = \"assistant\""));
-    }
-
-    #[derive(Serialize)]
-    struct Wrap {
-        role: Role,
+    fn registry_is_empty_by_default() {
+        let r = ProviderRegistry::new();
+        assert!(r.is_empty());
     }
 }
