@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Pre-commit hook — runs scripts/verify.sh before every commit.
+#
+# Activate this hook in your clone (one-time setup):
+#
+#     git config core.hooksPath .githooks
+#
+# Bypass for an emergency commit you really want to make even if checks fail:
+#
+#     git commit --no-verify
+#
+# Keep this file thin so the actual checks live in one place (verify.sh) and
+# can also be run on demand.
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+exec "$REPO_ROOT/scripts/verify.sh"

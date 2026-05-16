@@ -511,9 +511,7 @@ pub async fn oauth_anthropic_complete(
 /// and the only reliable recovery is to open the URL in a tab where the
 /// ChatGPT session is already live.
 #[tauri::command]
-pub async fn oauth_openai_start(
-    state: State<'_, AppState>,
-) -> CommandResult<OAuthStartResponse> {
+pub async fn oauth_openai_start(state: State<'_, AppState>) -> CommandResult<OAuthStartResponse> {
     // Cancel any previous in-flight flow so its listener gets dropped
     // before we try to bind. The drop happens on the runtime's next tick,
     // so we yield and briefly sleep to give the socket a chance to release.

@@ -59,7 +59,7 @@ you can ignore this file. If it’s not started yet, use this version.
 
 For each subsequent phase:
 
-1. Wait until the previous phase is fully green on CI.
+1. Wait until the previous phase is fully green locally (`./scripts/verify.sh`).
 1. Open a fresh Claude Code session in the repo.
 1. Paste the corresponding `phase-N-*.md` file as the first message.
 1. Claude Code will plan, post the plan, then implement, then commit
@@ -81,12 +81,43 @@ on autopilot — that’s the 80%-of-the-product moment.
 - If a session is long, summarise progress as a comment in the
   tracking issue before closing — restart Claude Code reads the issue
   faster than the full chat history.
-- If CI fails, screenshot the failure and paste the error into a new
-  Claude Code session: “fix the CI failure shown below, then commit
-  and push”.
+- If the pre-commit hook fails, screenshot the failure and paste the
+  error into a new Claude Code session: “fix the failure shown below,
+  then commit and push”.
 - If Claude Code starts making decisions you didn’t approve (changing
   stack, adding deps, restructuring crates), interrupt and point it
   at `docs/ARCHITECTURE.md`.
+
+## Local verification (Git hook)
+
+Conclave runs **no CI on push or PR** — the project is local-first and so
+is the verification loop. After cloning, activate the versioned Git hook
+once per clone:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+Every `git commit` will then run, before creating the commit:
+
+1. `cargo fmt --all --check`
+2. `cargo clippy --workspace --all-targets --locked -- -D warnings`
+3. `cargo test --workspace --locked --quiet`
+4. `pnpm --dir apps/desktop build`
+
+On a warm Cargo cache it takes ~3-5 minutes. If a step fails, the commit
+is aborted. Bypass for an emergency commit with `git commit --no-verify`,
+but don’t make it a habit.
+
+You can also run the same checks on demand without committing:
+
+```sh
+./scripts/verify.sh
+```
+
+GitHub Actions only fires when you push a release tag (`vX.Y.Z`),
+producing release binaries for macOS, Linux and Windows. Day-to-day
+pushes to `main` don’t burn Actions minutes.
 
 ## Decisions already made (don’t relitigate)
 
