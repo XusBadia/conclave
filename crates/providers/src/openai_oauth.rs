@@ -20,7 +20,10 @@ use crate::types::{
 use crate::LlmProvider;
 
 const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
-const DEFAULT_MODEL: &str = "gpt-5";
+// ChatGPT-account Codex flows reject plain `gpt-5` ("not supported when
+// using Codex with a ChatGPT account"). `gpt-5-codex` is the Codex-native
+// model that Plus/Pro subscriptions can call against this endpoint.
+const DEFAULT_MODEL: &str = "gpt-5-codex";
 const USER_AGENT: &str = "codex_cli_rs/Conclave";
 const ORIGINATOR: &str = "codex_cli_rs";
 

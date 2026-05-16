@@ -359,29 +359,32 @@ pub async fn list_providers(state: State<'_, AppState>) -> CommandResult<Vec<Pro
         });
     }
     for id in OAUTH_PROVIDERS {
+        // "Configured" requires an explicit in-app sign-in. We deliberately
+        // do NOT fall back to `~/.codex/auth.json` or `~/.claude/.credentials.json`
+        // — picking those up silently confuses users who never connected the
+        // provider in Conclave but happen to have the CLI installed.
         let conclave_path = state
             .paths
             .config_dir()
             .join("oauth")
             .join(format!("{id}.json"));
         let (configured, available, hint) = if conclave_path.exists() {
-            (true, true, Some("signed in via Conclave".into()))
+            let hint = match *id {
+                "anthropic-oauth" => AnthropicOAuthProvider::from_conclave_tokens(&conclave_path)
+                    .ok()
+                    .and_then(|p| p.subscription_type()),
+                "openai-oauth" => OpenAIOAuthProvider::from_conclave_tokens(&conclave_path)
+                    .ok()
+                    .and_then(|p| p.account_id()),
+                _ => None,
+            };
+            (true, true, hint)
         } else {
-            match *id {
-                "anthropic-oauth" => match AnthropicOAuthProvider::from_default_location() {
-                    Ok(p) => (true, true, p.subscription_type()),
-                    Err(_) => (false, false, Some("sign in to start".into())),
-                },
-                "openai-oauth" => match OpenAIOAuthProvider::from_default_location() {
-                    Ok(p) => (true, true, p.account_id()),
-                    Err(_) => (false, false, Some("sign in to start".into())),
-                },
-                _ => (false, false, None),
-            }
+            (false, false, Some("sign in to start".into()))
         };
         let default_model = match *id {
             "anthropic-oauth" => "claude-sonnet-4-6-20250929".into(),
-            "openai-oauth" => "gpt-5".into(),
+            "openai-oauth" => "gpt-5-codex".into(),
             _ => "—".into(),
         };
         out.push(ProviderInfo {
@@ -410,7 +413,11 @@ pub async fn set_provider_key(id: String, api_key: String) -> CommandResult<()> 
 }
 
 #[tauri::command]
-pub async fn test_provider(id: String, prompt: Option<String>) -> CommandResult<String> {
+pub async fn test_provider(
+    state: State<'_, AppState>,
+    id: String,
+    prompt: Option<String>,
+) -> CommandResult<String> {
     let api_key = match id.as_str() {
         "ollama" | "anthropic-oauth" | "openai-oauth" => String::new(),
         _ => match secrets::load(&id).map_err(|e| e.to_string())? {
@@ -418,7 +425,7 @@ pub async fn test_provider(id: String, prompt: Option<String>) -> CommandResult<
             None => return err(format!("no API key for {id}")),
         },
     };
-    let provider = build_provider(&id, &api_key, None)?;
+    let provider = build_provider(&id, &api_key, None, state.paths.config_dir())?;
     let prompt = prompt.unwrap_or_else(|| "Reply with one word: hello.".into());
     let resp = provider
         .complete(CompletionRequest {
@@ -525,9 +532,8 @@ fn build_provider(
     id: &str,
     api_key: &str,
     model: Option<String>,
+    config_dir: &std::path::Path,
 ) -> Result<Arc<dyn LlmProvider>, String> {
-    let config_dir = std::path::PathBuf::new();
-    let _ = &config_dir;
     Ok(match id {
         "anthropic" => {
             let mut p = AnthropicProvider::new(api_key.to_owned());
@@ -558,16 +564,22 @@ fn build_provider(
             }
             Arc::new(p)
         }
+        // OAuth providers read only Conclave's own token file. We do NOT
+        // fall back to `~/.codex/auth.json` / `~/.claude/.credentials.json`
+        // — see `list_providers` for the rationale.
         "anthropic-oauth" => {
-            let mut p =
-                AnthropicOAuthProvider::from_default_location().map_err(|e| e.to_string())?;
+            let path = config_dir.join("oauth").join("anthropic-oauth.json");
+            let mut p = AnthropicOAuthProvider::from_conclave_tokens(&path)
+                .map_err(|_| "Anthropic is not connected. Sign in from Settings.".to_string())?;
             if let Some(m) = model {
                 p = p.with_model(m);
             }
             Arc::new(p)
         }
         "openai-oauth" => {
-            let mut p = OpenAIOAuthProvider::from_default_location().map_err(|e| e.to_string())?;
+            let path = config_dir.join("oauth").join("openai-oauth.json");
+            let mut p = OpenAIOAuthProvider::from_conclave_tokens(&path)
+                .map_err(|_| "OpenAI is not connected. Sign in from Settings.".to_string())?;
             if let Some(m) = model {
                 p = p.with_model(m);
             }
@@ -622,7 +634,12 @@ pub async fn run_case(
             None => return err(format!("no API key for `{}`", request.provider_id)),
         }
     };
-    let provider = build_provider(&request.provider_id, &api_key, request.model.clone())?;
+    let provider = build_provider(
+        &request.provider_id,
+        &api_key,
+        request.model.clone(),
+        state.paths.config_dir(),
+    )?;
 
     let embedder: Arc<dyn Embedder> = Arc::new(FastEmbedEmbedder::new());
     let repo = open_repo(&state, &workspace.id, &embedder).await?;
