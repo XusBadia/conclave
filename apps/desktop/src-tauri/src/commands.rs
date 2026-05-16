@@ -504,13 +504,16 @@ pub async fn oauth_anthropic_complete(
 /// Begin an OpenAI OAuth login.
 ///
 /// Spawns a background task that owns the localhost:1455 listener and waits
-/// up to 5 min for the browser to redirect. Returns immediately after
-/// opening the browser; the UI polls `list_providers` to know when it
-/// completes. The task's abort handle is stored in [`AppState::openai_login`]
-/// so [`oauth_openai_cancel`] can release the port if the redirect never
-/// arrives.
+/// up to 5 min for the browser to redirect. Tries to open the URL in the
+/// default browser, but also returns it so the UI can offer "copy" and
+/// "open" affordances — auth.openai.com sometimes drops the OAuth state
+/// when the user has to log in from cold (browser shows "session ended"),
+/// and the only reliable recovery is to open the URL in a tab where the
+/// ChatGPT session is already live.
 #[tauri::command]
-pub async fn oauth_openai_start(state: State<'_, AppState>) -> CommandResult<()> {
+pub async fn oauth_openai_start(
+    state: State<'_, AppState>,
+) -> CommandResult<OAuthStartResponse> {
     // Cancel any previous in-flight flow so its listener gets dropped
     // before we try to bind. The drop happens on the runtime's next tick,
     // so we yield and briefly sleep to give the socket a chance to release.
@@ -524,7 +527,8 @@ pub async fn oauth_openai_start(state: State<'_, AppState>) -> CommandResult<()>
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     let started = OpenAILoginFlow::start().await.map_err(|e| e.to_string())?;
-    let _ = open_in_browser(&started.url);
+    let url = started.url.clone();
+    let _ = open_in_browser(&url);
 
     let config_dir = state.paths.config_dir().to_owned();
     let task = tokio::spawn(async move {
@@ -545,7 +549,12 @@ pub async fn oauth_openai_start(state: State<'_, AppState>) -> CommandResult<()>
     });
 
     *state.openai_login.lock().map_err(|_| "state poisoned")? = Some(task.abort_handle());
-    Ok(())
+
+    Ok(OAuthStartResponse {
+        url,
+        provider_id: "openai-oauth".into(),
+        instructions: String::new(),
+    })
 }
 
 /// Abort an in-flight OpenAI OAuth flow. Releases the localhost:1455

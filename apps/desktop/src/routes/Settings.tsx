@@ -34,7 +34,7 @@ type ConnectFlow =
   | { kind: "idle" }
   | { kind: "api-key"; id: string; draft: string }
   | { kind: "oauth-anthropic"; pasteInstructions: string | null; code: string }
-  | { kind: "oauth-openai" };
+  | { kind: "oauth-openai"; url: string };
 
 export function SettingsPage() {
   const { t } = useTranslation();
@@ -131,12 +131,16 @@ export function SettingsPage() {
   // Kick off OpenAI's localhost-redirect flow as a fire-and-forget. The
   // backend spawns a background task that owns the :1455 listener; we just
   // transition the UI into "waiting" and let the polling effect detect
-  // completion (or the back arrow trigger a cancel).
+  // completion (or the back arrow trigger a cancel). We also stash the
+  // authorize URL so the overlay can offer copy/open affordances — Brave
+  // Shields and similar privacy tools regularly break the cross-subdomain
+  // session OpenAI relies on, and the only reliable recovery is to open
+  // the URL in a browser where ChatGPT is already signed in.
   const startOpenAIOAuth = async () => {
     setError(null);
-    setFlow({ kind: "oauth-openai" });
     try {
-      await ipc.oauthOpenaiStart();
+      const r = await ipc.oauthOpenaiStart();
+      setFlow({ kind: "oauth-openai", url: r.url });
     } catch (e) {
       setError(String(e));
       setFlow({ kind: "idle" });
@@ -732,7 +736,7 @@ function ConnectFlowView({
           />
         )}
 
-        {flow.kind === "oauth-openai" && <OpenAIOAuthFlow busy={busy} />}
+        {flow.kind === "oauth-openai" && <OpenAIOAuthFlow url={flow.url} />}
       </div>
     </div>
   );
@@ -848,21 +852,87 @@ function AnthropicOAuthFlow({
   );
 }
 
-function OpenAIOAuthFlow(_: { busy: boolean }) {
+function OpenAIOAuthFlow({ url }: { url: string }) {
   const { t } = useTranslation();
+  const [copied, setCopied] = useState(false);
+
+  const copyUrl = async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      // clipboard API may be unavailable in some webviews — ignore
+    }
+  };
+
+  const openUrl = () => {
+    window.open(url, "_blank", "noopener,noreferrer");
+  };
+
   return (
-    <div className="flex items-center gap-3 py-2">
-      <span className="inline-flex items-center gap-1.5">
-        <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulseDot" />
-        <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulseDot [animation-delay:120ms]" />
-        <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulseDot [animation-delay:240ms]" />
-      </span>
-      <div className="text-[13px] text-ink-dim">
-        {t("settings.oauth_openai_waiting_title")}
-        <div className="mt-1 text-[12px] text-ink-faint">
-          {t("settings.oauth_openai_waiting_body")}
+    <div className="space-y-3">
+      <div className="flex items-center gap-3">
+        <span className="inline-flex items-center gap-1.5">
+          <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulseDot" />
+          <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulseDot [animation-delay:120ms]" />
+          <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulseDot [animation-delay:240ms]" />
+        </span>
+        <div className="text-[13px] text-ink-dim">
+          {t("settings.oauth_openai_waiting_title")}
         </div>
       </div>
+
+      <p className="text-[12px] leading-relaxed text-ink-faint">
+        {t("settings.oauth_openai_waiting_body")}
+      </p>
+
+      <div className="rounded-md border border-border-subtle bg-bg-subtle p-2.5">
+        <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-ink-faint">
+          {t("settings.oauth_openai_url_label")}
+        </div>
+        <div className="flex items-center gap-2">
+          <code
+            className="block flex-1 truncate rounded bg-bg px-2 py-1.5 font-mono text-[11px] text-ink-subtle"
+            title={url}
+          >
+            {url}
+          </code>
+          <button
+            type="button"
+            onClick={copyUrl}
+            className={cn(
+              "shrink-0 rounded-md border px-2.5 py-1.5 text-[12px] font-medium transition no-drag",
+              "focus:outline-none focus-visible:ring-conclave",
+              copied
+                ? "border-ok/40 bg-ok/10 text-ok"
+                : "border-border bg-surface text-ink-dim hover:bg-surface-hover hover:text-ink",
+            )}
+          >
+            {copied
+              ? t("settings.oauth_openai_url_copied")
+              : t("settings.oauth_openai_url_copy")}
+          </button>
+        </div>
+        <button
+          type="button"
+          onClick={openUrl}
+          className="mt-2 text-[11.5px] text-accent transition no-drag hover:text-accent-strong focus:outline-none focus-visible:underline"
+        >
+          {t("settings.oauth_openai_url_open")}
+        </button>
+      </div>
+
+      <details className="text-[11.5px] text-ink-faint">
+        <summary className="cursor-pointer select-none transition hover:text-ink-subtle">
+          {t("settings.oauth_openai_trouble_summary")}
+        </summary>
+        <ul className="mt-2 space-y-1 pl-4 leading-relaxed list-disc marker:text-ink-faint">
+          <li>{t("settings.oauth_openai_trouble_brave")}</li>
+          <li>{t("settings.oauth_openai_trouble_copy")}</li>
+          <li>{t("settings.oauth_openai_trouble_login_first")}</li>
+        </ul>
+      </details>
     </div>
   );
 }

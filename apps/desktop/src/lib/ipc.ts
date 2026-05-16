@@ -170,9 +170,13 @@ export const ipc = {
   oauthAnthropicComplete: (code: string) =>
     invoke<void>("oauth_anthropic_complete", { code }),
   // Opens the browser and spawns a background task that owns the
-  // localhost:1455 listener. Returns immediately — poll listProviders to
-  // detect completion, call oauthOpenaiCancel to release the port.
-  oauthOpenaiStart: () => invoke<void>("oauth_openai_start"),
+  // localhost:1455 listener. Returns the authorize URL so the UI can also
+  // offer copy/open buttons — poll listProviders to detect completion,
+  // call oauthOpenaiCancel to release the port.
+  oauthOpenaiStart: () =>
+    invoke<{ url: string; provider_id: string; instructions: string }>(
+      "oauth_openai_start",
+    ),
   oauthOpenaiCancel: () => invoke<void>("oauth_openai_cancel"),
   oauthLogout: (id: string) => invoke<void>("oauth_logout", { id }),
 
