@@ -29,6 +29,9 @@ html2text = { workspace = true }
 regex = { workspace = true }
 tiktoken-rs = { workspace = true }
 
+# Embeddings (Phase 1 §4): fastembed wraps ONNX Runtime + HuggingFace Hub.
+fastembed = { workspace = true }
+
 # OCR backends (Phase 1 §2). Activated by the `ocr` feature below. They
 # pull in heavy native dependencies (Pdfium, libtesseract), so we keep
 # them strictly opt-in.
@@ -38,6 +41,9 @@ tesseract-rs = { workspace = true, optional = true }
 [features]
 default = []
 ocr = ["dep:pdfium-render", "dep:tesseract-rs"]
+# Exposes `MockEmbedder` so downstream crates (notably the CLI integration
+# test) can pin a deterministic embedder without touching the network.
+test-utils = []
 
 [dev-dependencies]
 tempfile = { workspace = true }
