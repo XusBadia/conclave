@@ -18,22 +18,26 @@
 use async_trait::async_trait;
 
 mod anthropic_api;
+mod anthropic_oauth;
 mod error;
 mod mock;
 mod ollama_local;
 mod openai_api;
+mod openai_oauth;
 mod openrouter_api;
 mod registry;
 pub mod secrets;
 mod types;
 
 pub use anthropic_api::AnthropicProvider;
+pub use anthropic_oauth::AnthropicOAuthProvider;
 pub use error::ProviderError;
 pub use mock::MockProvider;
 pub use ollama_local::OllamaProvider;
 pub use openai_api::OpenAiProvider;
+pub use openai_oauth::OpenAIOAuthProvider;
 pub use openrouter_api::OpenRouterProvider;
-pub use registry::{ProviderRegistry, KNOWN_PROVIDERS};
+pub use registry::{ProviderRegistry, KNOWN_PROVIDERS, OAUTH_PROVIDERS};
 pub use types::{
     CompletionRequest, CompletionResponse, Message, MessageRole, ProviderCapabilities, Usage,
 };

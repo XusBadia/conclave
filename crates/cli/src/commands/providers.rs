@@ -6,8 +6,9 @@ use anyhow::{anyhow, Context, Result};
 use clap::{Args, Subcommand};
 
 use conclave_providers::{
-    secrets, AnthropicProvider, CompletionRequest, LlmProvider, Message, MockProvider,
-    OllamaProvider, OpenAiProvider, OpenRouterProvider, KNOWN_PROVIDERS,
+    secrets, AnthropicOAuthProvider, AnthropicProvider, CompletionRequest, LlmProvider, Message,
+    MockProvider, OllamaProvider, OpenAIOAuthProvider, OpenAiProvider, OpenRouterProvider,
+    KNOWN_PROVIDERS, OAUTH_PROVIDERS,
 };
 
 use super::CommandContext;
@@ -62,25 +63,55 @@ pub(crate) async fn run(ctx: &CommandContext, args: ProvidersArgs) -> Result<()>
 async fn list(ctx: &CommandContext) -> Result<()> {
     let default = ctx.config.providers.default.as_deref().unwrap_or("<unset>");
     println!("providers — default: {default}\n");
-    println!("id           configured   available    network  default-model");
+    println!("id                  configured   available    auth        default-model");
     for id in KNOWN_PROVIDERS {
         let configured = secrets::load(id).unwrap_or(None).is_some();
-        let (available, default_model, requires_net) = match *id {
+        let (available, default_model) = match *id {
             "ollama" => {
                 let p = OllamaProvider::new();
                 let alive = p.ping().await;
-                (alive, "llama3.1:8b".to_string(), false)
+                (alive, "llama3.1:8b".to_string())
             }
-            "anthropic" => (configured, "claude-sonnet-4-6-20250929".to_string(), true),
-            "openai" => (configured, "gpt-5".to_string(), true),
-            "openrouter" => (configured, "<set per call>".to_string(), true),
-            _ => (false, "-".to_string(), false),
+            "anthropic" => (configured, "claude-sonnet-4-6-20250929".to_string()),
+            "openai" => (configured, "gpt-5".to_string()),
+            "openrouter" => (configured, "<set per call>".to_string()),
+            _ => (false, "-".to_string()),
         };
+        let auth = if *id == "ollama" { "local" } else { "api-key" };
         println!(
-            "{id:<12} {:<12} {:<12} {:<8} {default_model}",
+            "{id:<19} {:<12} {:<12} {auth:<11} {default_model}",
             yes_no(configured),
             yes_no(available),
-            yes_no(requires_net),
+        );
+    }
+    println!("\n— OAuth providers (experimental) —");
+    for id in OAUTH_PROVIDERS {
+        let (configured, available, default_model, label) = match *id {
+            "anthropic-oauth" => match AnthropicOAuthProvider::from_default_location() {
+                Ok(p) => (
+                    true,
+                    true,
+                    "claude-sonnet-4-6-20250929".to_string(),
+                    p.subscription_type().unwrap_or_else(|| "claude".into()),
+                ),
+                Err(_) => (false, false, "—".into(), "run `claude login`".into()),
+            },
+            "openai-oauth" => match OpenAIOAuthProvider::from_default_location() {
+                Ok(p) => (
+                    true,
+                    true,
+                    "gpt-5".to_string(),
+                    p.account_id().unwrap_or_else(|| "chatgpt".into()),
+                ),
+                Err(_) => (false, false, "—".into(), "run `codex login`".into()),
+            },
+            _ => (false, false, "—".into(), "—".into()),
+        };
+        println!(
+            "{id:<19} {:<12} {:<12} {:<11} {default_model}",
+            yes_no(configured),
+            yes_no(available),
+            label
         );
     }
     Ok(())
@@ -98,10 +129,35 @@ async fn set(id: &str) -> Result<()> {
         }
         return Ok(());
     }
+    if id == "anthropic-oauth" {
+        match AnthropicOAuthProvider::from_default_location() {
+            Ok(p) => {
+                println!(
+                    "anthropic-oauth: credentials detected (subscription: {})",
+                    p.subscription_type().as_deref().unwrap_or("claude")
+                );
+            }
+            Err(e) => anyhow::bail!("{e}\nRun `claude login` in a terminal first."),
+        }
+        return Ok(());
+    }
+    if id == "openai-oauth" {
+        match OpenAIOAuthProvider::from_default_location() {
+            Ok(p) => {
+                println!(
+                    "openai-oauth: credentials detected (account: {})",
+                    p.account_id().as_deref().unwrap_or("chatgpt")
+                );
+            }
+            Err(e) => anyhow::bail!("{e}\nRun `codex login` in a terminal first."),
+        }
+        return Ok(());
+    }
     if !KNOWN_PROVIDERS.contains(&id) {
         anyhow::bail!(
-            "unknown provider `{id}` — known: {}",
-            KNOWN_PROVIDERS.join(", ")
+            "unknown provider `{id}` — known: {} · oauth: {}",
+            KNOWN_PROVIDERS.join(", "),
+            OAUTH_PROVIDERS.join(", "),
         );
     }
     let api_key = rpassword::prompt_password(format!("API key for {id}: "))
@@ -133,11 +189,10 @@ async fn set(id: &str) -> Result<()> {
 }
 
 async fn test(id: &str, prompt: String, model: Option<String>) -> Result<()> {
-    let api_key = if id == "ollama" {
-        String::new()
-    } else {
-        secrets::load(id)?
-            .ok_or_else(|| anyhow!("no API key configured for {id} — run `providers set {id}`"))?
+    let api_key = match id {
+        "ollama" | "anthropic-oauth" | "openai-oauth" => String::new(),
+        _ => secrets::load(id)?
+            .ok_or_else(|| anyhow!("no API key configured for {id} — run `providers set {id}`"))?,
     };
     let provider = build_provider(id, &api_key, model.clone())?;
 
@@ -198,6 +253,21 @@ fn build_provider(id: &str, api_key: &str, model: Option<String>) -> Result<Box<
         }
         "ollama" => {
             let mut p = OllamaProvider::new();
+            if let Some(m) = model {
+                p = p.with_model(m);
+            }
+            Ok(Box::new(p))
+        }
+        "anthropic-oauth" => {
+            let mut p =
+                AnthropicOAuthProvider::from_default_location().map_err(|e| anyhow!("{e}"))?;
+            if let Some(m) = model {
+                p = p.with_model(m);
+            }
+            Ok(Box::new(p))
+        }
+        "openai-oauth" => {
+            let mut p = OpenAIOAuthProvider::from_default_location().map_err(|e| anyhow!("{e}"))?;
             if let Some(m) = model {
                 p = p.with_model(m);
             }

@@ -9,8 +9,9 @@ use tauri::State;
 use conclave_core::{Workspace, WorkspaceManager};
 use conclave_deident::{Deidentifier, PipelineDeidentifier};
 use conclave_providers::{
-    secrets, AnthropicProvider, CompletionRequest, LlmProvider, Message, OllamaProvider,
-    OpenAiProvider, OpenRouterProvider, KNOWN_PROVIDERS,
+    secrets, AnthropicOAuthProvider, AnthropicProvider, CompletionRequest, LlmProvider, Message,
+    OllamaProvider, OpenAIOAuthProvider, OpenAiProvider, OpenRouterProvider, KNOWN_PROVIDERS,
+    OAUTH_PROVIDERS,
 };
 use conclave_rag::{
     ChunkParams, DocumentRecord, DocumentRepository, Embedder, FastEmbedEmbedder, IngestionEvent,
@@ -316,6 +317,9 @@ pub struct ProviderInfo {
     pub available: bool,
     pub default_model: String,
     pub requires_network: bool,
+    pub auth: String,
+    pub kind: String,
+    pub hint: Option<String>,
 }
 
 #[tauri::command]
@@ -339,6 +343,41 @@ pub async fn list_providers() -> CommandResult<Vec<ProviderInfo>> {
             available,
             default_model,
             requires_network: requires_net,
+            auth: if *id == "ollama" {
+                "local".into()
+            } else {
+                "api-key".into()
+            },
+            kind: "standard".into(),
+            hint: None,
+        });
+    }
+    for id in OAUTH_PROVIDERS {
+        let (configured, available, hint) = match *id {
+            "anthropic-oauth" => match AnthropicOAuthProvider::from_default_location() {
+                Ok(p) => (true, true, p.subscription_type()),
+                Err(_) => (false, false, Some("run `claude login`".into())),
+            },
+            "openai-oauth" => match OpenAIOAuthProvider::from_default_location() {
+                Ok(p) => (true, true, p.account_id()),
+                Err(_) => (false, false, Some("run `codex login`".into())),
+            },
+            _ => (false, false, None),
+        };
+        let default_model = match *id {
+            "anthropic-oauth" => "claude-sonnet-4-6-20250929".into(),
+            "openai-oauth" => "gpt-5".into(),
+            _ => "—".into(),
+        };
+        out.push(ProviderInfo {
+            id: (*id).to_owned(),
+            configured,
+            available,
+            default_model,
+            requires_network: true,
+            auth: "oauth".into(),
+            kind: "oauth".into(),
+            hint,
         });
     }
     Ok(out)
@@ -357,13 +396,12 @@ pub async fn set_provider_key(id: String, api_key: String) -> CommandResult<()> 
 
 #[tauri::command]
 pub async fn test_provider(id: String, prompt: Option<String>) -> CommandResult<String> {
-    let api_key = if id == "ollama" {
-        String::new()
-    } else {
-        match secrets::load(&id).map_err(|e| e.to_string())? {
+    let api_key = match id.as_str() {
+        "ollama" | "anthropic-oauth" | "openai-oauth" => String::new(),
+        _ => match secrets::load(&id).map_err(|e| e.to_string())? {
             Some(k) => k,
             None => return err(format!("no API key for {id}")),
-        }
+        },
     };
     let provider = build_provider(&id, &api_key, None)?;
     let prompt = prompt.unwrap_or_else(|| "Reply with one word: hello.".into());
@@ -418,6 +456,21 @@ fn build_provider(
         }
         "ollama" => {
             let mut p = OllamaProvider::new();
+            if let Some(m) = model {
+                p = p.with_model(m);
+            }
+            Arc::new(p)
+        }
+        "anthropic-oauth" => {
+            let mut p =
+                AnthropicOAuthProvider::from_default_location().map_err(|e| e.to_string())?;
+            if let Some(m) = model {
+                p = p.with_model(m);
+            }
+            Arc::new(p)
+        }
+        "openai-oauth" => {
+            let mut p = OpenAIOAuthProvider::from_default_location().map_err(|e| e.to_string())?;
             if let Some(m) = model {
                 p = p.with_model(m);
             }

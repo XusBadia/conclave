@@ -8,11 +8,15 @@ use std::sync::Arc;
 
 use crate::error::ProviderError;
 use crate::{
-    secrets, AnthropicProvider, LlmProvider, OllamaProvider, OpenAiProvider, OpenRouterProvider,
+    secrets, AnthropicOAuthProvider, AnthropicProvider, LlmProvider, OllamaProvider,
+    OpenAIOAuthProvider, OpenAiProvider, OpenRouterProvider,
 };
 
-/// Built-in provider ids.
+/// API-key + local providers.
 pub const KNOWN_PROVIDERS: &[&str] = &["anthropic", "openai", "openrouter", "ollama"];
+
+/// OAuth (subscription-based) providers. Experimental.
+pub const OAUTH_PROVIDERS: &[&str] = &["anthropic-oauth", "openai-oauth"];
 
 /// Lookup-only collection of provider handles indexed by their stable id.
 #[derive(Clone, Default)]
@@ -53,6 +57,12 @@ impl ProviderRegistry {
         if let Some(key) = secrets::load("openrouter")? {
             me.inner
                 .insert("openrouter", Arc::new(OpenRouterProvider::new(key)));
+        }
+        if let Ok(p) = AnthropicOAuthProvider::from_default_location() {
+            me.inner.insert("anthropic-oauth", Arc::new(p));
+        }
+        if let Ok(p) = OpenAIOAuthProvider::from_default_location() {
+            me.inner.insert("openai-oauth", Arc::new(p));
         }
         Ok(me)
     }

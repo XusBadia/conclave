@@ -62,6 +62,9 @@ export interface ProviderInfo {
   available: boolean;
   default_model: string;
   requires_network: boolean;
+  auth: "api-key" | "local" | "oauth";
+  kind: "standard" | "oauth";
+  hint: string | null;
 }
 
 export interface Verdict {

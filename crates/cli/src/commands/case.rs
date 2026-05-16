@@ -10,7 +10,8 @@ use clap::{Args, Subcommand};
 
 use conclave_deident::PipelineDeidentifier;
 use conclave_providers::{
-    secrets, AnthropicProvider, LlmProvider, OllamaProvider, OpenAiProvider, OpenRouterProvider,
+    secrets, AnthropicOAuthProvider, AnthropicProvider, LlmProvider, OllamaProvider,
+    OpenAIOAuthProvider, OpenAiProvider, OpenRouterProvider,
 };
 use conclave_verdict::{CaseStore, CertaintyLevel, Verdict, VerdictOptions, VerdictPipeline};
 
@@ -223,11 +224,10 @@ fn case_store(
 }
 
 async fn build_provider(id: &str, model: Option<String>) -> Result<Arc<dyn LlmProvider>> {
-    let api_key = if id == "ollama" {
-        String::new()
-    } else {
-        secrets::load(id)?
-            .ok_or_else(|| anyhow!("no API key for {id} — run `providers set {id}`"))?
+    let api_key = match id {
+        "ollama" | "anthropic-oauth" | "openai-oauth" => String::new(),
+        _ => secrets::load(id)?
+            .ok_or_else(|| anyhow!("no API key for {id} — run `providers set {id}`"))?,
     };
     Ok(match id {
         "anthropic" => {
@@ -254,6 +254,21 @@ async fn build_provider(id: &str, model: Option<String>) -> Result<Arc<dyn LlmPr
         }
         "ollama" => {
             let mut p = OllamaProvider::new();
+            if let Some(m) = model {
+                p = p.with_model(m);
+            }
+            Arc::new(p)
+        }
+        "anthropic-oauth" => {
+            let mut p =
+                AnthropicOAuthProvider::from_default_location().map_err(|e| anyhow!("{e}"))?;
+            if let Some(m) = model {
+                p = p.with_model(m);
+            }
+            Arc::new(p)
+        }
+        "openai-oauth" => {
+            let mut p = OpenAIOAuthProvider::from_default_location().map_err(|e| anyhow!("{e}"))?;
             if let Some(m) = model {
                 p = p.with_model(m);
             }
