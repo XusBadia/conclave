@@ -1,7 +1,34 @@
+#![allow(
+    clippy::too_many_lines,
+    clippy::significant_drop_tightening,
+    clippy::field_reassign_with_default,
+    clippy::unused_async,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::module_name_repetitions,
+    clippy::doc_markdown,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_lossless,
+    clippy::similar_names,
+    clippy::option_if_let_else,
+    clippy::map_unwrap_or,
+    clippy::needless_pass_by_value,
+    clippy::items_after_statements,
+    clippy::redundant_closure_for_method_calls,
+    clippy::struct_field_names,
+    clippy::single_match_else,
+    clippy::unnecessary_wraps,
+    clippy::redundant_clone,
+    clippy::assigning_clones,
+    clippy::format_push_string,
+    clippy::or_fun_call,
+    clippy::needless_collect,
+    clippy::unnecessary_join
+)]
+
 //! `conclave-cli` — terminal entry point for the Conclave virtual committee.
-//!
-//! Phase 0 only wires the command surface; every subcommand returns a
-//! `not yet implemented` notice. Real behaviour lands in later phases.
 
 use std::path::PathBuf;
 
@@ -34,6 +61,10 @@ struct Cli {
     )]
     workspace_root: Option<PathBuf>,
 
+    /// Override the active workspace name for this invocation.
+    #[arg(long, global = true, value_name = "NAME", env = "CONCLAVE_WORKSPACE")]
+    workspace: Option<String>,
+
     /// Suppress the medical disclaimer printed on every invocation.
     #[arg(long, global = true)]
     no_disclaimer: bool,
@@ -46,15 +77,30 @@ struct Cli {
 enum Command {
     /// Ingest documents into the knowledge base.
     Ingest(commands::ingest::IngestArgs),
-    /// Run a virtual committee and print its verdict.
-    Verdict(commands::verdict::VerdictArgs),
+    /// Inspect documents already ingested into a workspace.
+    Documents(commands::documents::DocumentsArgs),
+    /// Vector-search the active workspace.
+    Search(commands::search::SearchArgs),
+    /// De-identify free-text input (Phase 3 — privacy-critical step).
+    Deident(commands::deident::DeidentArgs),
+    /// Run the verdict engine on a clinical case (Phase 4).
+    Case(commands::case::CaseArgs),
+    /// Record feedback on a previously generated case (Phase 5).
+    Feedback(commands::feedback::FeedbackArgs),
+    /// Aggregate counts / rates / latency over the active workspace.
+    Stats(commands::stats::StatsArgs),
+    /// Export cases + verdicts + feedback as JSON (masked text only).
+    Export(commands::export::ExportArgs),
+    /// Search PubMed for recent literature (Phase 6).
+    Evidence(commands::evidence::EvidenceArgs),
     /// Inspect, list and test configured LLM providers.
     Providers(commands::providers::ProvidersArgs),
     /// Manage Conclave workspaces (the per-project config + data root).
     Workspace(commands::workspace::WorkspaceArgs),
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let paths = resolve_paths(cli.workspace_root.as_deref())?;
@@ -74,12 +120,23 @@ fn main() -> Result<()> {
         "resolved workspace paths"
     );
 
-    let ctx = commands::CommandContext { paths, config };
+    let ctx = commands::CommandContext {
+        paths,
+        config,
+        workspace_override: cli.workspace,
+    };
 
     match cli.command {
-        Command::Ingest(args) => commands::ingest::run(&ctx, args),
-        Command::Verdict(args) => commands::verdict::run(&ctx, args),
-        Command::Providers(args) => commands::providers::run(&ctx, args),
+        Command::Ingest(args) => commands::ingest::run(&ctx, args).await,
+        Command::Documents(args) => commands::documents::run(&ctx, args).await,
+        Command::Search(args) => commands::search::run(&ctx, args).await,
+        Command::Deident(args) => commands::deident::run(&ctx, args),
+        Command::Case(args) => commands::case::run(&ctx, args).await,
+        Command::Feedback(args) => commands::feedback::run(&ctx, args),
+        Command::Stats(args) => commands::stats::run(&ctx, args),
+        Command::Export(args) => commands::export::run(&ctx, args),
+        Command::Evidence(args) => commands::evidence::run(&ctx, args).await,
+        Command::Providers(args) => commands::providers::run(&ctx, args).await,
         Command::Workspace(args) => commands::workspace::run(&ctx, args),
     }
 }

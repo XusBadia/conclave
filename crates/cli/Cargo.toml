@@ -22,8 +22,14 @@ conclave-core = { workspace = true }
 conclave-providers = { workspace = true }
 conclave-rag = { workspace = true }
 conclave-deident = { workspace = true }
+conclave-verdict = { workspace = true }
+conclave-evidence = { workspace = true }
 
 clap = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+indicatif = { workspace = true }
+rpassword = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }

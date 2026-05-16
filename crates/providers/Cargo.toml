@@ -17,8 +17,26 @@ workspace = true
 conclave-core = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
+# HTTP client used by every cloud provider implementation.
+reqwest = { workspace = true }
+# OS-native secret storage (Keychain on macOS, Credential Manager on
+# Windows, libsecret on Linux).
+keyring = { workspace = true }
+
+# In-app OAuth flow (Phase 2.5) — PKCE generator + localhost listener +
+# browser opener for the Claude Max / ChatGPT subscription providers.
+base64 = { workspace = true }
+rand = { workspace = true }
+sha2 = { workspace = true }
+chrono = { workspace = true }
+open = { workspace = true }
+tokio = { workspace = true }
+
 [dev-dependencies]
 toml = { workspace = true }
+tokio = { workspace = true }
+tempfile = { workspace = true }

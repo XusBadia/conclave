@@ -14,10 +14,12 @@ pub mod config;
 pub mod error;
 pub mod logging;
 pub mod paths;
+pub mod workspace;
 
 pub use config::{Config, GeneralConfig, LogFormat, ProvidersConfig, RagConfig};
 pub use error::{Error, Result};
 pub use paths::Paths;
+pub use workspace::{Workspace, WorkspaceManager};
 
 /// Application identifier used to derive OS-standard directory paths.
 pub const APP_QUALIFIER: &str = "dev";

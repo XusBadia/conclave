@@ -54,13 +54,15 @@ pub enum LogFormat {
     Json,
 }
 
-/// RAG pipeline configuration. Real defaults will be re-tuned in Phase 1.
+/// RAG pipeline configuration. Sizes are measured in **tokens**
+/// (`cl100k_base` via `tiktoken-rs`), not characters — the chunker is
+/// sentence-aware and honours these budgets approximately.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RagConfig {
-    /// Approximate characters per chunk.
+    /// Target tokens per chunk (upper bound when a sentence fits).
     pub chunk_size: usize,
-    /// Overlap, in characters, between adjacent chunks.
+    /// Tokens of overlap shared with the previous chunk.
     pub chunk_overlap: usize,
     /// Top-K candidates to retrieve per query.
     pub top_k: usize,
@@ -69,8 +71,8 @@ pub struct RagConfig {
 impl Default for RagConfig {
     fn default() -> Self {
         Self {
-            chunk_size: 1024,
-            chunk_overlap: 128,
+            chunk_size: 700,
+            chunk_overlap: 100,
             top_k: 8,
         }
     }

@@ -1,0 +1,18 @@
+Insuficiencia cardiaca aguda en pacientes adultos.
+
+La insuficiencia cardiaca aguda (ICA) es un sindrome clinico que se
+caracteriza por la aparicion rapida o el empeoramiento de signos y
+sintomas de insuficiencia cardiaca. Requiere atencion urgente.
+
+Manejo inicial:
+
+- Oxigeno suplementario si saturacion < 90%.
+- Posicion semisentada para reducir la precarga.
+- Furosemida intravenosa: dosis inicial de 20-40 mg en bolo lento.
+- Vasodilatadores (nitroglicerina) en pacientes con presion arterial
+  preservada y signos de congestion pulmonar.
+
+Vigilancia hemodinamica continua durante las primeras 24 horas en una
+unidad de cuidados coronarios o equivalente.
+
+Texto sintetico de dominio publico para tests de Conclave.

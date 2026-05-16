@@ -5,7 +5,10 @@ members = [
     "crates/providers",
     "crates/rag",
     "crates/deident",
+    "crates/verdict",
+    "crates/evidence",
     "crates/cli",
+    "apps/desktop/src-tauri",
 ]
 
 [workspace.package]
@@ -24,6 +27,8 @@ conclave-core = { path = "crates/core", version = "0.1.0" }
 conclave-providers = { path = "crates/providers", version = "0.1.0" }
 conclave-rag = { path = "crates/rag", version = "0.1.0" }
 conclave-deident = { path = "crates/deident", version = "0.1.0" }
+conclave-verdict = { path = "crates/verdict", version = "0.1.0" }
+conclave-evidence = { path = "crates/evidence", version = "0.1.0" }
 
 # Errors
 thiserror = "1"
@@ -48,6 +53,59 @@ directories = "5"
 
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
+
+# Time / hashing / slugs / progress
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+sha2 = "0.11"
+slug = "0.1"
+indicatif = "0.18"
+
+# Text processing
+regex = "1"
+unicode-segmentation = "1"
+
+# Phase 1 — document extraction
+pdf-extract = "0.10"
+# `lopdf` defaults pull in chrono+jiff+rayon+time; we only need text extraction.
+lopdf = { version = "0.40", default-features = false }
+# `docx-rs` defaults pull in `image`; we only read text.
+docx-rs = { version = "0.4", default-features = false }
+html2text = "0.17"
+
+# HTTP + secrets (Phase 2 — provider layer)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip"] }
+keyring = "3"
+rpassword = "7"
+url = "2"
+
+# Phase 2.5 OAuth in-app flow
+base64 = "0.22"
+rand = "0.8"
+open = "5"
+
+# Phase 4 — verdict engine
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+
+# Phase 1 — tokenisation, embeddings, vector + metadata stores
+tiktoken-rs = "0.11"
+# `fastembed` defaults drag in native-tls (needs OpenSSL on Windows) and the
+# image-embedding pipeline. Pin rustls-only TLS and skip image models.
+fastembed = { version = "5", default-features = false, features = [
+    "ort-download-binaries-rustls-tls",
+    "hf-hub-rustls-tls",
+] }
+# `lancedb` defaults pull AWS/GCS/Azure/DynamoDB/OSS object-store SDKs;
+# we only need local-filesystem mode.
+lancedb = { version = "0.29", default-features = false }
+rusqlite = { version = "0.39", features = ["bundled"] }
+# Arrow types for talking to lancedb. Pin the major version that lancedb
+# 0.29 uses internally so they share Rc'd type definitions.
+arrow-array = "58"
+arrow-schema = "58"
+
+# Phase 1 — OCR (feature-gated in `conclave-rag`)
+pdfium-render = "0.9"
+tesseract-rs = "0.2"
 
 # Testing
 tempfile = "3"

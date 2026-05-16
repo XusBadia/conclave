@@ -18,3 +18,46 @@ conclave-core = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+
+# Document extraction (Phase 1 §1)
+pdf-extract = { workspace = true }
+lopdf = { workspace = true }
+docx-rs = { workspace = true }
+html2text = { workspace = true }
+
+# Chunking (Phase 1 §3): regex-driven sentence splitter + tiktoken sizing.
+regex = { workspace = true }
+tiktoken-rs = { workspace = true }
+
+# Embeddings (Phase 1 §4): fastembed wraps ONNX Runtime + HuggingFace Hub.
+fastembed = { workspace = true }
+
+# Storage (Phase 1 §5): SQLite for metadata, LanceDB for vectors, sha2 for
+# file hashing, chrono for timestamps, tokio for async, arrow for the lance
+# record-batch interop.
+rusqlite = { workspace = true }
+lancedb = { workspace = true }
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+sha2 = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+slug = { workspace = true }
+
+# OCR backends (Phase 1 §2). Activated by the `ocr` feature below. They
+# pull in heavy native dependencies (Pdfium, libtesseract), so we keep
+# them strictly opt-in.
+pdfium-render = { workspace = true, optional = true }
+tesseract-rs = { workspace = true, optional = true }
+
+[features]
+default = []
+ocr = ["dep:pdfium-render", "dep:tesseract-rs"]
+# Reserved for future test-only API expansion. `MockEmbedder` is exposed
+# unconditionally; this flag stays so callers can opt into heavier
+# helpers without re-shaping the manifest later.
+test-utils = []
+
+[dev-dependencies]
+tempfile = { workspace = true }

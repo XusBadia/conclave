@@ -1,0 +1,44 @@
+[package]
+name = "conclave-desktop"
+description = "Conclave desktop app (Tauri 2 + React)."
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+authors = ["Xus Badia"]
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "conclave_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "conclave-desktop"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+conclave-core = { workspace = true }
+conclave-rag = { workspace = true }
+conclave-deident = { workspace = true }
+conclave-providers = { workspace = true }
+conclave-verdict = { workspace = true }
+
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-os = "2"
+tauri-plugin-shell = "2"
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+chrono = { workspace = true }
+anyhow = { workspace = true }
