@@ -13,8 +13,8 @@ use conclave_providers::{
     OpenAiProvider, OpenRouterProvider, KNOWN_PROVIDERS,
 };
 use conclave_rag::{
-    ChunkParams, DocumentRecord, DocumentRepository, Embedder, FastEmbedEmbedder,
-    IngestionEvent, IngestionPipeline, RepositoryLayout,
+    ChunkParams, DocumentRecord, DocumentRepository, Embedder, FastEmbedEmbedder, IngestionEvent,
+    IngestionPipeline, RepositoryLayout,
 };
 use conclave_verdict::{
     persistence::{FeedbackKind, FeedbackRecord},
@@ -90,13 +90,17 @@ pub fn create_workspace(
 }
 
 #[tauri::command]
-pub fn switch_workspace(state: State<'_, AppState>, id_or_name: String) -> CommandResult<Workspace> {
+pub fn switch_workspace(
+    state: State<'_, AppState>,
+    id_or_name: String,
+) -> CommandResult<Workspace> {
     let ws = workspace_manager(&state)
         .load(&id_or_name)
         .map_err(|e| e.to_string())?;
     let mut cfg = state.config.lock().map_err(|_| "config poisoned")?.clone();
     cfg.general.default_workspace.clone_from(&ws.id);
-    cfg.save(state.paths.config_file()).map_err(|e| e.to_string())?;
+    cfg.save(state.paths.config_file())
+        .map_err(|e| e.to_string())?;
     *state.config.lock().map_err(|_| "config poisoned")? = cfg;
     Ok(ws)
 }
@@ -215,7 +219,8 @@ pub async fn ingest_path(
         cfg.rag.chunk_overlap,
     )
     .map_err(|e| e.to_string())?;
-    let pipeline = IngestionPipeline::new(embedder, repo, chunk_params).map_err(|e| e.to_string())?;
+    let pipeline =
+        IngestionPipeline::new(embedder, repo, chunk_params).map_err(|e| e.to_string())?;
     let mut messages = Vec::new();
     let report = pipeline
         .ingest_path(std::path::Path::new(&path), |ev| match ev {
@@ -426,10 +431,7 @@ fn build_provider(
 // Verdict
 // ---------------------------------------------------------------------------
 
-fn case_store_arc(
-    state: &AppState,
-    workspace_id: &str,
-) -> Result<Arc<Mutex<CaseStore>>, String> {
+fn case_store_arc(state: &AppState, workspace_id: &str) -> Result<Arc<Mutex<CaseStore>>, String> {
     let path = state.paths.workspace_dir(workspace_id).join("cases.sqlite");
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -467,12 +469,7 @@ pub async fn run_case(
     } else {
         match secrets::load(&request.provider_id).map_err(|e| e.to_string())? {
             Some(k) => k,
-            None => {
-                return err(format!(
-                    "no API key for `{}`",
-                    request.provider_id
-                ))
-            }
+            None => return err(format!("no API key for `{}`", request.provider_id)),
         }
     };
     let provider = build_provider(&request.provider_id, &api_key, request.model.clone())?;
@@ -554,10 +551,7 @@ pub struct FeedbackRequest {
 }
 
 #[tauri::command]
-pub fn submit_feedback(
-    state: State<'_, AppState>,
-    request: FeedbackRequest,
-) -> CommandResult<()> {
+pub fn submit_feedback(state: State<'_, AppState>, request: FeedbackRequest) -> CommandResult<()> {
     let kind = match request.kind.as_str() {
         "accept" => FeedbackKind::Accept,
         "modify" => FeedbackKind::Modify,
@@ -576,4 +570,3 @@ pub fn submit_feedback(
         })
         .map_err(|e| e.to_string())
 }
-

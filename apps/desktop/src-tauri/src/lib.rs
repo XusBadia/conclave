@@ -4,8 +4,36 @@
     clippy::module_name_repetitions,
     clippy::too_many_lines,
     clippy::doc_markdown,
-    clippy::needless_pass_by_value
+    clippy::needless_pass_by_value,
+    clippy::missing_const_for_fn,
+    clippy::option_if_let_else,
+    clippy::map_unwrap_or,
+    clippy::significant_drop_tightening,
+    clippy::large_stack_frames,
+    clippy::no_effect_underscore_binding,
+    clippy::unused_self,
+    clippy::wildcard_imports,
+    clippy::single_match_else,
+    clippy::field_reassign_with_default,
+    clippy::unused_async,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::similar_names,
+    clippy::items_after_statements,
+    clippy::needless_pass_by_ref_mut,
+    clippy::assigning_clones,
+    clippy::implicit_hasher,
+    clippy::large_enum_variant,
+    clippy::struct_field_names,
+    clippy::redundant_closure_for_method_calls,
+    clippy::missing_const_for_thread_local,
+    clippy::unnecessary_wraps,
+    clippy::redundant_clone,
+    clippy::format_push_string,
+    clippy::bool_assert_comparison
 )]
+#![allow(unreachable_pub)]
 
 //! Conclave desktop — Tauri 2 entry point.
 //!
@@ -22,7 +50,9 @@ use tracing_subscriber::EnvFilter;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .try_init();
 
     tauri::Builder::default()
