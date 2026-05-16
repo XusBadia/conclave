@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "icons": "node scripts/generate-app-icons.mjs"
   },
   "dependencies": {
     "@fontsource/jetbrains-mono": "^5.2.8",
@@ -25,6 +26,7 @@
     "react-i18next": "^15.4.0"
   },
   "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
     "@tauri-apps/cli": "^2",
     "@types/node": "^25.8.0",
     "@types/react": "^18.3.12",
