@@ -61,8 +61,10 @@ unicode-segmentation = "1"
 
 # Phase 1 — document extraction
 pdf-extract = "0.10"
-lopdf = "0.40"
-docx-rs = "0.4"
+# `lopdf` defaults pull in chrono+jiff+rayon+time; we only need text extraction.
+lopdf = { version = "0.40", default-features = false }
+# `docx-rs` defaults pull in `image`; we only read text.
+docx-rs = { version = "0.4", default-features = false }
 html2text = "0.17"
 
 # Phase 1 — tokenisation, embeddings, vector + metadata stores

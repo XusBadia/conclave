@@ -1,9 +1,14 @@
 //! Retrieval-Augmented Generation pipeline for Conclave.
 //!
-//! Phase 0 only delivers the basic chunking primitive and the data types that
-//! later phases (ingestion, embeddings, hybrid search) will fill in.
+//! Phase 0 delivered a basic character-based chunking primitive; Phase 1 grows
+//! the crate into the full ingestion path (extract → chunk → embed → store).
+//! The Phase 0 chunker still lives in this root file as a transitional
+//! placeholder and will be replaced by the sentence-aware token-based chunker
+//! in a follow-up commit.
 
 use serde::{Deserialize, Serialize};
+
+pub mod extract;
 
 /// A chunk of source text plus the byte range it came from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

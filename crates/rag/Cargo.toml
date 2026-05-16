@@ -18,3 +18,12 @@ conclave-core = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+
+# Document extraction (Phase 1 §1)
+pdf-extract = { workspace = true }
+lopdf = { workspace = true }
+docx-rs = { workspace = true }
+html2text = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
