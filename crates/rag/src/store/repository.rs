@@ -99,13 +99,29 @@ impl DocumentRepository {
         self.embedding_dim
     }
 
+    /// Compute the stable id and sha-256 that [`Self::add`] would assign to
+    /// `path`. The caller can use the id to populate `Chunk.document_id`
+    /// before chunks are passed to `add`.
+    pub fn prepare_document_id(path: &Path) -> Result<(String, String)> {
+        let bytes = std::fs::read(path).map_err(|e| Error::io_at(path, e))?;
+        let sha = sha256_hex(&bytes);
+        let id = build_document_id(&sha, path);
+        Ok((id, sha))
+    }
+
     /// Ingest a fully-processed document: copy its bytes into `documents/`,
     /// insert metadata, persist chunk vectors.
+    ///
+    /// The caller is expected to have computed `id` and `sha256` via
+    /// [`Self::prepare_document_id`] so that the chunks coming in already
+    /// reference the right `document_id`.
     ///
     /// On vector-store failure the `SQLite` rows are removed so subsequent
     /// retries don't see an orphaned half-state.
     pub async fn add(
         &self,
+        id: &str,
+        sha256: &str,
         extracted: &ExtractedText,
         chunks: &[Chunk],
         vectors: &[Vec<f32>],
@@ -119,9 +135,7 @@ impl DocumentRepository {
         }
         let bytes = std::fs::read(&extracted.source_path)
             .map_err(|e| Error::io_at(&extracted.source_path, e))?;
-        let hash = sha256_hex(&bytes);
-        let id = build_document_id(&hash, &extracted.source_path);
-        let copied_path = self.copy_into_documents_dir(&id, &extracted.source_path, &bytes)?;
+        let copied_path = self.copy_into_documents_dir(id, &extracted.source_path, &bytes)?;
         let title = extracted
             .source_path
             .file_stem()
@@ -138,12 +152,12 @@ impl DocumentRepository {
         };
 
         let record = DocumentRecord {
-            id: id.clone(),
+            id: id.to_owned(),
             source_path: extracted.source_path.clone(),
             copied_path,
             title,
             doc_type: extracted.doc_type,
-            sha256: hash,
+            sha256: sha256.to_owned(),
             ingested_at: Utc::now(),
             page_count: u32::try_from(extracted.page_breaks.len().saturating_add(1))
                 .unwrap_or(u32::MAX),
@@ -168,7 +182,7 @@ impl DocumentRepository {
                 .metadata
                 .lock()
                 .map_err(|_| Error::Rag("metadata mutex poisoned during rollback".into()))?
-                .delete_document(&id);
+                .delete_document(id);
             tracing::error!(?undo, error = %e, "vector upsert failed; rolled back metadata rows");
             return Err(e);
         }

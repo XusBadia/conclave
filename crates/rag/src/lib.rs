@@ -11,11 +11,16 @@
 pub mod chunk;
 pub mod embed;
 pub mod extract;
+pub mod pipeline;
 pub mod store;
 
 pub use chunk::{chunk_text, Chunk, ChunkParams};
 pub use embed::{Embedder, FastEmbedEmbedder, E5_SMALL_DIM};
 pub use extract::{extract_from_path, DocType, ExtractedText};
+pub use pipeline::{
+    FailedDocument, IngestionEvent, IngestionPipeline, IngestionReport, SkipReason,
+    SkippedDocument,
+};
 pub use store::{
     DocumentRecord, DocumentRepository, DocumentStatus, RepositoryLayout, VectorHit, VectorStore,
 };
