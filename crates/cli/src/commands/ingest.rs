@@ -48,7 +48,12 @@ pub(crate) async fn run(ctx: &CommandContext, args: IngestArgs) -> Result<()> {
                 println!("→ {}", p.display());
             }
             IngestionEvent::Ingested { path, record } => {
-                println!("  ✓ {} → {} ({:?})", path.display(), record.id, record.status);
+                println!(
+                    "  ✓ {} → {} ({:?})",
+                    path.display(),
+                    record.id,
+                    record.status
+                );
             }
             IngestionEvent::Skipped { path, reason } => {
                 let label = match reason {

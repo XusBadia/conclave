@@ -54,9 +54,9 @@ pub(crate) async fn run(ctx: &CommandContext, args: DocumentsArgs) -> Result<()>
             }
         }
         DocumentsAction::Show { id } => {
-            let details = repo
-                .show(&id)?
-                .ok_or_else(|| anyhow!("document `{id}` not found in workspace `{}`", workspace.id))?;
+            let details = repo.show(&id)?.ok_or_else(|| {
+                anyhow!("document `{id}` not found in workspace `{}`", workspace.id)
+            })?;
             let record = &details.record;
             println!("id:           {}", record.id);
             println!("title:        {}", record.title);

@@ -30,10 +30,7 @@ pub(crate) async fn run(ctx: &CommandContext, args: SearchArgs) -> Result<()> {
 
     let hits = repo.search(&query_vec, args.k).await?;
     if hits.is_empty() {
-        println!(
-            "(no results — workspace `{}` may be empty)",
-            workspace.id
-        );
+        println!("(no results — workspace `{}` may be empty)", workspace.id);
         return Ok(());
     }
 

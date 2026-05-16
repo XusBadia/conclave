@@ -57,7 +57,9 @@ impl CommandContext {
         let layout = RepositoryLayout::new(dir);
         let repo = DocumentRepository::open(layout, embedder.dim())
             .await
-            .with_context(|| format!("could not open repository for workspace `{}`", workspace.id))?;
+            .with_context(|| {
+                format!("could not open repository for workspace `{}`", workspace.id)
+            })?;
         Ok(Arc::new(repo))
     }
 
@@ -73,7 +75,10 @@ impl CommandContext {
     pub(crate) fn chunk_params(&self) -> Result<ChunkParams> {
         ChunkParams::new(
             self.config.rag.chunk_size,
-            self.config.rag.chunk_size.saturating_sub(self.config.rag.chunk_overlap),
+            self.config
+                .rag
+                .chunk_size
+                .saturating_sub(self.config.rag.chunk_overlap),
             self.config.rag.chunk_overlap,
         )
         .map_err(|e| anyhow::anyhow!("invalid chunk params from config: {e}"))

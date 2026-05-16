@@ -76,15 +76,9 @@ pub enum IngestionEvent {
         record: Box<DocumentRecord>,
     },
     /// The document was skipped (e.g. OCR not enabled).
-    Skipped {
-        path: PathBuf,
-        reason: SkipReason,
-    },
+    Skipped { path: PathBuf, reason: SkipReason },
     /// Ingestion errored out for this document; the run continues.
-    Failed {
-        path: PathBuf,
-        error: String,
-    },
+    Failed { path: PathBuf, error: String },
 }
 
 impl IngestionPipeline {
@@ -157,10 +151,7 @@ impl IngestionPipeline {
                         path: file.clone(),
                         reason: reason.clone(),
                     });
-                    report.skipped.push(SkippedDocument {
-                        path: file,
-                        reason,
-                    });
+                    report.skipped.push(SkippedDocument { path: file, reason });
                 }
                 Err(e) => {
                     let msg = e.to_string();
@@ -231,9 +222,7 @@ fn walk_dir(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     for entry in std::fs::read_dir(dir).map_err(|e| Error::io_at(dir, e))? {
         let entry = entry.map_err(|e| Error::io_at(dir, e))?;
         let path = entry.path();
-        let file_type = entry
-            .file_type()
-            .map_err(|e| Error::io_at(&path, e))?;
+        let file_type = entry.file_type().map_err(|e| Error::io_at(&path, e))?;
         if file_type.is_dir() {
             walk_dir(&path, out)?;
         } else if file_type.is_file() {
@@ -266,12 +255,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        IngestionPipeline::new(
-            Arc::new(MockEmbedder::new()),
-            repo,
-            ChunkParams::DEFAULT,
-        )
-        .unwrap()
+        IngestionPipeline::new(Arc::new(MockEmbedder::new()), repo, ChunkParams::DEFAULT).unwrap()
     }
 
     #[tokio::test]
@@ -304,7 +288,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let subdir = tmp.path().join("docs");
         std::fs::create_dir_all(&subdir).unwrap();
-        write_fixture(&subdir, "a.txt", "Primer documento sobre diabetes mellitus tipo 2.");
+        write_fixture(
+            &subdir,
+            "a.txt",
+            "Primer documento sobre diabetes mellitus tipo 2.",
+        );
         write_fixture(&subdir, "b.md", "# Hipertensión\n\nNotas clínicas básicas.");
         write_fixture(&subdir, "c.xyz", "ignored: unsupported extension");
 
@@ -333,11 +321,7 @@ mod tests {
             .embedder
             .embed(&["cardiology infarction".to_string()])
             .unwrap();
-        let hits = pipeline
-            .repository
-            .search(&query_vec[0], 5)
-            .await
-            .unwrap();
+        let hits = pipeline.repository.search(&query_vec[0], 5).await.unwrap();
         assert!(!hits.is_empty(), "expected at least one hit");
         // The mock embedder is deterministic, so the top hit must come from
         // the only document we ingested.
