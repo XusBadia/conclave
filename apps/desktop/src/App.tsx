@@ -8,6 +8,13 @@ import { SettingsPage } from "./routes/Settings";
 import { WorkspacesPage } from "./routes/Workspaces";
 import { ipc, type Workspace } from "./lib/ipc";
 
+const SECTION_LABEL: Record<Section, string> = {
+  workspaces: "Workspaces",
+  knowledge: "Knowledge",
+  cases: "Cases",
+  settings: "Settings",
+};
+
 export function App() {
   const [section, setSection] = useState<Section>("workspaces");
   const [active, setActive] = useState<Workspace | null>(null);
@@ -37,7 +44,7 @@ export function App() {
   }
 
   return (
-    <div className="flex h-full w-full">
+    <div className="flex h-full w-full flex-col">
       {!bootstrap.accepted && (
         <Onboarding
           disclaimer={bootstrap.disclaimer}
@@ -45,46 +52,61 @@ export function App() {
         />
       )}
 
-      <Sidebar
-        active={section}
-        onSelect={setSection}
-        workspaceLabel={active ? active.name : null}
-      />
+      {/* macOS overlay title bar — spans the full window so the user can
+          drag from anywhere and traffic lights stay out of content. */}
+      <header className="titlebar titlebar-pad-mac flex items-center gap-3 pr-5 text-[12px] text-ink-faint">
+        <div className="text-[13px] font-semibold tracking-tight text-ink">
+          Conclave
+        </div>
+        <span className="text-ink-faint/60">·</span>
+        <div className="text-[12px] uppercase tracking-[0.08em] text-ink-subtle">
+          {SECTION_LABEL[section]}
+        </div>
+        <div className="flex-1" />
+        {active ? (
+          <div className="flex items-center gap-2 rounded-md border border-border-subtle bg-surface/70 px-2.5 py-1 text-[11px] text-ink-dim">
+            <span className="h-1.5 w-1.5 rounded-full bg-ok" />
+            <span className="truncate max-w-[200px]">{active.name}</span>
+            <span className="text-ink-faint">·</span>
+            <span className="font-mono text-ink-faint">{active.id}</span>
+          </div>
+        ) : (
+          <span className="text-ink-faint">no workspace</span>
+        )}
+      </header>
 
-      <main className="canvas-grain flex h-full min-w-0 flex-1 flex-col overflow-hidden">
-        <div className="titlebar flex shrink-0 items-center px-5">
-          <div className="flex-1" />
-          {active && (
-            <div className="text-[12px] text-ink-faint">
-              workspace ·{" "}
-              <span className="font-mono text-ink-subtle">{active.id}</span>
-            </div>
-          )}
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          {section === "workspaces" && (
-            <WorkspacesPage
-              activeId={active?.id ?? null}
-              onActiveChange={setActive}
-            />
-          )}
-          {section === "knowledge" &&
-            (active ? (
-              <KnowledgePage workspace={active} />
-            ) : (
-              <EmptyWorkspaceHint
-                onCreate={() => setSection("workspaces")}
+      {/* Body row: sidebar + main. */}
+      <div className="flex min-h-0 flex-1">
+        <Sidebar
+          active={section}
+          onSelect={setSection}
+          workspaceLabel={active ? active.name : null}
+        />
+
+        <main className="canvas-grain flex min-w-0 flex-1 flex-col overflow-hidden">
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {section === "workspaces" && (
+              <WorkspacesPage
+                activeId={active?.id ?? null}
+                onActiveChange={setActive}
               />
-            ))}
-          {section === "cases" &&
-            (active ? (
-              <CasesPage workspace={active} />
-            ) : (
-              <EmptyWorkspaceHint onCreate={() => setSection("workspaces")} />
-            ))}
-          {section === "settings" && <SettingsPage />}
-        </div>
-      </main>
+            )}
+            {section === "knowledge" &&
+              (active ? (
+                <KnowledgePage workspace={active} />
+              ) : (
+                <EmptyWorkspaceHint onCreate={() => setSection("workspaces")} />
+              ))}
+            {section === "cases" &&
+              (active ? (
+                <CasesPage workspace={active} />
+              ) : (
+                <EmptyWorkspaceHint onCreate={() => setSection("workspaces")} />
+              ))}
+            {section === "settings" && <SettingsPage />}
+          </div>
+        </main>
+      </div>
     </div>
   );
 }

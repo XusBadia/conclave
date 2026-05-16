@@ -40,10 +40,26 @@ body {
   border: 2px solid transparent;
 }
 
-/* Title bar safe-zone on macOS (Overlay style). */
+/* macOS overlay title bar — 52px tall so traffic lights at y=18 sit
+   centred. Sticky + blurred so scroll content slips underneath without
+   covering the chrome. The whole strip is a drag region; interactive
+   elements opt out with `.no-drag`. */
 .titlebar {
   -webkit-app-region: drag;
-  height: 28px;
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  height: 52px;
+  background: rgba(11, 15, 20, 0.78);
+  backdrop-filter: saturate(160%) blur(14px);
+  -webkit-backdrop-filter: saturate(160%) blur(14px);
+  border-bottom: 1px solid rgba(31, 38, 48, 0.7);
+}
+/* Reserve space for the macOS traffic lights (~70px) inside the
+   left-most column. Override via `pl-titlebar` on Tailwind utility
+   classes when needed. */
+.titlebar-pad-mac {
+  padding-left: 88px;
 }
 .no-drag {
   -webkit-app-region: no-drag;

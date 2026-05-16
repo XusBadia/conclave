@@ -82,22 +82,18 @@ export function Sidebar({
 }) {
   return (
     <aside className="flex h-full w-[220px] shrink-0 flex-col border-r border-border bg-bg-subtle">
-      <div className="titlebar shrink-0" />
-
-      <div className="px-4 pb-2 pt-1">
-        <div className="flex items-center gap-2">
-          <div className="grid h-7 w-7 place-content-center rounded-md bg-accent text-bg font-semibold">
-            C
-          </div>
-          <div className="leading-tight">
-            <div className="text-[13px] font-semibold text-ink">Conclave</div>
-            <div className="text-[11px] text-ink-faint">virtual committee</div>
-          </div>
+      <div className="flex items-center gap-2 px-4 pb-2 pt-3">
+        <div className="grid h-7 w-7 place-content-center rounded-md bg-accent text-bg font-semibold">
+          C
+        </div>
+        <div className="leading-tight">
+          <div className="text-[13px] font-semibold text-ink">Conclave</div>
+          <div className="text-[11px] text-ink-faint">virtual committee</div>
         </div>
       </div>
 
       {workspaceLabel && (
-        <div className="mx-3 mb-2 mt-3 flex items-center gap-2 rounded-md border border-border-subtle bg-surface px-2.5 py-2 text-[12px] text-ink-dim no-drag">
+        <div className="mx-3 mb-2 mt-2 flex items-center gap-2 rounded-md border border-border-subtle bg-surface px-2.5 py-2 text-[12px] text-ink-dim no-drag">
           <span className="h-1.5 w-1.5 rounded-full bg-ok" />
           <span className="truncate">{workspaceLabel}</span>
         </div>
