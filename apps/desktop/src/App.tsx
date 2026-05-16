@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useTranslation } from "react-i18next";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { Onboarding } from "./components/Onboarding";
 import { Sidebar, type Section } from "./components/Sidebar";
@@ -8,6 +9,21 @@ import { KnowledgePage } from "./routes/Knowledge";
 import { SettingsPage } from "./routes/Settings";
 import { WorkspacesPage } from "./routes/Workspaces";
 import { ipc, type Workspace } from "./lib/ipc";
+
+// Belt-and-suspenders drag handler. data-tauri-drag-region requires the
+// core:window:allow-start-dragging permission (granted via capabilities);
+// this explicit call covers any edge case where the attribute binding
+// doesn't fire (e.g. event capture, future Tauri changes).
+const startWindowDrag = async (e: ReactPointerEvent<HTMLElement>) => {
+  const target = e.target as HTMLElement;
+  if (target.closest('[data-tauri-drag-region="false"]')) return;
+  if (target.closest("button, a, input, textarea, select")) return;
+  try {
+    await getCurrentWindow().startDragging();
+  } catch {
+    /* not running under Tauri (Vite preview) — ignore */
+  }
+};
 
 export function App() {
   const { t } = useTranslation();
@@ -58,6 +74,7 @@ export function App() {
           interactive descendant must set data-tauri-drag-region="false". */}
       <header
         data-tauri-drag-region
+        onPointerDown={startWindowDrag}
         className="titlebar titlebar-pad-mac flex items-center gap-4 pr-5 text-[11px] text-ink-faint"
       >
         <div

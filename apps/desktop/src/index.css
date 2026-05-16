@@ -99,16 +99,21 @@ body {
   border: 2px solid transparent;
 }
 
-/* macOS overlay title bar — 56px tall so traffic lights at y=18 sit
-   centred. Sticky + blurred so scroll content slips underneath without
-   covering the chrome. Drag is handled by Tauri 2's data-tauri-drag-region
+/* macOS overlay title bar — 40px tall to align the text cap-center with
+   the actual traffic-light centerline (measured y=20 window-relative on
+   macOS Sonoma+ via AX). The configured `trafficLightPosition.y` in
+   tauri.conf.json is NOT applied linearly by Tauri 2.11 with
+   titleBarStyle: "Overlay" — AX-measured position is the source of truth,
+   and a 40px header with `flex items-center` puts the cap-center at y=20.
+   Sticky + blurred so scroll content slips underneath without covering
+   the chrome. Drag is handled by Tauri 2's data-tauri-drag-region
    attribute on the <header>; interactive children opt out via
    data-tauri-drag-region="false". */
 .titlebar {
   position: sticky;
   top: 0;
   z-index: 30;
-  height: 56px;
+  height: 40px;
   background: rgb(var(--bg) / 0.78);
   backdrop-filter: saturate(120%) blur(14px);
   -webkit-backdrop-filter: saturate(120%) blur(14px);
