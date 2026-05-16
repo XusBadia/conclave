@@ -16,6 +16,9 @@ mod html;
 mod pdf;
 mod text;
 
+#[cfg(feature = "ocr")]
+pub mod ocr;
+
 /// Result of running a document through an extractor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtractedText {

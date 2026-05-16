@@ -25,5 +25,15 @@ lopdf = { workspace = true }
 docx-rs = { workspace = true }
 html2text = { workspace = true }
 
+# OCR backends (Phase 1 §2). Activated by the `ocr` feature below. They
+# pull in heavy native dependencies (Pdfium, libtesseract), so we keep
+# them strictly opt-in.
+pdfium-render = { workspace = true, optional = true }
+tesseract-rs = { workspace = true, optional = true }
+
+[features]
+default = []
+ocr = ["dep:pdfium-render", "dep:tesseract-rs"]
+
 [dev-dependencies]
 tempfile = { workspace = true }
