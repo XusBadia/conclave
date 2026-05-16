@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 use crate::error::ProviderError;
@@ -20,10 +22,11 @@ use crate::types::{
 use crate::LlmProvider;
 
 const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
-// ChatGPT-account Codex flows reject plain `gpt-5` ("not supported when
-// using Codex with a ChatGPT account"). `gpt-5-codex` is the Codex-native
-// model that Plus/Pro subscriptions can call against this endpoint.
-const DEFAULT_MODEL: &str = "gpt-5-codex";
+// `gpt-5.5` is the recommended Codex-on-ChatGPT model as of May 2026
+// (per developers.openai.com/codex/models). `gpt-5-codex` and plain
+// `gpt-5` would either reject the ChatGPT-account token or fall back
+// to an older variant. Keep this in sync with the Codex CLI default.
+const DEFAULT_MODEL: &str = "gpt-5.5";
 const USER_AGENT: &str = "codex_cli_rs/Conclave";
 const ORIGINATOR: &str = "codex_cli_rs";
 
@@ -122,12 +125,37 @@ impl OpenAIOAuthProvider {
         self
     }
 
-    /// Account id parsed from the credentials file, if present.
-    pub fn account_id(&self) -> Option<String> {
-        self.cached
+    /// A short, human-readable label for the signed-in account, suitable
+    /// for the Settings card. When tokens come from our own OAuth flow
+    /// the `account_id` field actually stores the raw OpenID `id_token`
+    /// (a JWT); we decode its payload and surface the user's email. When
+    /// tokens come from the Codex CLI credentials file it stores an
+    /// opaque `acct_…` id; we return that unchanged. Falls back to
+    /// `None` when neither shape applies.
+    pub fn account_label(&self) -> Option<String> {
+        let raw = self
+            .cached
             .lock()
             .ok()
-            .and_then(|g| g.as_ref().and_then(|t| t.account_id.clone()))
+            .and_then(|g| g.as_ref().and_then(|t| t.account_id.clone()))?;
+        if let Some(email) = jwt_claim_email(&raw) {
+            return Some(email);
+        }
+        // Not a JWT — assume CLI account id and pass through unchanged.
+        // Skip anything that looks like a JWT we failed to parse so the
+        // UI never displays a giant base64 blob.
+        if raw.matches('.').count() == 2 {
+            return None;
+        }
+        Some(raw)
+    }
+
+    /// Back-compat alias. The previous name suggested it always returned
+    /// an account id, but for tokens produced by the in-app OAuth flow it
+    /// returned the raw `id_token`. Prefer [`Self::account_label`].
+    #[doc(hidden)]
+    pub fn account_id(&self) -> Option<String> {
+        self.account_label()
     }
 
     fn current_token(&self) -> Result<String, ProviderError> {
@@ -329,6 +357,29 @@ fn load_credentials(path: &Path) -> Result<OAuthTokens, ProviderError> {
     })
 }
 
+/// Extract the `email` claim from a JWT-shaped string, or `None` if the
+/// input isn't a JWT, the payload doesn't decode, or no email claim is
+/// present. Verifies nothing — we only use this to label the connected
+/// account in the UI.
+fn jwt_claim_email(token: &str) -> Option<String> {
+    let payload_b64 = token.split('.').nth(1)?;
+    let bytes = URL_SAFE_NO_PAD.decode(payload_b64.as_bytes()).ok()?;
+    let claims: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    // Standard `email` claim first; fall back to nested OpenAI profile
+    // claims if upstream tweaks the shape.
+    claims
+        .get("email")
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            claims
+                .get("https://api.openai.com/profile")
+                .and_then(|p| p.get("email"))
+                .and_then(|v| v.as_str())
+        })
+        .or_else(|| claims.get("name").and_then(|v| v.as_str()))
+        .map(str::to_owned)
+}
+
 fn uuid_v4() -> String {
     // Small dependency-free v4 generator using `rand`-style mixing of the
     // current time + a counter. Good enough for a per-request id; we don't
@@ -445,5 +496,54 @@ mod tests {
         let id = uuid_v4();
         assert_eq!(id.len(), 36);
         assert_eq!(id.matches('-').count(), 4);
+    }
+
+    #[test]
+    fn account_label_extracts_email_from_jwt() {
+        // Hand-crafted JWT: header.payload.sig where payload claims
+        // `{"email":"dr@example.com"}`. Signature is irrelevant — we
+        // don't verify, only decode.
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"RS256","typ":"JWT"}"#);
+        let payload = URL_SAFE_NO_PAD.encode(br#"{"email":"dr@example.com","sub":"u_1"}"#);
+        let jwt = format!("{header}.{payload}.sig");
+        assert_eq!(jwt_claim_email(&jwt).as_deref(), Some("dr@example.com"));
+    }
+
+    #[test]
+    fn account_label_falls_back_to_name_when_no_email() {
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"RS256","typ":"JWT"}"#);
+        let payload = URL_SAFE_NO_PAD.encode(br#"{"name":"Dr Who","sub":"u_1"}"#);
+        let jwt = format!("{header}.{payload}.sig");
+        assert_eq!(jwt_claim_email(&jwt).as_deref(), Some("Dr Who"));
+    }
+
+    #[test]
+    fn account_label_returns_none_for_unparseable_jwt() {
+        // Three dot-separated segments but the middle isn't valid base64.
+        let result = jwt_claim_email("aaa.???.zzz");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn account_label_returns_raw_for_non_jwt_account_id() {
+        // CLI-style account ids look like `acct_xxx` and have no dots —
+        // they should pass through unchanged.
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("auth.json");
+        write_sample(&p, "acct_xyz");
+        let provider = OpenAIOAuthProvider::from_path(&p).unwrap();
+        assert_eq!(provider.account_label().as_deref(), Some("acct_xyz"));
+    }
+
+    #[test]
+    fn account_label_hides_unparseable_jwt_instead_of_dumping_it() {
+        // What `~/.codex/auth.json` looks like for users whose account_id
+        // field was populated with an id_token we can't decode — should
+        // hide rather than dump the entire base64 blob in the UI.
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("auth.json");
+        write_sample(&p, "eyJhbGc.???.zzz");
+        let provider = OpenAIOAuthProvider::from_path(&p).unwrap();
+        assert!(provider.account_label().is_none());
     }
 }

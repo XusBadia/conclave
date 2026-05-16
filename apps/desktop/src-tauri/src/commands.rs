@@ -375,7 +375,7 @@ pub async fn list_providers(state: State<'_, AppState>) -> CommandResult<Vec<Pro
                     .and_then(|p| p.subscription_type()),
                 "openai-oauth" => OpenAIOAuthProvider::from_conclave_tokens(&conclave_path)
                     .ok()
-                    .and_then(|p| p.account_id()),
+                    .and_then(|p| p.account_label()),
                 _ => None,
             };
             (true, true, hint)
@@ -384,7 +384,7 @@ pub async fn list_providers(state: State<'_, AppState>) -> CommandResult<Vec<Pro
         };
         let default_model = match *id {
             "anthropic-oauth" => "claude-sonnet-4-6-20250929".into(),
-            "openai-oauth" => "gpt-5-codex".into(),
+            "openai-oauth" => "gpt-5.5".into(),
             _ => "—".into(),
         };
         out.push(ProviderInfo {
