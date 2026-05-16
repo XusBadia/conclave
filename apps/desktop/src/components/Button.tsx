@@ -14,23 +14,23 @@ interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const base =
-  "inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-colors no-drag select-none focus:outline-none focus-visible:ring-conclave disabled:opacity-50 disabled:cursor-not-allowed";
+  "inline-flex items-center justify-center gap-2 rounded-pill font-mono uppercase tracking-[0.08em] text-[11px] transition-colors select-none focus:outline-none focus-visible:ring-conclave disabled:opacity-50 disabled:cursor-not-allowed";
 
 const variants: Record<Variant, string> = {
   primary:
-    "bg-accent text-bg hover:bg-accent-strong shadow-soft",
+    "border border-ink text-ink bg-transparent hover:bg-ink hover:text-bg",
   secondary:
-    "bg-surface text-ink border border-border hover:bg-surface-hover",
+    "border border-border text-ink-dim bg-transparent hover:bg-surface-hover hover:text-ink",
   ghost:
-    "bg-transparent text-ink hover:bg-surface",
+    "text-ink-dim hover:text-ink",
   danger:
-    "bg-danger/15 text-danger border border-danger/40 hover:bg-danger/25",
+    "border border-danger text-danger bg-transparent hover:bg-danger hover:text-bg",
 };
 
 const sizes: Record<Size, string> = {
-  sm: "h-8 px-3 text-sm",
-  md: "h-9 px-3.5 text-sm",
-  lg: "h-10 px-4 text-[15px]",
+  sm: "h-7 px-3.5",
+  md: "h-8 px-4",
+  lg: "h-9 px-5",
 };
 
 export const Button = forwardRef<HTMLButtonElement, Props>(function Button(

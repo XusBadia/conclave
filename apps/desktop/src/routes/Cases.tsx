@@ -131,7 +131,7 @@ export function CasesPage({
                     setSelected(det);
                     setView("show");
                   }}
-                  className="block w-full px-5 py-4 text-left transition hover:bg-surface no-drag focus:outline-none focus-visible:bg-surface"
+                  className="block w-full px-5 py-4 text-left transition hover:bg-surface focus:outline-none focus-visible:bg-surface"
                 >
                   <div className="flex items-center justify-between gap-4">
                     <div className="min-w-0">
@@ -397,7 +397,7 @@ function ProviderField({
             <button
               type="button"
               onClick={onGoToSettings}
-              className="rounded-md px-2 py-1 text-[12px] text-ink-subtle transition no-drag hover:bg-surface hover:text-ink focus:outline-none focus-visible:ring-conclave"
+              className="rounded-md px-2 py-1 text-[12px] text-ink-subtle transition hover:bg-surface hover:text-ink focus:outline-none focus-visible:ring-conclave"
             >
               {t("cases.provider_change_link")}
             </button>
@@ -415,7 +415,7 @@ function ProviderField({
       <select
         value={providerId}
         onChange={(e) => onChange(e.target.value)}
-        className="block w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-ink no-drag focus:outline-none focus:ring-conclave focus:border-accent"
+        className="block w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-ink focus:outline-none focus:ring-conclave focus:border-accent"
       >
         {providers.map((p) => {
           const meta = metaFor(p.id);
@@ -430,7 +430,7 @@ function ProviderField({
         <button
           type="button"
           onClick={onGoToSettings}
-          className="mt-1.5 text-[12px] text-ink-faint transition no-drag hover:text-ink focus:outline-none focus-visible:underline"
+          className="mt-1.5 text-[12px] text-ink-faint transition hover:text-ink focus:outline-none focus-visible:underline"
         >
           {t("cases.provider_change_link")}
         </button>
@@ -570,7 +570,7 @@ function VerdictRenderer({ verdict }: { verdict: Verdict }) {
 
       <section>
         <SectionTitle>{t("cases.verdict.primary_recommendation")}</SectionTitle>
-        <div className="rounded-lg border border-accent/30 bg-accent/5 px-4 py-3">
+        <div className="border border-border-strong bg-surface px-4 py-3">
           <div className="text-[14px] font-semibold text-ink">
             {verdict.primary_recommendation.action}
           </div>

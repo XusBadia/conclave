@@ -76,26 +76,28 @@ export function Sidebar({
   const { t } = useTranslation();
   return (
     <aside className="flex h-full w-[220px] shrink-0 flex-col border-r border-border bg-bg-subtle">
-      <div className="flex items-center gap-2 px-4 pb-2 pt-3">
-        <div className="grid h-7 w-7 place-content-center rounded-md bg-accent text-bg font-semibold">
+      <div className="flex items-center gap-2.5 px-4 pb-2 pt-3">
+        <div className="grid h-7 w-7 place-content-center border border-ink text-[11px] font-mono uppercase tracking-[0.1em] text-ink">
           C
         </div>
         <div className="leading-tight">
-          <div className="text-[13px] font-semibold text-ink">
+          <div className="font-mono text-[11px] uppercase tracking-[0.14em] text-ink">
             {t("app.brand")}
           </div>
-          <div className="text-[11px] text-ink-faint">{t("sidebar.tagline")}</div>
+          <div className="mt-0.5 text-[10px] uppercase tracking-[0.1em] text-ink-faint">
+            {t("sidebar.tagline")}
+          </div>
         </div>
       </div>
 
       {workspaceLabel && (
-        <div className="mx-3 mb-2 mt-2 flex items-center gap-2 rounded-md border border-border-subtle bg-surface px-2.5 py-2 text-[12px] text-ink-dim no-drag">
+        <div className="mx-3 mb-2 mt-2 flex items-center gap-2 rounded-md border border-border-subtle bg-surface px-2.5 py-2 text-[12px] text-ink-dim">
           <span className="h-1.5 w-1.5 rounded-full bg-ok" />
           <span className="truncate">{workspaceLabel}</span>
         </div>
       )}
 
-      <nav className="mt-2 flex flex-1 flex-col gap-0.5 px-2 no-drag">
+      <nav className="mt-2 flex flex-1 flex-col gap-0.5 px-2">
         {items.map((it) => {
           const selected = active === it.id;
           return (
@@ -113,7 +115,7 @@ export function Sidebar({
               <span
                 className={cn(
                   "mt-0.5",
-                  selected ? "text-accent" : "text-ink-subtle",
+                  selected ? "text-ink" : "text-ink-subtle",
                 )}
               >
                 {it.icon}
@@ -124,7 +126,7 @@ export function Sidebar({
                 </span>
                 <span
                   className={cn(
-                    "block text-[11px] leading-snug",
+                    "mt-0.5 block font-mono text-[10px] uppercase leading-snug tracking-[0.08em]",
                     selected ? "text-ink-subtle" : "text-ink-faint",
                   )}
                 >
@@ -136,7 +138,7 @@ export function Sidebar({
         })}
       </nav>
 
-      <div className="border-t border-border-subtle px-4 py-3 text-[11px] leading-snug text-ink-faint">
+      <div className="border-t border-border px-4 py-3 text-[11px] leading-snug text-ink-faint">
         {t("sidebar.footer")}
       </div>
     </aside>

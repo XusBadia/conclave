@@ -6,34 +6,34 @@ export default {
     extend: {
       colors: {
         bg: {
-          DEFAULT: "#0b0f14",
-          subtle: "#0f1419",
-          elevated: "#131820",
+          DEFAULT: "rgb(var(--bg) / <alpha-value>)",
+          subtle: "rgb(var(--bg-subtle) / <alpha-value>)",
+          elevated: "rgb(var(--bg-elevated) / <alpha-value>)",
         },
         surface: {
-          DEFAULT: "#131820",
-          hover: "#1a212c",
-          active: "#222a37",
+          DEFAULT: "rgb(var(--surface) / <alpha-value>)",
+          hover: "rgb(var(--surface-hover) / <alpha-value>)",
+          active: "rgb(var(--surface-active) / <alpha-value>)",
         },
         border: {
-          DEFAULT: "#1f2630",
-          subtle: "#172029",
-          strong: "#2a3340",
+          DEFAULT: "rgb(var(--border) / <alpha-value>)",
+          subtle: "rgb(var(--border-subtle) / <alpha-value>)",
+          strong: "rgb(var(--border-strong) / <alpha-value>)",
         },
         ink: {
-          DEFAULT: "#f5f6f8",
-          dim: "#cbd5e1",
-          subtle: "#94a3b8",
-          faint: "#64748b",
+          DEFAULT: "rgb(var(--ink) / <alpha-value>)",
+          dim: "rgb(var(--ink-dim) / <alpha-value>)",
+          subtle: "rgb(var(--ink-subtle) / <alpha-value>)",
+          faint: "rgb(var(--ink-faint) / <alpha-value>)",
         },
         accent: {
-          DEFAULT: "#7dd3fc",
-          strong: "#38bdf8",
-          muted: "#0c4a6e",
+          DEFAULT: "rgb(var(--accent) / <alpha-value>)",
+          strong: "rgb(var(--accent-strong) / <alpha-value>)",
+          muted: "rgb(var(--accent-muted) / <alpha-value>)",
         },
-        ok: "#34d399",
-        warn: "#fbbf24",
-        danger: "#f87171",
+        ok: "rgb(var(--ok) / <alpha-value>)",
+        warn: "rgb(var(--warn) / <alpha-value>)",
+        danger: "rgb(var(--danger) / <alpha-value>)",
       },
       fontFamily: {
         sans: [
@@ -46,8 +46,8 @@ export default {
           "sans-serif",
         ],
         mono: [
-          "SF Mono",
           "JetBrains Mono",
+          "SF Mono",
           "Menlo",
           "Monaco",
           "Consolas",
@@ -55,12 +55,20 @@ export default {
         ],
       },
       boxShadow: {
-        soft: "0 1px 0 rgba(255,255,255,0.04) inset, 0 8px 24px -12px rgba(0,0,0,0.6)",
-        ring: "0 0 0 1px rgba(125,211,252,0.4), 0 0 0 4px rgba(125,211,252,0.15)",
+        soft: "0 1px 0 rgb(var(--ink) / 0.04) inset, 0 8px 24px -12px rgb(0 0 0 / 0.45)",
+        ring: "0 0 0 1px rgb(var(--accent) / 0.4), 0 0 0 4px rgb(var(--accent) / 0.15)",
       },
       borderRadius: {
-        xl: "0.875rem",
-        "2xl": "1rem",
+        none: "0",
+        sm: "0",
+        DEFAULT: "0",
+        md: "0",
+        lg: "0",
+        xl: "0",
+        "2xl": "0",
+        "3xl": "0",
+        full: "9999px",
+        pill: "9999px",
       },
       keyframes: {
         in: {

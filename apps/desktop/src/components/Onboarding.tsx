@@ -34,16 +34,16 @@ export function Onboarding({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg/85 backdrop-blur">
-      <div className="canvas-grain animate-in mx-4 max-w-xl rounded-2xl border border-border bg-bg-elevated p-7 shadow-soft">
+      <div className="animate-in mx-4 max-w-xl border border-border bg-bg-elevated p-7 shadow-soft">
         <div className="mb-5 flex items-center gap-3">
-          <div className="grid h-10 w-10 place-content-center rounded-xl bg-accent text-bg text-lg font-semibold">
+          <div className="grid h-10 w-10 place-content-center border border-ink font-mono text-sm uppercase tracking-[0.1em] text-ink">
             C
           </div>
           <div>
-            <div className="text-base font-semibold text-ink">
+            <div className="font-mono text-[12px] uppercase tracking-[0.14em] text-ink">
               {t("onboarding.welcome")}
             </div>
-            <div className="text-[12px] text-ink-faint">
+            <div className="mt-1 text-[12px] text-ink-faint">
               {t("onboarding.subtitle")}
             </div>
           </div>
