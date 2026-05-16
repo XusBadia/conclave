@@ -23,6 +23,7 @@ conclave-providers = { workspace = true }
 conclave-rag = { workspace = true }
 conclave-deident = { workspace = true }
 conclave-verdict = { workspace = true }
+conclave-evidence = { workspace = true }
 
 clap = { workspace = true }
 anyhow = { workspace = true }

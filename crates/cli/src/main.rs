@@ -91,6 +91,8 @@ enum Command {
     Stats(commands::stats::StatsArgs),
     /// Export cases + verdicts + feedback as JSON (masked text only).
     Export(commands::export::ExportArgs),
+    /// Search PubMed for recent literature (Phase 6).
+    Evidence(commands::evidence::EvidenceArgs),
     /// Inspect, list and test configured LLM providers.
     Providers(commands::providers::ProvidersArgs),
     /// Manage Conclave workspaces (the per-project config + data root).
@@ -133,6 +135,7 @@ async fn main() -> Result<()> {
         Command::Feedback(args) => commands::feedback::run(&ctx, args),
         Command::Stats(args) => commands::stats::run(&ctx, args),
         Command::Export(args) => commands::export::run(&ctx, args),
+        Command::Evidence(args) => commands::evidence::run(&ctx, args).await,
         Command::Providers(args) => commands::providers::run(&ctx, args).await,
         Command::Workspace(args) => commands::workspace::run(&ctx, args),
     }

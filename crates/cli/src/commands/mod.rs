@@ -16,6 +16,7 @@ use conclave_rag::{
 pub(crate) mod case;
 pub(crate) mod deident;
 pub(crate) mod documents;
+pub(crate) mod evidence;
 pub(crate) mod export;
 pub(crate) mod feedback;
 pub(crate) mod ingest;
