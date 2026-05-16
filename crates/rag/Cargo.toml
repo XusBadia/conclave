@@ -25,6 +25,10 @@ lopdf = { workspace = true }
 docx-rs = { workspace = true }
 html2text = { workspace = true }
 
+# Chunking (Phase 1 §3): regex-driven sentence splitter + tiktoken sizing.
+regex = { workspace = true }
+tiktoken-rs = { workspace = true }
+
 # OCR backends (Phase 1 §2). Activated by the `ocr` feature below. They
 # pull in heavy native dependencies (Pdfium, libtesseract), so we keep
 # them strictly opt-in.
