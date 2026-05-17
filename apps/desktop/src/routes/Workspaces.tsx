@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+} from "react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "../components/Button";
@@ -7,6 +13,7 @@ import { Combobox } from "../components/Combobox";
 import { Field, Input } from "../components/Field";
 import { Sheet } from "../components/Sheet";
 import { specialtyOptions } from "../constants/specialties";
+import { cn } from "../lib/cn";
 import { ipc, type Workspace } from "../lib/ipc";
 
 export function WorkspacesPage({
@@ -68,6 +75,9 @@ export function WorkspacesPage({
     }
   };
 
+  const activeWs = list.find((ws) => ws.id === activeId) ?? null;
+  const others = list.filter((ws) => ws.id !== activeId);
+
   return (
     <>
       <div className="mx-auto w-full max-w-3xl space-y-4 p-6">
@@ -101,7 +111,8 @@ export function WorkspacesPage({
                 {error}
               </div>
             )}
-            {list.length === 0 && !loading && (
+
+            {list.length === 0 && !loading ? (
               <div className="px-6 py-12 text-center">
                 <p className="text-[13px] text-ink-subtle">
                   {t("workspaces.empty")}
@@ -115,55 +126,119 @@ export function WorkspacesPage({
                   </Button>
                 </div>
               </div>
-            )}
-            <ul className="divide-y divide-border-subtle">
-              {list.map((ws) => {
-                const active = ws.id === activeId;
-                return (
-                  <li
-                    key={ws.id}
-                    className="flex items-start justify-between gap-4 px-5 py-4"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        {active && (
-                          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-ok" />
-                        )}
-                        <div className="truncate text-[14px] font-medium text-ink">
-                          {ws.name}
+            ) : (
+              <div className="space-y-5 p-5">
+                <section>
+                  <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint">
+                    {t("workspaces.section_active")}
+                  </p>
+                  {activeWs ? (
+                    <div className="group/hero relative border border-accent/40 bg-accent/[0.05] px-4 py-3.5">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2.5">
+                            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-ok" />
+                            <h4 className="truncate text-[15px] font-semibold text-ink">
+                              {activeWs.name}
+                            </h4>
+                            <span className="shrink-0 rounded-pill border border-accent/50 px-2 py-px font-mono text-[9px] uppercase tracking-[0.12em] text-accent">
+                              {t("workspaces.active_badge")}
+                            </span>
+                          </div>
+                          {(activeWs.specialty || activeWs.language) && (
+                            <div className="mt-2 flex items-center gap-1.5 text-[12px]">
+                              {activeWs.specialty && (
+                                <span className="truncate rounded bg-surface px-1.5 py-0.5 text-ink-subtle">
+                                  {activeWs.specialty}
+                                </span>
+                              )}
+                              {activeWs.language && (
+                                <span className="rounded bg-surface px-1.5 py-0.5 text-ink-subtle">
+                                  {activeWs.language}
+                                </span>
+                              )}
+                            </div>
+                          )}
                         </div>
-                      </div>
-                      <div className="mt-0.5 flex items-center gap-1.5 text-[12px] text-ink-faint">
-                        {ws.specialty && (
-                          <span className="truncate rounded bg-surface px-1.5 py-0.5 text-ink-subtle">
-                            {ws.specialty}
-                          </span>
-                        )}
-                        {ws.language && (
-                          <span className="rounded bg-surface px-1.5 py-0.5 text-ink-subtle">
-                            {ws.language}
-                          </span>
-                        )}
+                        <DeleteIconButton
+                          ariaLabel={t("workspaces.delete_aria", {
+                            name: activeWs.name,
+                          })}
+                          onClick={() => remove(activeWs)}
+                          revealGroup="hero"
+                        />
                       </div>
                     </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      {!active && (
-                        <Button size="sm" onClick={() => switchTo(ws)}>
-                          {t("workspaces.activate")}
-                        </Button>
-                      )}
-                      <Button
-                        size="sm"
-                        variant="danger"
-                        onClick={() => remove(ws)}
-                      >
-                        {t("common.delete")}
-                      </Button>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
+                  ) : (
+                    <p className="text-[13px] text-ink-faint">
+                      {t("workspaces.no_active")}
+                    </p>
+                  )}
+                </section>
+
+                {others.length > 0 ? (
+                  <section>
+                    <p className="mb-1 font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint">
+                      {t("workspaces.section_others")}
+                      <span className="ml-2 tracking-normal text-ink-faint/70">
+                        · {t("workspaces.click_to_switch")}
+                      </span>
+                    </p>
+                    <ul className="divide-y divide-border-subtle border-y border-border-subtle">
+                      {others.map((ws) => {
+                        const onActivate = () => switchTo(ws);
+                        const onKeyDown = (e: KeyboardEvent) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            onActivate();
+                          }
+                        };
+                        return (
+                          <li
+                            key={ws.id}
+                            role="button"
+                            tabIndex={0}
+                            onClick={onActivate}
+                            onKeyDown={onKeyDown}
+                            className="group/row flex w-full cursor-pointer items-center justify-between gap-3 px-2 py-3 transition-colors hover:bg-surface-hover focus-visible:bg-surface-hover focus-visible:outline-none"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate text-[13px] font-medium text-ink-dim transition-colors group-hover/row:text-ink">
+                                {ws.name}
+                              </div>
+                              {(ws.specialty || ws.language) && (
+                                <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-ink-faint">
+                                  {ws.specialty && (
+                                    <span className="truncate">
+                                      {ws.specialty}
+                                    </span>
+                                  )}
+                                  {ws.specialty && ws.language && (
+                                    <span>·</span>
+                                  )}
+                                  {ws.language && <span>{ws.language}</span>}
+                                </div>
+                              )}
+                            </div>
+                            <DeleteIconButton
+                              ariaLabel={t("workspaces.delete_aria", {
+                                name: ws.name,
+                              })}
+                              onClick={() => remove(ws)}
+                              revealGroup="row"
+                            />
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </section>
+                ) : activeWs ? (
+                  <p className="text-[12px] text-ink-faint">
+                    {t("workspaces.no_others")}
+                  </p>
+                ) : null}
+              </div>
+            )}
           </CardBody>
         </Card>
       </div>
@@ -174,6 +249,44 @@ export function WorkspacesPage({
         onCreated={onCreated}
       />
     </>
+  );
+}
+
+function DeleteIconButton({
+  onClick,
+  ariaLabel,
+  revealGroup,
+}: {
+  onClick: () => void;
+  ariaLabel: string;
+  revealGroup: "hero" | "row";
+}) {
+  const handleClick = (e: MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    onClick();
+  };
+  const handleKeyDown = (e: KeyboardEvent) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.stopPropagation();
+    }
+  };
+  return (
+    <button
+      type="button"
+      aria-label={ariaLabel}
+      onClick={handleClick}
+      onKeyDown={handleKeyDown}
+      onPointerDown={(e) => e.stopPropagation()}
+      className={cn(
+        "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-pill text-[16px] leading-none text-ink-faint transition-opacity hover:bg-danger/10 hover:text-danger focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-conclave",
+        revealGroup === "hero"
+          ? "opacity-0 group-hover/hero:opacity-100"
+          : "opacity-0 group-hover/row:opacity-100",
+      )}
+    >
+      ×
+    </button>
   );
 }
 
