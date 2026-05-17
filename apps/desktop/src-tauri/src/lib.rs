@@ -41,6 +41,7 @@
 //! Conclave crates. Every Tauri command is a thin wrapper over a
 //! CLI-equivalent core function so the UI never holds business logic.
 
+mod batch;
 mod commands;
 mod state;
 
@@ -97,9 +98,16 @@ pub fn run() {
             commands::oauth_openai_cancel,
             commands::oauth_logout,
             commands::run_case,
+            commands::run_case_deliberated,
             commands::list_cases,
             commands::show_case,
+            commands::list_case_attachments,
+            commands::get_deliberation_trace,
             commands::submit_feedback,
+            commands::parse_batch_folder,
+            commands::propose_case_grouping,
+            commands::run_batch_cases,
+            commands::batch_cancel,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Conclave");

@@ -1110,12 +1110,14 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "conclave-core",
  "conclave-deident",
  "conclave-providers",
  "conclave-rag",
  "conclave-verdict",
+ "futures",
  "serde",
  "serde_json",
  "tauri",
@@ -1124,9 +1126,11 @@ dependencies = [
  "tauri-plugin-fs",
  "tauri-plugin-os",
  "tauri-plugin-shell",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -1211,6 +1215,8 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
+ "slug",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",

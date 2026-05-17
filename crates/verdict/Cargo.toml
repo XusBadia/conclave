@@ -29,6 +29,8 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 rusqlite = { workspace = true }
 tokio = { workspace = true }
+sha2 = { workspace = true }
+slug = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

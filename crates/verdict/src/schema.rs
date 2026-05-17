@@ -12,7 +12,8 @@ pub struct Verdict {
     /// Bullet-list of the clinically-relevant data points the model used.
     pub key_clinical_data: Vec<KeyValue>,
     /// Claims with explicit citations to provided evidence ids
-    /// (`E1`, `X1`, `P1`).
+    /// (`E1` workspace KB, `A1` case attachment, `X1` external evidence,
+    /// `P1` past case).
     pub applied_evidence: Vec<EvidenceClaim>,
     /// Top recommendation with rationale.
     pub primary_recommendation: Recommendation,
@@ -44,8 +45,8 @@ pub struct KeyValue {
 /// A claim grounded in one of the provided evidence ids.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvidenceClaim {
-    /// Citation key — must match one of the `[E*]`, `[X*]`, `[P*]` ids
-    /// supplied in the prompt.
+    /// Citation key — must match one of the `[E*]`, `[A*]`, `[X*]`,
+    /// `[P*]` ids supplied in the prompt.
     #[serde(rename = "ref")]
     pub reference: String,
     /// The claim derived from that evidence.

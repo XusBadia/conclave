@@ -85,9 +85,9 @@ impl LlmProvider for AnthropicProvider {
         for m in req.messages {
             match m.role {
                 MessageRole::System => system_parts.push(m.content),
-                MessageRole::User => convo.push(AnthropicMessage::new("user", m.content)),
+                MessageRole::User => convo.push(AnthropicMessage::text("user", m.content)),
                 MessageRole::Assistant => {
-                    convo.push(AnthropicMessage::new("assistant", m.content));
+                    convo.push(AnthropicMessage::text("assistant", m.content));
                 }
             }
         }
@@ -96,6 +96,30 @@ impl LlmProvider for AnthropicProvider {
             return Err(ProviderError::BadRequest(
                 "anthropic requires at least one user/assistant message".into(),
             ));
+        }
+
+        // Attach images to the LAST user message in the conversation. If
+        // the last message is from the assistant, fall back to appending a
+        // new user message containing just the images — Anthropic requires
+        // images to live on a user turn.
+        if !req.images.is_empty() {
+            let last_user_idx = convo
+                .iter()
+                .rposition(|m| m.role == "user")
+                .unwrap_or(convo.len());
+            if last_user_idx == convo.len() {
+                convo.push(AnthropicMessage::blocks("user", Vec::new()));
+            }
+            convo[last_user_idx].promote_to_blocks();
+            for img in &req.images {
+                convo[last_user_idx].push_block(AnthropicBlock::Image {
+                    source: AnthropicImageSource {
+                        kind: "base64",
+                        media_type: img.media_type.clone(),
+                        data: img.base64_data.clone(),
+                    },
+                });
+            }
         }
 
         let body = AnthropicRequest {
@@ -187,12 +211,63 @@ struct AnthropicRequest {
 #[derive(Serialize)]
 struct AnthropicMessage {
     role: &'static str,
-    content: String,
+    content: AnthropicContentField,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum AnthropicContentField {
+    Text(String),
+    Blocks(Vec<AnthropicBlock>),
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum AnthropicBlock {
+    Text { text: String },
+    Image { source: AnthropicImageSource },
+}
+
+#[derive(Serialize)]
+struct AnthropicImageSource {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    media_type: String,
+    data: String,
 }
 
 impl AnthropicMessage {
-    const fn new(role: &'static str, content: String) -> Self {
-        Self { role, content }
+    fn text(role: &'static str, content: String) -> Self {
+        Self {
+            role,
+            content: AnthropicContentField::Text(content),
+        }
+    }
+
+    fn blocks(role: &'static str, blocks: Vec<AnthropicBlock>) -> Self {
+        Self {
+            role,
+            content: AnthropicContentField::Blocks(blocks),
+        }
+    }
+
+    /// Convert a text-only message into a blocks message so we can append
+    /// image blocks to it. Idempotent if the message is already blocks.
+    fn promote_to_blocks(&mut self) {
+        if let AnthropicContentField::Text(t) = &self.content {
+            let initial = if t.is_empty() {
+                Vec::new()
+            } else {
+                vec![AnthropicBlock::Text { text: t.clone() }]
+            };
+            self.content = AnthropicContentField::Blocks(initial);
+        }
+    }
+
+    fn push_block(&mut self, block: AnthropicBlock) {
+        if let AnthropicContentField::Blocks(blocks) = &mut self.content {
+            blocks.push(block);
+        }
     }
 }
 
@@ -241,6 +316,7 @@ mod tests {
             temperature: None,
             json_schema: None,
             allow_web_search: false,
+            images: Vec::new(),
         };
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()

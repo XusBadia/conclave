@@ -11,16 +11,25 @@ use conclave_core::{Workspace, WorkspaceManager};
 use conclave_deident::{Deidentifier, PipelineDeidentifier};
 use conclave_providers::{
     open_in_browser, persist_tokens, secrets, AnthropicLoginFlow, AnthropicOAuthProvider,
-    AnthropicProvider, CompletionRequest, LlmProvider, Message, OllamaProvider, OpenAILoginFlow,
-    OpenAIOAuthProvider, OpenAiProvider, OpenRouterProvider, KNOWN_PROVIDERS, OAUTH_PROVIDERS,
+    AnthropicProvider, CompletionRequest, ImageInput, LlmProvider, Message, OllamaProvider,
+    OpenAILoginFlow, OpenAIOAuthProvider, OpenAiProvider, OpenRouterProvider, KNOWN_PROVIDERS,
+    OAUTH_PROVIDERS,
 };
 use conclave_rag::{
     ChunkParams, DocumentRecord, DocumentRepository, IngestionEvent, IngestionPipeline,
     ProgressStage, RepositoryLayout, SkipReason,
 };
 use conclave_verdict::{
-    persistence::{FeedbackKind, FeedbackRecord},
-    CaseRecord, CaseStore, QaPipeline, Verdict, VerdictOptions, VerdictPipeline, VerdictRecord,
+    deliberation::{
+        run_deliberation, DeliberationEvent, DeliberationEvidence, DeliberationInputs,
+        DeliberationOptions, DeliberationPastCase,
+    },
+    ingest_case_attachments,
+    persistence::{
+        DeliberationTrace, FeedbackKind, FeedbackRecord, RetrievalTrace as VerdictRetrievalTrace,
+    },
+    CaseAttachment, CaseRecord, CaseStore, QaPipeline, Verdict, VerdictOptions, VerdictPipeline,
+    VerdictRecord,
 };
 
 use crate::state::AppState;
@@ -680,6 +689,7 @@ pub async fn test_provider(
             temperature: Some(0.0),
             json_schema: None,
             allow_web_search: false,
+            images: Vec::new(),
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -906,6 +916,9 @@ pub struct CaseRunResponse {
     pub case: CaseRecord,
     pub verdict_record: VerdictRecord,
     pub verdict: Verdict,
+    /// Attachments persisted alongside this case (empty when none were
+    /// provided). Order matches the `[A1..AN]` refs in the verdict.
+    pub attachments: Vec<CaseAttachment>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -915,6 +928,11 @@ pub struct CaseRunRequest {
     pub question: String,
     pub provider_id: String,
     pub model: Option<String>,
+    /// Absolute paths of files the clinician attached to this case.
+    /// Each one is copied under the workspace, de-identified, and made
+    /// available to the prompt as a `[A{n}]` evidence block.
+    #[serde(default)]
+    pub attached_file_paths: Vec<String>,
 }
 
 #[tauri::command]
@@ -922,7 +940,17 @@ pub async fn run_case(
     state: State<'_, AppState>,
     request: CaseRunRequest,
 ) -> CommandResult<CaseRunResponse> {
-    let workspace = workspace_manager(&state)
+    run_case_impl(&state, request).await
+}
+
+/// Free-function body of [`run_case`] so the batch runner can reuse it
+/// without going through the Tauri IPC layer. Kept in sync with
+/// [`run_case`] line-for-line — if you change one, change the other.
+pub(crate) async fn run_case_impl(
+    state: &AppState,
+    request: CaseRunRequest,
+) -> CommandResult<CaseRunResponse> {
+    let workspace = workspace_manager(state)
         .load(&request.workspace_id)
         .map_err(|e| e.to_string())?;
     let api_key = if request.provider_id == "ollama" {
@@ -941,15 +969,15 @@ pub async fn run_case(
     )?;
 
     let embedder = Arc::clone(&state.embedder);
-    let repo = get_repo(&state, &workspace.id).await?;
-    let store = case_store_arc(&state, &workspace.id)?;
+    let repo = get_repo(state, &workspace.id).await?;
+    let store = case_store_arc(state, &workspace.id)?;
     let pipeline = VerdictPipeline::new(
         workspace.clone(),
         Box::new(PipelineDeidentifier::new()),
         embedder,
         repo,
-        provider,
-        store,
+        Arc::clone(&provider),
+        Arc::clone(&store),
     );
     let mut options = VerdictOptions::default();
     let cfg = state.config.lock().map_err(|_| "config poisoned")?.clone();
@@ -957,15 +985,692 @@ pub async fn run_case(
     if let Some(lang) = workspace.language.clone() {
         options.output_language = lang;
     }
+
+    // Stage attachments BEFORE the LLM call so we can pass them into the
+    // pipeline and pre-allocate a case id that owns the on-disk folder.
+    let case_id_for_attachments = format!("case-{}", uuid::Uuid::new_v4());
+    let attachments = if request.attached_file_paths.is_empty() {
+        Vec::new()
+    } else {
+        let cases_root = state.paths.workspace_dir(&workspace.id).join("cases");
+        let deid = PipelineDeidentifier::new();
+        let paths: Vec<std::path::PathBuf> = request
+            .attached_file_paths
+            .iter()
+            .map(std::path::PathBuf::from)
+            .collect();
+        ingest_case_attachments(paths, &case_id_for_attachments, &cases_root, &deid)
+            .await
+            .map_err(|e| e.to_string())?
+    };
+
     let run = pipeline
-        .run(&request.text, &request.question, &options)
+        .run(&request.text, &request.question, &attachments, &options)
         .await
         .map_err(|e| e.to_string())?;
+
+    // Re-stamp attachments with the canonical case id minted by the
+    // pipeline and move them to the final per-case directory. We do all
+    // file IO first (await-friendly) and only acquire the DB lock once,
+    // synchronously, to avoid holding a non-Send guard across awaits.
+    let mut moved_attachments = Vec::with_capacity(attachments.len());
+    let workspace_cases = state.paths.workspace_dir(&workspace.id).join("cases");
+    if !attachments.is_empty() {
+        let final_dir = workspace_cases.join(&run.case.id).join("attachments");
+        if let Err(e) = tokio::fs::create_dir_all(&final_dir).await {
+            tracing::warn!(error = %e, "could not create attachments dir for case");
+        }
+        for mut att in attachments {
+            att.case_id = run.case.id.clone();
+            let src = std::path::PathBuf::from(&att.stored_path);
+            if let Some(filename) = src.file_name() {
+                let dst = final_dir.join(filename);
+                if src != dst {
+                    if let Err(e) = tokio::fs::rename(&src, &dst).await {
+                        tracing::debug!(error = %e, src = %src.display(), "could not move attachment to final dir");
+                    } else {
+                        att.stored_path = dst.to_string_lossy().into_owned();
+                    }
+                }
+            }
+            moved_attachments.push(att);
+        }
+        // Best-effort: remove the now-empty temp directory minted during
+        // ingest. Ignore errors — leftover empty dirs are harmless.
+        let temp_dir = workspace_cases.join(&case_id_for_attachments);
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    }
+
+    // Persist DB rows synchronously, in its own scoped block, so the
+    // MutexGuard is dropped before any subsequent code that might await.
+    let persisted_attachments = {
+        let store_guard = store.lock().map_err(|_| "store poisoned")?;
+        for att in &moved_attachments {
+            if let Err(e) = store_guard.insert_attachment(att) {
+                tracing::warn!(error = ?e, "could not persist attachment row");
+            }
+        }
+        moved_attachments
+    };
+
     Ok(CaseRunResponse {
         case: run.case,
         verdict_record: run.verdict_record,
         verdict: run.verdict,
+        attachments: persisted_attachments,
     })
+}
+
+#[tauri::command]
+pub fn list_case_attachments(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    case_id: String,
+) -> CommandResult<Vec<CaseAttachment>> {
+    let store = case_store_arc(&state, &workspace_id)?;
+    let store = store.lock().map_err(|_| "store poisoned")?;
+    store
+        .list_attachments_for_case(&case_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_deliberation_trace(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    verdict_id: String,
+) -> CommandResult<Option<DeliberationTrace>> {
+    let store = case_store_arc(&state, &workspace_id)?;
+    let store = store.lock().map_err(|_| "store poisoned")?;
+    store
+        .get_deliberation_trace(&verdict_id)
+        .map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Deliberative mode — multi-pass committee with streaming progress events
+// ---------------------------------------------------------------------------
+
+/// Convert a stored attachment to an `ImageInput` for vision providers.
+/// Returns `None` for non-image attachments, missing files, or unreadable
+/// bytes (logged but never fatal — the caller continues with the rest).
+async fn load_image_attachment(att: &CaseAttachment) -> Option<ImageInput> {
+    use base64::Engine as _;
+    if att.doc_type != "image" {
+        return None;
+    }
+    let bytes = match tokio::fs::read(&att.stored_path).await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(error = %e, path = %att.stored_path, "could not read attachment for vision");
+            return None;
+        }
+    };
+    let base64_data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let media_type = if att.mime.is_empty() {
+        "image/png".to_owned()
+    } else {
+        att.mime.clone()
+    };
+    Some(ImageInput {
+        media_type,
+        base64_data,
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DeliberationEventDto {
+    PhaseStarted { phase: String },
+    PhaseCompleted { phase: String, output: String },
+    PhaseFailed { phase: String, error: String },
+    Done { verdict_json: String },
+}
+
+impl DeliberationEventDto {
+    fn from_event(ev: &DeliberationEvent) -> Self {
+        match ev {
+            DeliberationEvent::PhaseStarted { phase } => Self::PhaseStarted {
+                phase: phase.as_str().to_owned(),
+            },
+            DeliberationEvent::PhaseCompleted { phase, output } => Self::PhaseCompleted {
+                phase: phase.as_str().to_owned(),
+                output: output.clone(),
+            },
+            DeliberationEvent::PhaseFailed { phase, error } => Self::PhaseFailed {
+                phase: phase.as_str().to_owned(),
+                error: error.clone(),
+            },
+            DeliberationEvent::Done { verdict_json } => Self::Done {
+                verdict_json: verdict_json.clone(),
+            },
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn run_case_deliberated(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    request: CaseRunRequest,
+) -> CommandResult<CaseRunResponse> {
+    run_case_deliberated_impl(&app, &state, request).await
+}
+
+/// Free-function body of [`run_case_deliberated`] for batch reuse.
+pub(crate) async fn run_case_deliberated_impl(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    request: CaseRunRequest,
+) -> CommandResult<CaseRunResponse> {
+    let workspace = workspace_manager(state)
+        .load(&request.workspace_id)
+        .map_err(|e| e.to_string())?;
+    let api_key = if request.provider_id == "ollama" {
+        String::new()
+    } else {
+        match secrets::load(&request.provider_id).map_err(|e| e.to_string())? {
+            Some(k) => k,
+            None => return err(format!("no API key for `{}`", request.provider_id)),
+        }
+    };
+    let provider = build_provider(
+        &request.provider_id,
+        &api_key,
+        request.model.clone(),
+        state.paths.config_dir(),
+    )?;
+
+    let store = case_store_arc(state, &workspace.id)?;
+
+    // 1) De-identify the case text up-front (the deliberation works on the
+    //    masked text only — same invariant as the quick pipeline).
+    let deid = PipelineDeidentifier::new();
+    let deident_result = deid.deidentify(&request.text).map_err(|e| e.to_string())?;
+    let masked_text = deident_result.masked_text.clone();
+    let deident_pipeline_id = deident_result.pipeline_id.to_owned();
+
+    // 2) Ingest attachments (same flow as run_case — local-only).
+    let case_id_for_attachments = format!("case-{}", uuid::Uuid::new_v4());
+    let cases_root = state.paths.workspace_dir(&workspace.id).join("cases");
+    let attachments = if request.attached_file_paths.is_empty() {
+        Vec::new()
+    } else {
+        let paths: Vec<std::path::PathBuf> = request
+            .attached_file_paths
+            .iter()
+            .map(std::path::PathBuf::from)
+            .collect();
+        ingest_case_attachments(paths, &case_id_for_attachments, &cases_root, &deid)
+            .await
+            .map_err(|e| e.to_string())?
+    };
+
+    // 3) Retrieve workspace knowledge-base evidence + similar past cases
+    //    using the same plumbing as the quick pipeline.
+    let cfg = state.config.lock().map_err(|_| "config poisoned")?.clone();
+    let mut options = VerdictOptions::default();
+    options.top_k = cfg.rag.top_k;
+    if let Some(lang) = workspace.language.clone() {
+        options.output_language = lang;
+    }
+
+    let embedder = Arc::clone(&state.embedder);
+    let repo = get_repo(state, &workspace.id).await?;
+    let masked_for_embed = masked_text.clone();
+    let case_embedding = tokio::task::spawn_blocking(move || embedder.embed(&[masked_for_embed]))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .next()
+        .ok_or_else(|| "embedder returned no vectors".to_string())?;
+
+    let mut evidence_chunks: Vec<DeliberationEvidence> = Vec::new();
+    let mut evidence_refs: Vec<String> = Vec::new();
+    if options.top_k > 0 {
+        let hits = repo
+            .search(&case_embedding, options.top_k)
+            .await
+            .map_err(|e| e.to_string())?;
+        for (i, h) in hits.iter().enumerate() {
+            let details = repo.show(&h.document_id).map_err(|e| e.to_string())?;
+            let (title, doc_type) = match details {
+                Some(d) => (
+                    d.record.title,
+                    format!("{:?}", d.record.doc_type).to_lowercase(),
+                ),
+                None => (h.document_id.clone(), "unknown".into()),
+            };
+            evidence_chunks.push(DeliberationEvidence {
+                document_title: title,
+                doc_type,
+                snippet: truncate_str(&h.text, 1_200),
+            });
+            evidence_refs.push(format!("E{}", i + 1));
+        }
+    }
+
+    let past_hits = {
+        let g = store.lock().map_err(|_| "store poisoned")?;
+        g.similar_past_cases(
+            &case_embedding,
+            options.past_cases_k,
+            options.past_cases_min_similarity,
+        )
+        .map_err(|e| e.to_string())?
+    };
+    let past_cases: Vec<DeliberationPastCase> = past_hits
+        .iter()
+        .map(|h| DeliberationPastCase {
+            feedback: h.feedback_kind.map_or("none", |k| k.as_db_str()).to_owned(),
+            feedback_reason: h.feedback_reason.clone().unwrap_or_default(),
+            case_summary: h.case_summary.clone(),
+            verdict_summary: h.verdict_summary.clone(),
+        })
+        .collect();
+    let past_refs: Vec<String> = (1..=past_cases.len()).map(|i| format!("P{i}")).collect();
+    let attachment_refs: Vec<String> = (1..=attachments.len()).map(|i| format!("A{i}")).collect();
+
+    let mut allowed: std::collections::HashSet<String> = evidence_refs.iter().cloned().collect();
+    for r in &past_refs {
+        allowed.insert(r.clone());
+    }
+    for r in &attachment_refs {
+        allowed.insert(r.clone());
+    }
+
+    // 4) Build the image set ONCE, before the deliberation. Images live
+    //    in memory only for the duration of this call.
+    let mut images: Vec<ImageInput> = Vec::new();
+    for att in &attachments {
+        if let Some(img) = load_image_attachment(att).await {
+            images.push(img);
+        }
+    }
+
+    let specialty = workspace
+        .specialty
+        .clone()
+        .unwrap_or_else(|| "medicina general".to_owned());
+
+    let inputs = DeliberationInputs {
+        specialty,
+        output_language: options.output_language.clone(),
+        rules_block: options.rules_block.clone(),
+        masked_case_text: masked_text.clone(),
+        user_question: request.question.clone(),
+        evidence_chunks,
+        past_cases,
+        attachments: attachments.clone(),
+        images,
+    };
+
+    // 5) Wire the streaming channel: spawn a task that forwards every
+    //    event to the frontend as a Tauri `deliberation:progress` event.
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<DeliberationEvent>();
+    let app_for_forward = app.clone();
+    let forward_task = tokio::spawn(async move {
+        while let Some(ev) = rx.recv().await {
+            let _ = app_for_forward.emit(
+                "deliberation:progress",
+                DeliberationEventDto::from_event(&ev),
+            );
+        }
+    });
+
+    let deliberation_started = chrono::Utc::now();
+    let deliberation_started_inst = std::time::Instant::now();
+    let outcome = run_deliberation(
+        Arc::clone(&provider),
+        inputs,
+        allowed,
+        DeliberationOptions::default(),
+        tx,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    let elapsed_ms = deliberation_started_inst.elapsed().as_millis() as u64;
+    let _ = forward_task.await;
+
+    // 6) Persist case + verdict + trace. Same shape as the quick path so
+    //    list_cases / show_case continue to work uniformly.
+    let case_id = format!("case-{}", uuid::Uuid::new_v4());
+    let now = chrono::Utc::now();
+    let case = CaseRecord {
+        id: case_id.clone(),
+        created_at: now,
+        workspace_id: workspace.id.clone(),
+        question: request.question.clone(),
+        original_text: request.text.clone(),
+        masked_text: masked_text.clone(),
+        deident_pipeline_id,
+        status: conclave_verdict::CaseStatus::Completed,
+    };
+    let verdict_record = VerdictRecord {
+        id: format!("verdict-{}", uuid::Uuid::new_v4()),
+        case_id: case.id.clone(),
+        prompt_version: "verdict_v2_deliberated".to_owned(),
+        provider_id: provider.id().to_owned(),
+        model: outcome.model.clone(),
+        latency_ms: elapsed_ms,
+        input_tokens: outcome.trace.total_input_tokens,
+        output_tokens: outcome.trace.total_output_tokens,
+        output_json: serde_json::to_string(&outcome.verdict).unwrap_or_else(|_| "{}".into()),
+        created_at: now,
+    };
+    let mut trace = outcome.trace.clone();
+    trace.verdict_id = verdict_record.id.clone();
+    trace.created_at = deliberation_started;
+    trace.duration_ms = elapsed_ms;
+
+    let retrieval = VerdictRetrievalTrace {
+        verdict_id: verdict_record.id.clone(),
+        evidence_refs,
+        past_cases_refs: past_refs,
+        online_evidence_refs: Vec::new(),
+        attachment_refs,
+    };
+
+    // Persist case-memory entry so future cases can retrieve this one.
+    let case_memory_summary = truncate_str(&outcome.verdict.case_summary, 1_200);
+    let verdict_summary = truncate_str(
+        &format!(
+            "{} | {}",
+            outcome.verdict.primary_recommendation.action, outcome.verdict.certainty_justification
+        ),
+        1_200,
+    );
+
+    // Move attachments to the final case-id directory, mirroring run_case.
+    let mut moved_attachments = Vec::with_capacity(attachments.len());
+    if !attachments.is_empty() {
+        let workspace_cases = state.paths.workspace_dir(&workspace.id).join("cases");
+        let final_dir = workspace_cases.join(&case_id).join("attachments");
+        if let Err(e) = tokio::fs::create_dir_all(&final_dir).await {
+            tracing::warn!(error = %e, "could not create attachments dir");
+        }
+        for mut att in attachments {
+            att.case_id = case_id.clone();
+            let src = std::path::PathBuf::from(&att.stored_path);
+            if let Some(filename) = src.file_name() {
+                let dst = final_dir.join(filename);
+                if src != dst {
+                    if let Err(e) = tokio::fs::rename(&src, &dst).await {
+                        tracing::debug!(error = %e, "could not move attachment to final dir");
+                    } else {
+                        att.stored_path = dst.to_string_lossy().into_owned();
+                    }
+                }
+            }
+            moved_attachments.push(att);
+        }
+        let temp_dir = workspace_cases.join(&case_id_for_attachments);
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    }
+
+    let persisted_attachments = {
+        let g = store.lock().map_err(|_| "store poisoned")?;
+        g.insert_case(&case).map_err(|e| e.to_string())?;
+        g.insert_verdict(&verdict_record)
+            .map_err(|e| e.to_string())?;
+        g.insert_trace(&retrieval).map_err(|e| e.to_string())?;
+        g.insert_deliberation_trace(&trace)
+            .map_err(|e| e.to_string())?;
+        g.upsert_case_memory(
+            &case.id,
+            &case_embedding,
+            &case_memory_summary,
+            &verdict_summary,
+        )
+        .map_err(|e| e.to_string())?;
+        for att in &moved_attachments {
+            if let Err(e) = g.insert_attachment(att) {
+                tracing::warn!(error = ?e, "could not persist attachment row");
+            }
+        }
+        moved_attachments
+    };
+
+    Ok(CaseRunResponse {
+        case,
+        verdict_record,
+        verdict: outcome.verdict,
+        attachments: persisted_attachments,
+    })
+}
+
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    for (count, c) in s.chars().enumerate() {
+        if count >= max_chars {
+            out.push('…');
+            break;
+        }
+        out.push(c);
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Batch case ingestion — process several patients in one run
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn parse_batch_folder(
+    folder_path: String,
+    default_question: String,
+) -> CommandResult<Vec<crate::batch::BatchCaseInput>> {
+    crate::batch::parse_batch_folder(std::path::Path::new(&folder_path), &default_question)
+}
+
+#[tauri::command]
+pub fn propose_case_grouping(
+    paths: Vec<String>,
+    default_question: String,
+) -> CommandResult<Vec<crate::batch::BatchCaseInput>> {
+    let pathbufs: Vec<std::path::PathBuf> =
+        paths.into_iter().map(std::path::PathBuf::from).collect();
+    Ok(crate::batch::propose_grouping_from_files(
+        pathbufs,
+        &default_question,
+    ))
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BatchRunRequest {
+    pub workspace_id: String,
+    pub provider_id: String,
+    pub model: Option<String>,
+    /// When `true`, every case is processed via the deliberative pipeline.
+    /// Defaults to `false` for the cheaper quick-mode pass.
+    #[serde(default)]
+    pub deliberative: bool,
+    pub cases: Vec<crate::batch::BatchCaseInput>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BatchRunSummary {
+    pub completed: usize,
+    pub failed: usize,
+    pub cancelled: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum BatchEventDto {
+    CaseQueued {
+        index: usize,
+        patient_label: String,
+    },
+    CaseStarted {
+        index: usize,
+        patient_label: String,
+    },
+    CaseCompleted {
+        index: usize,
+        patient_label: String,
+        case_id: String,
+    },
+    CaseFailed {
+        index: usize,
+        patient_label: String,
+        error: String,
+    },
+    CaseCancelled {
+        index: usize,
+        patient_label: String,
+    },
+    BatchDone {
+        completed: usize,
+        failed: usize,
+        cancelled: usize,
+    },
+}
+
+#[tauri::command]
+pub async fn run_batch_cases(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    request: BatchRunRequest,
+) -> CommandResult<BatchRunSummary> {
+    // Reset the cancellation flag for this batch.
+    state
+        .batch_cancel
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+
+    // Announce every case as queued so the UI can render the full table
+    // before work begins.
+    for (i, c) in request.cases.iter().enumerate() {
+        let _ = app.emit(
+            "batch:progress",
+            BatchEventDto::CaseQueued {
+                index: i,
+                patient_label: c.patient_label.clone(),
+            },
+        );
+    }
+
+    // Deliberative mode is heavier — keep the concurrency lower to avoid
+    // hammering the provider rate limit. Quick mode can go a bit wider.
+    let permits = if request.deliberative { 1 } else { 2 };
+
+    use futures::stream::{self, StreamExt};
+
+    // Reference borrows from the outer fn — captured by every async block
+    // below. `buffer_unordered` keeps the futures alive on the same
+    // function frame so non-`'static` borrows are fine.
+    let state_ref: &AppState = &state;
+    let workspace_id = request.workspace_id.clone();
+    let provider_id = request.provider_id.clone();
+    let model = request.model.clone();
+    let deliberative = request.deliberative;
+    let app_ref = app.clone();
+    let cancel_ref = Arc::clone(&state.batch_cancel);
+
+    let outcomes: Vec<BatchOutcome> = stream::iter(request.cases.into_iter().enumerate())
+        .map(|(idx, case)| {
+            let workspace_id = workspace_id.clone();
+            let provider_id = provider_id.clone();
+            let model = model.clone();
+            let app_in_task = app_ref.clone();
+            let cancel = Arc::clone(&cancel_ref);
+            async move {
+                if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                    let _ = app_in_task.emit(
+                        "batch:progress",
+                        BatchEventDto::CaseCancelled {
+                            index: idx,
+                            patient_label: case.patient_label.clone(),
+                        },
+                    );
+                    return BatchOutcome::Cancelled;
+                }
+                let _ = app_in_task.emit(
+                    "batch:progress",
+                    BatchEventDto::CaseStarted {
+                        index: idx,
+                        patient_label: case.patient_label.clone(),
+                    },
+                );
+                let req = CaseRunRequest {
+                    workspace_id,
+                    text: case.text,
+                    question: case.question,
+                    provider_id,
+                    model,
+                    attached_file_paths: case.attached_file_paths,
+                };
+                let result = if deliberative {
+                    run_case_deliberated_impl(&app_in_task, state_ref, req).await
+                } else {
+                    run_case_impl(state_ref, req).await
+                };
+                match result {
+                    Ok(resp) => {
+                        let _ = app_in_task.emit(
+                            "batch:progress",
+                            BatchEventDto::CaseCompleted {
+                                index: idx,
+                                patient_label: case.patient_label.clone(),
+                                case_id: resp.case.id.clone(),
+                            },
+                        );
+                        BatchOutcome::Completed
+                    }
+                    Err(e) => {
+                        let _ = app_in_task.emit(
+                            "batch:progress",
+                            BatchEventDto::CaseFailed {
+                                index: idx,
+                                patient_label: case.patient_label.clone(),
+                                error: e,
+                            },
+                        );
+                        BatchOutcome::Failed
+                    }
+                }
+            }
+        })
+        .buffer_unordered(permits)
+        .collect()
+        .await;
+
+    let mut summary = BatchRunSummary {
+        completed: 0,
+        failed: 0,
+        cancelled: 0,
+    };
+    for o in outcomes {
+        match o {
+            BatchOutcome::Completed => summary.completed += 1,
+            BatchOutcome::Failed => summary.failed += 1,
+            BatchOutcome::Cancelled => summary.cancelled += 1,
+        }
+    }
+    let _ = app.emit(
+        "batch:progress",
+        BatchEventDto::BatchDone {
+            completed: summary.completed,
+            failed: summary.failed,
+            cancelled: summary.cancelled,
+        },
+    );
+    Ok(summary)
+}
+
+#[tauri::command]
+pub fn batch_cancel(state: State<'_, AppState>) -> CommandResult<()> {
+    state
+        .batch_cancel
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    Ok(())
+}
+
+enum BatchOutcome {
+    Completed,
+    Failed,
+    Cancelled,
 }
 
 #[tauri::command]

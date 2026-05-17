@@ -118,7 +118,7 @@ pub(crate) async fn run(ctx: &CommandContext, args: CaseArgs) -> Result<()> {
                 options.output_language = lang;
             }
             let run = pipeline
-                .run(&case_text, &question, &options)
+                .run(&case_text, &question, &[], &options)
                 .await
                 .context("verdict pipeline failed")?;
 

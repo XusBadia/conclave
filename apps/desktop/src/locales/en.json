@@ -36,6 +36,8 @@
     "subtitle": "Local-first clinical decision support · v0.1",
     "header": "Before we start",
     "body": "Conclave is an experimental clinical decision-support tool. It is <0>not a medical device</0> and does <1>not replace the judgement of a qualified clinician</1>. Outputs may be incomplete, biased or wrong. Always validate recommendations against primary sources and institutional protocols before acting on them.",
+    "privacy_title": "Patient data protection",
+    "privacy_body": "Before sending a case or any attached file to the AI, Conclave automatically removes patient names, dates, national IDs (DNI/NIE), medical record numbers, phone numbers, email addresses and ages above 89. Conclave runs locally: your documents are never sent to a Conclave server.",
     "ack": "By continuing you acknowledge that you have read and understood the above and accept full responsibility for clinical decisions.",
     "cta": "I understand — continue"
   },
@@ -71,6 +73,7 @@
     "ingest_summary": "Added {{ingested}} · already there {{skipped}} · errors {{failed}}",
     "empty_docs": "No documents yet. Add a PDF, DOCX, TXT, MD or HTML — or drop it here.",
     "confirm_remove": "Remove this document and its fragments?",
+    "privacy_warning": "<0>For guidelines, protocols and references only.</0> Do not upload patient documents here — those belong in the Cases tab, where they are automatically de-identified before being sent to the AI.",
     "dropzone_overlay": "Drop files or folders here",
     "dropzone_hint": "You can also drag files and folders here",
     "stage": {
@@ -134,6 +137,7 @@
     "deid_strict_clean": "strict clean",
     "deid_strict_dirty": "strict dirty",
     "deid_hint": "Paste a case on the left and hit <0>Preview de-id</0> to see exactly what will leave this device.",
+    "privacy_banner": "<0>Patient data is protected.</0> Before sending the case or any attachment to the AI, we automatically remove names, dates, national IDs, medical record numbers, phone numbers and email addresses.",
     "back": "← Back to cases",
     "accept": "Accept",
     "modify": "Mark modified",

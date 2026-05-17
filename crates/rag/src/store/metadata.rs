@@ -114,6 +114,7 @@ const fn doc_type_as_db_str(d: DocType) -> &'static str {
         DocType::Txt => "txt",
         DocType::Md => "md",
         DocType::Html => "html",
+        DocType::Image => "image",
     }
 }
 
@@ -124,6 +125,7 @@ fn doc_type_from_db_str(s: &str) -> Option<DocType> {
         "txt" => Some(DocType::Txt),
         "md" => Some(DocType::Md),
         "html" => Some(DocType::Html),
+        "image" => Some(DocType::Image),
         _ => None,
     }
 }

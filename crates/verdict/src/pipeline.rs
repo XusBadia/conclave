@@ -35,10 +35,11 @@ use conclave_providers::{CompletionRequest, LlmProvider, Message};
 use conclave_rag::{DocumentRepository, Embedder};
 
 use crate::persistence::{
-    CaseRecord, CaseStatus, CaseStore, PastCaseHit, RetrievalTrace, VerdictRecord,
+    CaseAttachment, CaseRecord, CaseStatus, CaseStore, PastCaseHit, RetrievalTrace, VerdictRecord,
 };
 use crate::prompt::{
-    EvidenceChunkInput, PastCaseInput, PromptInputs, PromptTemplate, VERDICT_PROMPT_VERSION,
+    CaseAttachmentInput, EvidenceChunkInput, PastCaseInput, PromptInputs, PromptTemplate,
+    VERDICT_PROMPT_VERSION,
 };
 use crate::schema::Verdict;
 use crate::validation::validate_verdict;
@@ -125,11 +126,17 @@ impl VerdictPipeline {
         }
     }
 
-    /// Run the full pipeline over `case_text` + optional `question`.
+    /// Run the full pipeline over `case_text` + optional `question`,
+    /// optionally including files attached to this specific case.
+    ///
+    /// `attachments` are surfaced to the LLM as the `[A1..AN]` block.
+    /// They are *not* indexed into the workspace knowledge base — they
+    /// only inform this single verdict.
     pub async fn run(
         &self,
         case_text: &str,
         question: &str,
+        attachments: &[CaseAttachment],
         options: &VerdictOptions,
     ) -> Result<VerdictRun> {
         // 1) De-identify.
@@ -150,6 +157,10 @@ impl VerdictPipeline {
         // 4) Retrieve past cases (Phase 5).
         let past_hits = self.retrieve_past_cases(&case_embedding, options)?;
         let past_refs: Vec<String> = (1..=past_hits.len()).map(|i| format!("P{i}")).collect();
+
+        // 4b) Refs for case-scoped attachments.
+        let attachment_refs: Vec<String> =
+            (1..=attachments.len()).map(|i| format!("A{i}")).collect();
 
         // 5) Assemble prompt.
         let evidence_inputs: Vec<EvidenceChunkInput<'_>> = chunks
@@ -175,6 +186,17 @@ impl VerdictPipeline {
                 user_modifications: "",
             })
             .collect();
+        let attachment_inputs: Vec<CaseAttachmentInput<'_>> = attachments
+            .iter()
+            .enumerate()
+            .map(|(i, a)| CaseAttachmentInput {
+                index: i + 1,
+                filename: &a.original_filename,
+                doc_type: &a.doc_type,
+                snippet: &a.extracted_text,
+                needs_ocr: a.needs_ocr,
+            })
+            .collect();
         let specialty = self
             .workspace
             .specialty
@@ -187,6 +209,7 @@ impl VerdictPipeline {
             evidence_chunks: &evidence_inputs,
             external_evidence: &[],
             past_cases: &past_cases_inputs,
+            case_attachments: &attachment_inputs,
             de_identified_case_text: &masked_text,
             user_question: question,
             disclaimer: MEDICAL_DISCLAIMER,
@@ -194,7 +217,10 @@ impl VerdictPipeline {
         let prompt = PromptTemplate.render(&inputs);
 
         // 4) Call the LLM with one retry on schema / citation failure.
-        let allowed_refs: HashSet<String> = evidence_refs.iter().cloned().collect();
+        let mut allowed_refs: HashSet<String> = evidence_refs.iter().cloned().collect();
+        for r in &attachment_refs {
+            allowed_refs.insert(r.clone());
+        }
         let start = Instant::now();
         let (mut response, mut model) = self
             .call_llm(&prompt, options)
@@ -256,6 +282,7 @@ Return the JSON object only, citing only the supplied evidence ids."
             evidence_refs,
             past_cases_refs: past_refs,
             online_evidence_refs: Vec::new(),
+            attachment_refs,
         };
 
         // Case memory (Phase 5): persist the case summary embedding so it
@@ -364,6 +391,7 @@ Return the JSON object only, citing only the supplied evidence ids."
             temperature: Some(options.temperature),
             json_schema: Some(serde_json::json!({"type": "object"})),
             allow_web_search: false,
+            images: Vec::new(),
         };
         let resp = self
             .provider
@@ -460,6 +488,7 @@ mod tests {
             .run(
                 "Paciente de 60 años con disnea.",
                 "Manejo inicial?",
+                &[],
                 &VerdictOptions::default(),
             )
             .await

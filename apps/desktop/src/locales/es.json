@@ -36,6 +36,8 @@
     "subtitle": "Soporte clínico local-first · v0.1",
     "header": "Antes de empezar",
     "body": "Conclave es una herramienta experimental de soporte a la decisión clínica. <0>No es un dispositivo médico</0> y <1>no sustituye el criterio de un clínico cualificado</1>. Las respuestas pueden ser incompletas, sesgadas o erróneas. Valida siempre cualquier recomendación contra las fuentes primarias y los protocolos institucionales antes de actuar.",
+    "privacy_title": "Protección de datos del paciente",
+    "privacy_body": "Antes de enviar el texto de un caso o sus adjuntos a la IA, Conclave elimina automáticamente nombres, fechas, DNI/NIE, número de historia clínica, teléfonos, correos electrónicos y edades superiores a 89 años. Conclave funciona en local: tus documentos no se envían a ningún servidor de Conclave.",
     "ack": "Al continuar reconoces que has leído y entendido lo anterior y aceptas plena responsabilidad sobre las decisiones clínicas.",
     "cta": "Entiendo — continuar"
   },
@@ -71,6 +73,7 @@
     "ingest_summary": "Añadidos {{ingested}} · ya estaban {{skipped}} · errores {{failed}}",
     "empty_docs": "Aún no hay documentos. Añade un PDF, DOCX, TXT, MD o HTML — o arrástralo aquí.",
     "confirm_remove": "¿Eliminar este documento y sus fragmentos?",
+    "privacy_warning": "<0>Solo para guías, protocolos y bibliografía.</0> No subas aquí documentos con datos de pacientes — esos van en la pestaña Casos, donde se eliminan automáticamente antes de enviarlos a la IA.",
     "dropzone_overlay": "Suelta los archivos o carpetas aquí",
     "dropzone_hint": "También puedes arrastrar archivos y carpetas aquí",
     "stage": {
@@ -134,6 +137,7 @@
     "deid_strict_clean": "strict limpio",
     "deid_strict_dirty": "strict sucio",
     "deid_hint": "Pega un caso a la izquierda y pulsa <0>Vista previa de des-id</0> para ver exactamente qué saldrá de este equipo.",
+    "privacy_banner": "<0>Datos del paciente protegidos.</0> Antes de enviar el caso o cualquier adjunto a la IA, eliminamos automáticamente nombres, fechas, DNI/NIE, NHC, teléfonos y correos electrónicos.",
     "back": "← Volver a casos",
     "accept": "Aceptar",
     "modify": "Marcar como modificado",

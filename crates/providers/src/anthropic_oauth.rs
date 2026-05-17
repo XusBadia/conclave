@@ -254,11 +254,11 @@ impl LlmProvider for AnthropicOAuthProvider {
                 MessageRole::System => system_parts.push(m.content),
                 MessageRole::User => convo.push(OauthMessage {
                     role: "user",
-                    content: m.content,
+                    content: OauthContentField::Text(m.content),
                 }),
                 MessageRole::Assistant => convo.push(OauthMessage {
                     role: "assistant",
-                    content: m.content,
+                    content: OauthContentField::Text(m.content),
                 }),
             }
         }
@@ -267,6 +267,31 @@ impl LlmProvider for AnthropicOAuthProvider {
                 "anthropic-oauth requires at least one user/assistant message".into(),
             ));
         }
+
+        // Attach images to the last user message when present.
+        if !req.images.is_empty() {
+            let last_user_idx = convo
+                .iter()
+                .rposition(|m| m.role == "user")
+                .unwrap_or(convo.len());
+            if last_user_idx == convo.len() {
+                convo.push(OauthMessage {
+                    role: "user",
+                    content: OauthContentField::Blocks(Vec::new()),
+                });
+            }
+            convo[last_user_idx].promote_to_blocks();
+            for img in &req.images {
+                convo[last_user_idx].push_block(OauthBlock::Image {
+                    source: OauthImageSource {
+                        kind: "base64",
+                        media_type: img.media_type.clone(),
+                        data: img.base64_data.clone(),
+                    },
+                });
+            }
+        }
+
         let model = if req.model.is_empty() {
             self.default_model.clone()
         } else {
@@ -465,7 +490,47 @@ struct OauthRequest {
 #[derive(Serialize)]
 struct OauthMessage {
     role: &'static str,
-    content: String,
+    content: OauthContentField,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum OauthContentField {
+    Text(String),
+    Blocks(Vec<OauthBlock>),
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum OauthBlock {
+    Text { text: String },
+    Image { source: OauthImageSource },
+}
+
+#[derive(Serialize)]
+struct OauthImageSource {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    media_type: String,
+    data: String,
+}
+
+impl OauthMessage {
+    fn promote_to_blocks(&mut self) {
+        if let OauthContentField::Text(t) = &self.content {
+            let initial = if t.is_empty() {
+                Vec::new()
+            } else {
+                vec![OauthBlock::Text { text: t.clone() }]
+            };
+            self.content = OauthContentField::Blocks(initial);
+        }
+    }
+    fn push_block(&mut self, block: OauthBlock) {
+        if let OauthContentField::Blocks(blocks) = &mut self.content {
+            blocks.push(block);
+        }
+    }
 }
 
 #[derive(Deserialize)]

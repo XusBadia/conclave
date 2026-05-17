@@ -78,6 +78,8 @@ impl LlmProvider for OpenAiProvider {
 
     async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse, ProviderError> {
         let url = format!("{}/v1/chat/completions", self.base_url);
+        let mut messages = build_chat_messages(req.messages.as_slice());
+        attach_images_to_last_user(&mut messages, &req.images);
         chat_completions_call(
             &self.client,
             &url,
@@ -91,7 +93,7 @@ impl LlmProvider for OpenAiProvider {
                 } else {
                     req.model.clone()
                 },
-                messages: build_chat_messages(req.messages.as_slice()),
+                messages,
                 max_tokens: req.max_output_tokens,
                 temperature: req.temperature,
                 response_format: req.json_schema.as_ref().map(|_| ResponseFormat {
@@ -113,9 +115,48 @@ pub(crate) fn build_chat_messages(messages: &[crate::types::Message]) -> Vec<Cha
                 MessageRole::User => "user",
                 MessageRole::Assistant => "assistant",
             },
-            content: m.content.clone(),
+            content: ChatContentField::Text(m.content.clone()),
         })
         .collect()
+}
+
+/// Attach vision images to the last `user` message, converting its content
+/// from a plain string into an array of content blocks if needed. No-op
+/// when `images` is empty.
+pub(crate) fn attach_images_to_last_user(
+    messages: &mut Vec<ChatMessage>,
+    images: &[crate::types::ImageInput],
+) {
+    if images.is_empty() {
+        return;
+    }
+    let last_user_idx = match messages.iter().rposition(|m| m.role == "user") {
+        Some(i) => i,
+        None => {
+            messages.push(ChatMessage {
+                role: "user",
+                content: ChatContentField::Blocks(Vec::new()),
+            });
+            messages.len() - 1
+        }
+    };
+    if let ChatContentField::Text(t) = &messages[last_user_idx].content {
+        let initial = if t.is_empty() {
+            Vec::new()
+        } else {
+            vec![ChatBlock::Text { text: t.clone() }]
+        };
+        messages[last_user_idx].content = ChatContentField::Blocks(initial);
+    }
+    if let ChatContentField::Blocks(blocks) = &mut messages[last_user_idx].content {
+        for img in images {
+            blocks.push(ChatBlock::ImageUrl {
+                image_url: ChatImageUrl {
+                    url: format!("data:{};base64,{}", img.media_type, img.base64_data),
+                },
+            });
+        }
+    }
 }
 
 /// HTTP headers passed to a chat-completions call.
@@ -140,7 +181,26 @@ pub(crate) struct ChatBody {
 #[derive(Serialize)]
 pub(crate) struct ChatMessage {
     pub role: &'static str,
-    pub content: String,
+    pub content: ChatContentField,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+pub(crate) enum ChatContentField {
+    Text(String),
+    Blocks(Vec<ChatBlock>),
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(crate) enum ChatBlock {
+    Text { text: String },
+    ImageUrl { image_url: ChatImageUrl },
+}
+
+#[derive(Serialize)]
+pub(crate) struct ChatImageUrl {
+    pub url: String,
 }
 
 #[derive(Serialize)]

@@ -134,10 +134,26 @@ export interface VerdictRecord {
   created_at: string;
 }
 
+export interface CaseAttachment {
+  id: string;
+  case_id: string;
+  position: number;
+  original_filename: string;
+  stored_path: string;
+  sha256: string;
+  doc_type: "pdf" | "docx" | "txt" | "md" | "html" | "image";
+  mime: string;
+  extracted_text: string;
+  needs_ocr: boolean;
+  byte_size: number;
+  created_at: string;
+}
+
 export interface CaseRunResponse {
   case: CaseRecord;
   verdict_record: VerdictRecord;
   verdict: Verdict;
+  attachments: CaseAttachment[];
 }
 
 export interface CaseDetail {
@@ -145,6 +161,67 @@ export interface CaseDetail {
   verdict_record: VerdictRecord | null;
   verdict: Verdict | null;
 }
+
+export type DeliberationPhase =
+  | "briefing"
+  | "drafting"
+  | "redteam"
+  | "finalize";
+
+export type DeliberationEvent =
+  | { kind: "phase_started"; phase: DeliberationPhase }
+  | { kind: "phase_completed"; phase: DeliberationPhase; output: string }
+  | { kind: "phase_failed"; phase: DeliberationPhase; error: string }
+  | { kind: "done"; verdict_json: string };
+
+export interface DeliberationTrace {
+  id: string;
+  verdict_id: string;
+  briefing_output: string | null;
+  drafting_output: string | null;
+  redteam_output: string | null;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  duration_ms: number;
+  vision_used: boolean;
+  created_at: string;
+}
+
+export interface BatchCaseInput {
+  patient_label: string;
+  text: string;
+  question: string;
+  attached_file_paths: string[];
+}
+
+export interface BatchRunSummary {
+  completed: number;
+  failed: number;
+  cancelled: number;
+}
+
+export type BatchEvent =
+  | { kind: "case_queued"; index: number; patient_label: string }
+  | { kind: "case_started"; index: number; patient_label: string }
+  | {
+      kind: "case_completed";
+      index: number;
+      patient_label: string;
+      case_id: string;
+    }
+  | {
+      kind: "case_failed";
+      index: number;
+      patient_label: string;
+      error: string;
+    }
+  | { kind: "case_cancelled"; index: number; patient_label: string }
+  | {
+      kind: "batch_done";
+      completed: number;
+      failed: number;
+      cancelled: number;
+    };
 
 // ---------------------------------------------------------------------------
 // Typed wrappers
@@ -220,17 +297,56 @@ export const ipc = {
     question: string;
     provider_id: string;
     model?: string;
+    attached_file_paths?: string[];
   }) => invoke<CaseRunResponse>("run_case", { request: req }),
+  runCaseDeliberated: (req: {
+    workspace_id: string;
+    text: string;
+    question: string;
+    provider_id: string;
+    model?: string;
+    attached_file_paths?: string[];
+  }) => invoke<CaseRunResponse>("run_case_deliberated", { request: req }),
   listCases: (workspaceId: string, limit: number) =>
     invoke<CaseRecord[]>("list_cases", { workspaceId, limit }),
   showCase: (workspaceId: string, id: string) =>
     invoke<CaseDetail | null>("show_case", { workspaceId, id }),
+  listCaseAttachments: (workspaceId: string, caseId: string) =>
+    invoke<CaseAttachment[]>("list_case_attachments", {
+      workspaceId,
+      caseId,
+    }),
+  getDeliberationTrace: (workspaceId: string, verdictId: string) =>
+    invoke<DeliberationTrace | null>("get_deliberation_trace", {
+      workspaceId,
+      verdictId,
+    }),
   submitFeedback: (req: {
     workspace_id: string;
     case_id: string;
     kind: "accept" | "modify" | "reject";
     reason?: string;
   }) => invoke<void>("submit_feedback", { request: req }),
+
+  // Batch
+  parseBatchFolder: (folderPath: string, defaultQuestion: string) =>
+    invoke<BatchCaseInput[]>("parse_batch_folder", {
+      folderPath,
+      defaultQuestion,
+    }),
+  proposeCaseGrouping: (paths: string[], defaultQuestion: string) =>
+    invoke<BatchCaseInput[]>("propose_case_grouping", {
+      paths,
+      defaultQuestion,
+    }),
+  runBatchCases: (req: {
+    workspace_id: string;
+    provider_id: string;
+    model?: string;
+    deliberative: boolean;
+    cases: BatchCaseInput[];
+  }) => invoke<BatchRunSummary>("run_batch_cases", { request: req }),
+  batchCancel: () => invoke<void>("batch_cancel"),
 };
 
 // ---------------------------------------------------------------------------

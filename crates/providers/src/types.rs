@@ -60,6 +60,20 @@ impl Message {
     }
 }
 
+/// One image attached to a request.
+///
+/// Providers that advertise `capabilities().vision` will encode these
+/// alongside the last user message; everyone else silently ignores them
+/// so callers can pass images unconditionally.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageInput {
+    /// MIME type, e.g. `image/png`. Required for both Anthropic and
+    /// OpenAI content blocks.
+    pub media_type: String,
+    /// Raw base64 (no `data:` prefix, no surrounding whitespace).
+    pub base64_data: String,
+}
+
 /// Inference request sent to a provider.
 #[derive(Debug, Clone, Default)]
 pub struct CompletionRequest {
@@ -80,6 +94,9 @@ pub struct CompletionRequest {
     /// (e.g. Codex's `web_search_preview` tool). Providers without web
     /// support silently ignore the flag and return empty `web_citations`.
     pub allow_web_search: bool,
+    /// Images appended to the last user message for vision-capable
+    /// providers. Ignored when `capabilities().vision == false`.
+    pub images: Vec<ImageInput>,
 }
 
 impl CompletionRequest {
@@ -92,6 +109,7 @@ impl CompletionRequest {
             temperature: None,
             json_schema: None,
             allow_web_search: false,
+            images: Vec::new(),
         }
     }
 }

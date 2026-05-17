@@ -251,6 +251,29 @@ function NewCase({
               {error}
             </div>
           )}
+          <div className="flex items-start gap-2.5 rounded-md border border-ok/30 bg-ok/5 px-3 py-2 text-[12.5px] leading-relaxed text-ink-dim">
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 16 16"
+              className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ok"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <rect x="3" y="7" width="10" height="6.5" rx="1.2" />
+              <path d="M5.2 7V4.8a2.8 2.8 0 0 1 5.6 0V7" />
+            </svg>
+            <p className="min-w-0">
+              <Trans
+                i18nKey="cases.privacy_banner"
+                components={[
+                  <strong key="0" className="font-semibold text-ink" />,
+                ]}
+              />
+            </p>
+          </div>
           <Field label={t("cases.field_text")}>
             <Textarea
               value={text}

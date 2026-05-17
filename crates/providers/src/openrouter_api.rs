@@ -5,7 +5,8 @@ use async_trait::async_trait;
 
 use crate::error::ProviderError;
 use crate::openai_api::{
-    build_chat_messages, chat_completions_call, ChatBody, ChatHeaders, ResponseFormat,
+    attach_images_to_last_user, build_chat_messages, chat_completions_call, ChatBody, ChatHeaders,
+    ResponseFormat,
 };
 use crate::types::{CompletionRequest, CompletionResponse, ProviderCapabilities};
 use crate::LlmProvider;
@@ -98,7 +99,11 @@ impl LlmProvider for OpenRouterProvider {
             },
             ChatBody {
                 model,
-                messages: build_chat_messages(req.messages.as_slice()),
+                messages: {
+                    let mut m = build_chat_messages(req.messages.as_slice());
+                    attach_images_to_last_user(&mut m, &req.images);
+                    m
+                },
                 max_tokens: req.max_output_tokens,
                 temperature: req.temperature,
                 response_format: req.json_schema.as_ref().map(|_| ResponseFormat {

@@ -7,7 +7,12 @@
 
 /// Stable version string persisted alongside every generated verdict so we
 /// can reproduce the exact prompt later if the template changes.
-pub const VERDICT_PROMPT_VERSION: &str = "verdict_v1";
+///
+/// `verdict_v2` adds the `[A1..AN] CASE ATTACHMENTS` block — files
+/// attached to the specific patient case. Pre-v2 callers without
+/// attachments produce the same wire format as v1 (the block renders an
+/// explicit "none" placeholder).
+pub const VERDICT_PROMPT_VERSION: &str = "verdict_v2";
 
 /// Inputs needed to assemble the verdict prompt.
 #[derive(Debug, Clone)]
@@ -24,6 +29,8 @@ pub struct PromptInputs<'a> {
     pub external_evidence: &'a [ExternalEvidenceInput<'a>],
     /// Similar past cases (Phase 5).
     pub past_cases: &'a [PastCaseInput<'a>],
+    /// Files attached to this specific case (`[A1..AN]`).
+    pub case_attachments: &'a [CaseAttachmentInput<'a>],
     /// The de-identified case text.
     pub de_identified_case_text: &'a str,
     /// User question (defaults to "What is the recommended management?").
@@ -69,6 +76,24 @@ pub struct PastCaseInput<'a> {
     pub user_modifications: &'a str,
 }
 
+/// One file attached to the current case, rendered as `[A{index}]`.
+#[derive(Debug, Clone)]
+pub struct CaseAttachmentInput<'a> {
+    /// 1-based index — must match the `position` persisted with the file
+    /// so refs from the verdict can be traced back to the attachment row.
+    pub index: usize,
+    /// User-facing filename.
+    pub filename: &'a str,
+    /// Document type (`pdf`, `docx`, `image`, …).
+    pub doc_type: &'a str,
+    /// Text extracted from the file (already de-identified and truncated
+    /// by the orchestrator). May be empty for images without OCR.
+    pub snippet: &'a str,
+    /// `true` when no text could be recovered. The prompt explicitly
+    /// disclaims this so the model does not invent contents.
+    pub needs_ocr: bool,
+}
+
 /// Canonical verdict prompt — sole template at v1.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PromptTemplate;
@@ -79,6 +104,7 @@ impl PromptTemplate {
         let evidence = render_evidence(inputs.evidence_chunks);
         let external = render_external(inputs.external_evidence);
         let past_cases = render_past_cases(inputs.past_cases);
+        let attachments = render_attachments(inputs.case_attachments);
         let rules = if inputs.rules_block.trim().is_empty() {
             "No workspace rules defined."
         } else {
@@ -97,8 +123,14 @@ recommendations to support — never replace — the treating clinician.\n\n\
 Your output is consumed by software and must validate against the provided \
 JSON schema. Do not include any text outside the JSON object.\n\n\
 Hard rules:\n\
-- Use only the evidence supplied in the EVIDENCE and PAST_CASES blocks.\n\
-  If you cite anything not present there, the response is invalid.\n\
+- Use only the evidence supplied in the EVIDENCE, CASE ATTACHMENTS and \
+PAST_CASES blocks. If you cite anything not present there, the response \
+is invalid.\n\
+- CASE ATTACHMENTS are files the clinician supplied for this specific \
+patient. Their snippets are de-identified. Cite them with `A1..AN`.\n\
+- For attachments marked `(no text extracted)`, do not invent contents — \
+the file is an image or OCR-pending; only treat it as evidence if a \
+vision-capable model can interpret it later in this conversation.\n\
 - The case data has been de-identified. Do not invent personal details.\n\
 - If the supplied information is insufficient for a confident answer, set \
 certainty_level to \"low\" and list the missing data in red_flags.\n\
@@ -108,6 +140,8 @@ the response.\n\
 WORKSPACE RULES\n===============\n{rules}\n\n\
 EVIDENCE (from this centre's knowledge base)\n============================================\n\
 {evidence}\n\
+CASE ATTACHMENTS (files attached to this specific patient case)\n\
+================================================================\n{attachments}\n\
 EXTERNAL EVIDENCE (live literature, not validated by this centre)\n\
 ================================================================\n{external}\n\
 PAST CASES (similar prior cases with user feedback)\n===================================================\n\
@@ -117,7 +151,7 @@ QUESTION\n--------\n{question}\n\n\
 OUTPUT SCHEMA\n-------------\n\
 Return a JSON object with exactly these keys:\n\n\
 {{\n  \"case_summary\": string,\n  \"key_clinical_data\": [{{\"label\": string, \"value\": string}}],\n  \
-\"applied_evidence\": [{{\"ref\": \"E1\"|\"X1\"|\"P1\", \"claim\": string}}],\n  \
+\"applied_evidence\": [{{\"ref\": \"E1\"|\"X1\"|\"P1\"|\"A1\", \"claim\": string}}],\n  \
 \"primary_recommendation\": {{\"action\": string, \"rationale\": string}},\n  \
 \"alternatives\": [{{\"action\": string, \"when_to_consider\": string}}],\n  \
 \"certainty_level\": \"high\"|\"medium\"|\"low\",\n  \"certainty_justification\": string,\n  \
@@ -128,6 +162,7 @@ taken verbatim:\n\n{disclaimer}\n",
             output_language = inputs.output_language,
             rules = rules,
             evidence = evidence,
+            attachments = attachments,
             external = external,
             past_cases = past_cases,
             case = inputs.de_identified_case_text,
@@ -174,6 +209,32 @@ fn render_external(items: &[ExternalEvidenceInput<'_>]) -> String {
     out
 }
 
+fn render_attachments(items: &[CaseAttachmentInput<'_>]) -> String {
+    if items.is_empty() {
+        return "(none — the clinician did not attach files to this case)\n".to_owned();
+    }
+    let mut out = String::new();
+    for a in items {
+        if a.needs_ocr || a.snippet.trim().is_empty() {
+            out.push_str(&format!(
+                "[A{index}] file: \"{filename}\", type: {doc_type} (no text extracted)\n\n",
+                index = a.index,
+                filename = a.filename,
+                doc_type = a.doc_type,
+            ));
+        } else {
+            out.push_str(&format!(
+                "[A{index}] file: \"{filename}\", type: {doc_type}\n{snippet}\n\n",
+                index = a.index,
+                filename = a.filename,
+                doc_type = a.doc_type,
+                snippet = a.snippet.trim(),
+            ));
+        }
+    }
+    out
+}
+
 fn render_past_cases(items: &[PastCaseInput<'_>]) -> String {
     if items.is_empty() {
         return "(no similar past cases in this workspace yet)\n".to_owned();
@@ -209,6 +270,7 @@ mod tests {
             evidence_chunks: &[],
             external_evidence: &[],
             past_cases: &[],
+            case_attachments: &[],
             de_identified_case_text: "Paciente con dolor torácico.",
             user_question: "",
             disclaimer: "Disclaimer test.",
@@ -218,6 +280,7 @@ mod tests {
         assert!(prompt.contains("Paciente con dolor torácico."));
         assert!(prompt.contains("No workspace rules defined."));
         assert!(prompt.contains("(no evidence retrieved"));
+        assert!(prompt.contains("the clinician did not attach files"));
         assert!(prompt.contains("What is the recommended management?"));
     }
 
@@ -237,6 +300,7 @@ mod tests {
             evidence_chunks: &chunks,
             external_evidence: &[],
             past_cases: &[],
+            case_attachments: &[],
             de_identified_case_text: "case",
             user_question: "Manejo inicial?",
             disclaimer: "x",
@@ -245,5 +309,43 @@ mod tests {
         assert!(prompt.contains("[E1]"));
         assert!(prompt.contains("Furosemida IV"));
         assert!(prompt.contains("Manejo inicial?"));
+    }
+
+    #[test]
+    fn case_attachments_block_is_rendered_and_numbered() {
+        let attachments = vec![
+            CaseAttachmentInput {
+                index: 1,
+                filename: "analitica.pdf",
+                doc_type: "pdf",
+                snippet: "Hb 12.4 g/dL. Creatinina 1.1 mg/dL.",
+                needs_ocr: false,
+            },
+            CaseAttachmentInput {
+                index: 2,
+                filename: "ecg.png",
+                doc_type: "image",
+                snippet: "",
+                needs_ocr: true,
+            },
+        ];
+        let inputs = PromptInputs {
+            specialty: "cardiología",
+            output_language: "es",
+            rules_block: "",
+            evidence_chunks: &[],
+            external_evidence: &[],
+            past_cases: &[],
+            case_attachments: &attachments,
+            de_identified_case_text: "case",
+            user_question: "",
+            disclaimer: "x",
+        };
+        let prompt = PromptTemplate.render(&inputs);
+        assert!(prompt.contains("[A1] file: \"analitica.pdf\""));
+        assert!(prompt.contains("Hb 12.4"));
+        assert!(prompt.contains("[A2] file: \"ecg.png\""));
+        assert!(prompt.contains("(no text extracted)"));
+        assert!(prompt.contains("CASE ATTACHMENTS"));
     }
 }

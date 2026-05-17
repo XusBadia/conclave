@@ -125,6 +125,7 @@ impl QaPipeline {
                 temperature: Some(0.2),
                 json_schema: None,
                 allow_web_search: false,
+                images: Vec::new(),
             })
             .await
             .map_err(|e| Error::Rag(e.to_string()))?;

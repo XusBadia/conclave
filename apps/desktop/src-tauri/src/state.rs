@@ -31,6 +31,10 @@ pub struct AppState {
     /// Flipped to `true` by the `ingest_cancel` command to ask an in-flight
     /// ingestion batch to stop after the file currently being processed.
     pub ingest_cancel: Arc<AtomicBool>,
+    /// Flipped to `true` by the `batch_cancel` command to stop a batch
+    /// case run after the case currently being processed. Cleared
+    /// whenever a new batch begins.
+    pub batch_cancel: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -49,6 +53,7 @@ impl AppState {
             embedder,
             repos: tokio::sync::Mutex::new(HashMap::new()),
             ingest_cancel: Arc::new(AtomicBool::new(false)),
+            batch_cancel: Arc::new(AtomicBool::new(false)),
         }
     }
 }

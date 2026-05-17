@@ -81,8 +81,8 @@ pub use openai_oauth::OpenAIOAuthProvider;
 pub use openrouter_api::OpenRouterProvider;
 pub use registry::{ProviderRegistry, KNOWN_PROVIDERS, OAUTH_PROVIDERS};
 pub use types::{
-    CompletionRequest, CompletionResponse, Message, MessageRole, ProviderCapabilities, Usage,
-    WebCitation,
+    CompletionRequest, CompletionResponse, ImageInput, Message, MessageRole, ProviderCapabilities,
+    Usage, WebCitation,
 };
 
 /// Anything that can take a structured request and return generated text.

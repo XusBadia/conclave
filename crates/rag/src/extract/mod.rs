@@ -1,9 +1,16 @@
-//! Document text extraction: PDF, DOCX, TXT, MD, HTML.
+//! Document text extraction: PDF, DOCX, TXT, MD, HTML, images.
 //!
 //! Dispatches by file extension into per-format submodules. Every extractor
 //! returns a normalised [`ExtractedText`] with UTF-8 content and `\n` line
 //! endings. PDFs that yield no extractable text are flagged via `needs_ocr`;
 //! the OCR backend (`#[cfg(feature = "ocr")]`) handles the rescue path.
+//!
+//! Image attachments are first-class: they are dispatched here so callers
+//! can store them alongside other case evidence even when no text can be
+//! extracted from them. Without the `ocr` feature, images return empty
+//! content with `needs_ocr = true`; the downstream prompt/UX layers must
+//! disclose this honestly so the user knows the bytes will only be
+//! interpreted by vision-capable providers.
 
 use std::path::{Path, PathBuf};
 
@@ -13,6 +20,7 @@ use conclave_core::{Error, Result};
 
 mod docx;
 mod html;
+mod image;
 mod pdf;
 mod text;
 
@@ -51,6 +59,10 @@ pub enum DocType {
     Md,
     /// `HyperText` Markup Language.
     Html,
+    /// Raster image (PNG, JPEG, WEBP, TIFF, HEIC). Text is recovered via
+    /// OCR when the feature is enabled; otherwise the raw bytes are kept
+    /// so vision-capable providers can interpret them directly.
+    Image,
 }
 
 impl DocType {
@@ -63,8 +75,16 @@ impl DocType {
             "txt" => Some(Self::Txt),
             "md" | "markdown" => Some(Self::Md),
             "html" | "htm" => Some(Self::Html),
+            "png" | "jpg" | "jpeg" | "webp" | "tif" | "tiff" | "heic" | "heif" => Some(Self::Image),
             _ => None,
         }
+    }
+
+    /// `true` when the file type is a raster image whose textual content
+    /// (if any) requires OCR to recover.
+    #[must_use]
+    pub const fn is_image(self) -> bool {
+        matches!(self, Self::Image)
     }
 }
 
@@ -78,6 +98,7 @@ pub fn extract_from_path(path: &Path) -> Result<ExtractedText> {
         DocType::Docx => docx::extract(path),
         DocType::Txt | DocType::Md => text::extract(path, doc_type),
         DocType::Html => html::extract(path),
+        DocType::Image => image::extract(path),
     }
 }
 
@@ -108,6 +129,24 @@ mod tests {
         );
         assert_eq!(DocType::from_path(Path::new("a.html")), Some(DocType::Html));
         assert_eq!(DocType::from_path(Path::new("a.htm")), Some(DocType::Html));
+        assert_eq!(DocType::from_path(Path::new("a.png")), Some(DocType::Image));
+        assert_eq!(DocType::from_path(Path::new("a.JPG")), Some(DocType::Image));
+        assert_eq!(
+            DocType::from_path(Path::new("a.jpeg")),
+            Some(DocType::Image)
+        );
+        assert_eq!(
+            DocType::from_path(Path::new("a.webp")),
+            Some(DocType::Image)
+        );
+        assert_eq!(
+            DocType::from_path(Path::new("a.tiff")),
+            Some(DocType::Image)
+        );
+        assert_eq!(
+            DocType::from_path(Path::new("a.heic")),
+            Some(DocType::Image)
+        );
         assert_eq!(DocType::from_path(Path::new("a.xyz")), None);
         assert_eq!(DocType::from_path(Path::new("no-ext")), None);
     }

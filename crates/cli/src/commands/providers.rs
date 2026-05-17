@@ -257,6 +257,7 @@ async fn set(id: &str) -> Result<()> {
             temperature: Some(0.0),
             json_schema: None,
             allow_web_search: false,
+            images: Vec::new(),
         })
         .await
         .with_context(|| format!("hello call to {id} failed"))?;
@@ -284,6 +285,7 @@ async fn test(ctx: &CommandContext, id: &str, prompt: String, model: Option<Stri
             temperature: Some(0.2),
             json_schema: None,
             allow_web_search: false,
+            images: Vec::new(),
         })
         .await
         .with_context(|| format!("completion against {id} failed"))?;

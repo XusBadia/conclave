@@ -60,6 +60,40 @@ CREATE TABLE IF NOT EXISTS case_memory (
     case_summary TEXT NOT NULL,
     verdict_summary TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS case_attachments (
+    id TEXT PRIMARY KEY,
+    case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    original_filename TEXT NOT NULL,
+    stored_path TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    doc_type TEXT NOT NULL,
+    mime TEXT NOT NULL DEFAULT '',
+    extracted_text TEXT NOT NULL,
+    needs_ocr INTEGER NOT NULL DEFAULT 0,
+    byte_size INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS case_attachments_case_idx
+    ON case_attachments(case_id, position);
+
+CREATE TABLE IF NOT EXISTS deliberation_traces (
+    id TEXT PRIMARY KEY,
+    verdict_id TEXT NOT NULL REFERENCES verdicts(id) ON DELETE CASCADE,
+    briefing_output TEXT,
+    drafting_output TEXT,
+    redteam_output TEXT,
+    total_input_tokens INTEGER NOT NULL DEFAULT 0,
+    total_output_tokens INTEGER NOT NULL DEFAULT 0,
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    vision_used INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS deliberation_traces_verdict_idx
+    ON deliberation_traces(verdict_id);
 ";
 
 /// Outcome flag for a case lifecycle.
@@ -123,6 +157,64 @@ pub struct RetrievalTrace {
     pub evidence_refs: Vec<String>,
     pub past_cases_refs: Vec<String>,
     pub online_evidence_refs: Vec<String>,
+    /// Case attachment refs (`A1..AN`) supplied to the prompt.
+    #[serde(default)]
+    pub attachment_refs: Vec<String>,
+}
+
+/// Full record of a deliberative run — the three intermediate outputs the
+/// committee produced before the final verdict was emitted. Persisted only
+/// when the user runs in deliberative mode.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliberationTrace {
+    pub id: String,
+    pub verdict_id: String,
+    /// Phase 1 — markdown briefing of evidence + gaps.
+    pub briefing_output: Option<String>,
+    /// Phase 2 — JSON draft verdict produced from the briefing.
+    pub drafting_output: Option<String>,
+    /// Phase 3 — markdown adversarial critique of the draft.
+    pub redteam_output: Option<String>,
+    /// Sum of `input_tokens` reported by every phase call.
+    pub total_input_tokens: u32,
+    /// Sum of `output_tokens` reported by every phase call.
+    pub total_output_tokens: u32,
+    /// Wall-clock duration of the whole deliberation in ms.
+    pub duration_ms: u64,
+    /// `true` if at least one phase forwarded images to a vision-capable
+    /// provider. The UI surfaces this so the clinician knows the images
+    /// were actually interpreted (not just listed as attachments).
+    pub vision_used: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+/// One file attached to a specific case (analytics, ECG image, lab PDF…).
+///
+/// Attachments live with their case; they are never copied into the
+/// workspace knowledge base, so personal data does not leak into shared
+/// evidence retrieval.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CaseAttachment {
+    pub id: String,
+    pub case_id: String,
+    /// 1-based slot used to render the `[A{position}]` ref in the prompt.
+    pub position: u32,
+    pub original_filename: String,
+    pub stored_path: String,
+    pub sha256: String,
+    pub doc_type: String,
+    /// MIME type, when known (e.g. `image/png`). Useful for vision routing.
+    #[serde(default)]
+    pub mime: String,
+    /// Text recovered from the file. Empty when the file is an image
+    /// without OCR; the UI must label this honestly.
+    pub extracted_text: String,
+    /// `true` when the file is a raster/image whose text could not be
+    /// recovered. Vision-capable providers can still interpret the bytes
+    /// directly.
+    pub needs_ocr: bool,
+    pub byte_size: u64,
+    pub created_at: DateTime<Utc>,
 }
 
 /// User feedback on a case.
@@ -177,7 +269,31 @@ impl CaseStore {
         conn.pragma_update(None, "foreign_keys", "ON")
             .map_err(map_sql)?;
         conn.execute_batch(SCHEMA_SQL).map_err(map_sql)?;
+        Self::migrate_retrieval_traces_attachments(&conn)?;
         Ok(Self { conn, path })
+    }
+
+    /// Idempotent migration: pre-existing DBs do not have the
+    /// `attachment_refs_json` column on `retrieval_traces`. Add it on first
+    /// open and default existing rows to `[]`.
+    fn migrate_retrieval_traces_attachments(conn: &Connection) -> Result<()> {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(retrieval_traces)")
+            .map_err(map_sql)?;
+        let cols: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .map_err(map_sql)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(map_sql)?;
+        if !cols.iter().any(|c| c == "attachment_refs_json") {
+            conn.execute(
+                "ALTER TABLE retrieval_traces \
+                 ADD COLUMN attachment_refs_json TEXT NOT NULL DEFAULT '[]'",
+                [],
+            )
+            .map_err(map_sql)?;
+        }
+        Ok(())
     }
 
     /// Path the connection was opened against.
@@ -238,17 +354,124 @@ impl CaseStore {
         self.conn
             .execute(
                 "INSERT INTO retrieval_traces
-                   (verdict_id, evidence_refs_json, past_cases_refs_json, online_evidence_refs_json)
-                 VALUES (?1, ?2, ?3, ?4)",
+                   (verdict_id, evidence_refs_json, past_cases_refs_json,
+                    online_evidence_refs_json, attachment_refs_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![
                     t.verdict_id,
                     serde_json::to_string(&t.evidence_refs).unwrap_or_else(|_| "[]".into()),
                     serde_json::to_string(&t.past_cases_refs).unwrap_or_else(|_| "[]".into()),
                     serde_json::to_string(&t.online_evidence_refs).unwrap_or_else(|_| "[]".into()),
+                    serde_json::to_string(&t.attachment_refs).unwrap_or_else(|_| "[]".into()),
                 ],
             )
             .map_err(map_sql)?;
         Ok(())
+    }
+
+    /// Insert a case attachment row.
+    pub fn insert_attachment(&self, a: &CaseAttachment) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT INTO case_attachments
+                   (id, case_id, position, original_filename, stored_path,
+                    sha256, doc_type, mime, extracted_text, needs_ocr,
+                    byte_size, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                params![
+                    a.id,
+                    a.case_id,
+                    i64::from(a.position),
+                    a.original_filename,
+                    a.stored_path,
+                    a.sha256,
+                    a.doc_type,
+                    a.mime,
+                    a.extracted_text,
+                    i64::from(a.needs_ocr),
+                    a.byte_size as i64,
+                    a.created_at.to_rfc3339(),
+                ],
+            )
+            .map_err(map_sql)?;
+        Ok(())
+    }
+
+    /// List attachments for a case, ordered by `position`.
+    pub fn list_attachments_for_case(&self, case_id: &str) -> Result<Vec<CaseAttachment>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, case_id, position, original_filename, stored_path,
+                        sha256, doc_type, mime, extracted_text, needs_ocr,
+                        byte_size, created_at
+                 FROM case_attachments
+                 WHERE case_id = ?1
+                 ORDER BY position ASC",
+            )
+            .map_err(map_sql)?;
+        let rows = stmt
+            .query_map(params![case_id], row_to_attachment)
+            .map_err(map_sql)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(map_sql)?);
+        }
+        Ok(out)
+    }
+
+    /// Delete attachments belonging to a case (used when a case is removed).
+    pub fn delete_attachments_for_case(&self, case_id: &str) -> Result<usize> {
+        self.conn
+            .execute(
+                "DELETE FROM case_attachments WHERE case_id = ?1",
+                params![case_id],
+            )
+            .map_err(map_sql)
+    }
+
+    /// Insert a deliberation trace row.
+    pub fn insert_deliberation_trace(&self, t: &DeliberationTrace) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT INTO deliberation_traces
+                   (id, verdict_id, briefing_output, drafting_output, redteam_output,
+                    total_input_tokens, total_output_tokens, duration_ms, vision_used,
+                    created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    t.id,
+                    t.verdict_id,
+                    t.briefing_output,
+                    t.drafting_output,
+                    t.redteam_output,
+                    i64::from(t.total_input_tokens),
+                    i64::from(t.total_output_tokens),
+                    t.duration_ms as i64,
+                    i64::from(t.vision_used),
+                    t.created_at.to_rfc3339(),
+                ],
+            )
+            .map_err(map_sql)?;
+        Ok(())
+    }
+
+    /// Fetch the most recent deliberation trace for a given verdict.
+    pub fn get_deliberation_trace(&self, verdict_id: &str) -> Result<Option<DeliberationTrace>> {
+        self.conn
+            .query_row(
+                "SELECT id, verdict_id, briefing_output, drafting_output, redteam_output,
+                        total_input_tokens, total_output_tokens, duration_ms, vision_used,
+                        created_at
+                 FROM deliberation_traces
+                 WHERE verdict_id = ?1
+                 ORDER BY created_at DESC
+                 LIMIT 1",
+                params![verdict_id],
+                row_to_deliberation_trace,
+            )
+            .optional()
+            .map_err(map_sql)
     }
 
     /// Upsert a feedback row.
@@ -635,6 +858,38 @@ fn row_to_verdict(r: &rusqlite::Row<'_>) -> rusqlite::Result<VerdictRecord> {
     })
 }
 
+fn row_to_deliberation_trace(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeliberationTrace> {
+    Ok(DeliberationTrace {
+        id: r.get(0)?,
+        verdict_id: r.get(1)?,
+        briefing_output: r.get(2)?,
+        drafting_output: r.get(3)?,
+        redteam_output: r.get(4)?,
+        total_input_tokens: u32::try_from(r.get::<_, i64>(5)?.max(0)).unwrap_or(0),
+        total_output_tokens: u32::try_from(r.get::<_, i64>(6)?.max(0)).unwrap_or(0),
+        duration_ms: r.get::<_, i64>(7)?.max(0) as u64,
+        vision_used: r.get::<_, i64>(8)? != 0,
+        created_at: parse_dt(&r.get::<_, String>(9)?),
+    })
+}
+
+fn row_to_attachment(r: &rusqlite::Row<'_>) -> rusqlite::Result<CaseAttachment> {
+    Ok(CaseAttachment {
+        id: r.get(0)?,
+        case_id: r.get(1)?,
+        position: u32::try_from(r.get::<_, i64>(2)?.max(0)).unwrap_or(0),
+        original_filename: r.get(3)?,
+        stored_path: r.get(4)?,
+        sha256: r.get(5)?,
+        doc_type: r.get(6)?,
+        mime: r.get(7)?,
+        extracted_text: r.get(8)?,
+        needs_ocr: r.get::<_, i64>(9)? != 0,
+        byte_size: r.get::<_, i64>(10)?.max(0) as u64,
+        created_at: parse_dt(&r.get::<_, String>(11)?),
+    })
+}
+
 fn row_to_feedback(r: &rusqlite::Row<'_>) -> rusqlite::Result<FeedbackRecord> {
     Ok(FeedbackRecord {
         case_id: r.get(0)?,
@@ -699,6 +954,7 @@ mod tests {
                 evidence_refs: vec!["E1".into()],
                 past_cases_refs: vec![],
                 online_evidence_refs: vec![],
+                attachment_refs: vec![],
             })
             .unwrap();
         store
@@ -720,5 +976,90 @@ mod tests {
 
         let f = store.get_feedback("c1").unwrap().unwrap();
         assert_eq!(f.kind, FeedbackKind::Accept);
+    }
+
+    #[test]
+    fn attachments_round_trip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = CaseStore::open(tmp.path().join("cases.sqlite")).unwrap();
+        store.insert_case(&sample_case("cA")).unwrap();
+        let att = CaseAttachment {
+            id: "att-1".into(),
+            case_id: "cA".into(),
+            position: 1,
+            original_filename: "labs.pdf".into(),
+            stored_path: "/tmp/labs.pdf".into(),
+            sha256: "abc".into(),
+            doc_type: "pdf".into(),
+            mime: "application/pdf".into(),
+            extracted_text: "Hb 12.4".into(),
+            needs_ocr: false,
+            byte_size: 1024,
+            created_at: Utc::now(),
+        };
+        store.insert_attachment(&att).unwrap();
+        let img = CaseAttachment {
+            id: "att-2".into(),
+            case_id: "cA".into(),
+            position: 2,
+            original_filename: "ecg.png".into(),
+            stored_path: "/tmp/ecg.png".into(),
+            sha256: "def".into(),
+            doc_type: "image".into(),
+            mime: "image/png".into(),
+            extracted_text: String::new(),
+            needs_ocr: true,
+            byte_size: 4096,
+            created_at: Utc::now(),
+        };
+        store.insert_attachment(&img).unwrap();
+
+        let list = store.list_attachments_for_case("cA").unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].position, 1);
+        assert_eq!(list[0].original_filename, "labs.pdf");
+        assert_eq!(list[1].position, 2);
+        assert!(list[1].needs_ocr);
+        assert!(list[1].extracted_text.is_empty());
+
+        let removed = store.delete_attachments_for_case("cA").unwrap();
+        assert_eq!(removed, 2);
+        assert!(store.list_attachments_for_case("cA").unwrap().is_empty());
+    }
+
+    #[test]
+    fn migration_adds_attachment_refs_to_existing_db() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("cases.sqlite");
+        // Simulate a pre-existing DB without the new column.
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE cases (id TEXT PRIMARY KEY, created_at TEXT, workspace_id TEXT,
+                                     question TEXT, original_text TEXT, masked_text TEXT,
+                                     deident_pipeline_id TEXT, status TEXT);
+                 CREATE TABLE verdicts (id TEXT PRIMARY KEY, case_id TEXT REFERENCES cases(id),
+                                        prompt_version TEXT, provider_id TEXT, model TEXT,
+                                        latency_ms INTEGER, input_tokens INTEGER,
+                                        output_tokens INTEGER, output_json TEXT,
+                                        created_at TEXT);
+                 CREATE TABLE retrieval_traces (verdict_id TEXT PRIMARY KEY REFERENCES verdicts(id),
+                                                evidence_refs_json TEXT NOT NULL,
+                                                past_cases_refs_json TEXT NOT NULL,
+                                                online_evidence_refs_json TEXT NOT NULL);",
+            )
+            .unwrap();
+        }
+        let _store = CaseStore::open(&path).unwrap();
+        // Reopen as a raw connection and confirm the column now exists.
+        let conn = Connection::open(&path).unwrap();
+        let cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(retrieval_traces)")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert!(cols.iter().any(|c| c == "attachment_refs_json"));
     }
 }

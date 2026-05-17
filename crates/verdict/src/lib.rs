@@ -49,6 +49,8 @@
 //!   [`conclave_core::MEDICAL_DISCLAIMER`] regardless of what the model
 //!   produced, so we control the legal footer at all times.
 
+pub mod attachments;
+pub mod deliberation;
 pub mod persistence;
 pub mod pipeline;
 pub mod prompt;
@@ -56,12 +58,20 @@ pub mod qa;
 pub mod schema;
 pub mod validation;
 
+pub use attachments::ingest_case_attachments;
+pub use deliberation::{
+    run_deliberation, DeliberationEvent, DeliberationEvidence, DeliberationInputs,
+    DeliberationOptions, DeliberationOutcome, DeliberationPastCase, DeliberationPhase,
+};
 pub use persistence::{
-    CaseRecord, CaseStatus, CaseStore, ExportedCase, ExportedFeedback, PastCaseHit, StoreStats,
-    VerdictRecord,
+    CaseAttachment, CaseRecord, CaseStatus, CaseStore, DeliberationTrace, ExportedCase,
+    ExportedFeedback, PastCaseHit, RetrievalTrace, StoreStats, VerdictRecord,
 };
 pub use pipeline::{VerdictOptions, VerdictPipeline, VerdictRun};
-pub use prompt::{PromptInputs, PromptTemplate, VERDICT_PROMPT_VERSION};
+pub use prompt::{
+    CaseAttachmentInput, EvidenceChunkInput, ExternalEvidenceInput, PastCaseInput, PromptInputs,
+    PromptTemplate, VERDICT_PROMPT_VERSION,
+};
 pub use qa::{QaPipeline, QaResponse, QaSource};
 pub use schema::{Alternative, CertaintyLevel, EvidenceClaim, KeyValue, Recommendation, Verdict};
 pub use validation::{validate_verdict, ValidationError};
