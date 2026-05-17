@@ -229,6 +229,16 @@ export type BatchEvent =
       cancelled: number;
     };
 
+/**
+ * Emitted by the backend the moment a case row is persisted as
+ * `Draft` — before the LLM call begins. Drives the "case appears
+ * immediately" UX in the cases list.
+ */
+export interface CaseDraftedEvent {
+  case_id: string;
+  workspace_id: string;
+}
+
 // ---------------------------------------------------------------------------
 // Typed wrappers
 // ---------------------------------------------------------------------------

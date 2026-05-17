@@ -118,9 +118,11 @@
     "no_question": "(sin pregunta)",
     "status": {
       "draft": "borrador",
+      "running": "ejecutando…",
       "completed": "completado",
       "failed": "fallido"
     },
+    "batch_progress_banner": "Ejecutando lote · {{done}}/{{total}} casos completados",
     "new_title": "Nuevo caso",
     "new_subtitle": "Pega una nota clínica — se desidentifica antes de cualquier llamada al LLM",
     "field_text": "Texto del caso",

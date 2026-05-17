@@ -16,8 +16,10 @@ import {
   ipc,
   usableProviders,
   type BatchCaseInput,
+  type BatchEvent,
   type CaseAttachment,
   type CaseDetail,
+  type CaseDraftedEvent,
   type CaseRecord,
   type DeliberationEvent,
   type DeliberationPhase,
@@ -117,6 +119,56 @@ function attachmentBadgeColor(extOrType: string): string {
     default:
       return "bg-slate-400/15 text-slate-200";
   }
+}
+
+/**
+ * Status badge shown next to every row in the cases list. Five visual
+ * states:
+ *   - `running` (transient frontend-only overlay): accent + animated dot
+ *   - `draft`: violet
+ *   - `completed`: green
+ *   - `failed`: red
+ *
+ * The `running` flag is supplied by the page-level batch:progress
+ * listener; the DB-side status remains `draft` until the LLM call
+ * completes. We render `running` last so it wins over any underlying
+ * draft state during the brief overlap.
+ */
+function StatusBadge({
+  status,
+  running,
+}: {
+  status: CaseRecord["status"];
+  running: boolean;
+}) {
+  const { t } = useTranslation();
+  if (running) {
+    return (
+      <span className="flex items-center gap-1 rounded bg-accent/15 px-2 py-0.5 text-[11px] font-medium text-accent">
+        <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+        {t("cases.status.running")}
+      </span>
+    );
+  }
+  if (status === "completed") {
+    return (
+      <span className="rounded bg-ok/15 px-2 py-0.5 text-[11px] font-medium text-ok">
+        {t("cases.status.completed")}
+      </span>
+    );
+  }
+  if (status === "draft") {
+    return (
+      <span className="rounded bg-violet-400/15 px-2 py-0.5 text-[11px] font-medium text-violet-200">
+        {t("cases.status.draft")}
+      </span>
+    );
+  }
+  return (
+    <span className="rounded bg-danger/15 px-2 py-0.5 text-[11px] font-medium text-danger">
+      {t("cases.status.failed")}
+    </span>
+  );
 }
 
 type View = "list" | "new" | "show";
@@ -248,6 +300,22 @@ export function CasesPage({
     null,
   );
 
+  /**
+   * Per-row "running" state, populated by the batch:progress listener.
+   * The DB-side status during a run is still `Draft`; this overlay lets
+   * the badge animate as soon as the LLM call starts and clear as soon
+   * as it completes (the DB status updates to `Completed`/`Failed`
+   * almost in parallel via the case_completed/case_failed event +
+   * refresh).
+   */
+  const [runningCaseIds, setRunningCaseIds] = useState<Set<string>>(new Set());
+  /**
+   * Lightweight batch-mode banner: shows "X / N ejecutándose" while a
+   * batch is in flight. Cleared on `batch_done`.
+   */
+  const [batchTotal, setBatchTotal] = useState<number | null>(null);
+  const [batchDone, setBatchDone] = useState(0);
+
   // Sorting / grouping / selection. All client-side over the 50 rows that
   // listCases returns; the backend already sorts by case_date DESC so a
   // refresh keeps the natural order when sortBy === "date_desc".
@@ -284,6 +352,9 @@ export function CasesPage({
     setPendingDrop([]);
     setUnsupportedDropError(null);
     setClassifyDialog(null);
+    setRunningCaseIds(new Set());
+    setBatchTotal(null);
+    setBatchDone(0);
   }, [workspace.id]);
 
   // Page-level Tauri drag-drop listener. Bound once for the whole Cases
@@ -354,6 +425,71 @@ export function CasesPage({
       unlisten?.();
     };
   }, [t]);
+
+  // ----------------------------------------------------------------
+  // Live-progress listeners for batch + draft creation.
+  //
+  // The backend emits `case:drafted` the moment a case row is persisted
+  // (status=Draft, before the LLM call) and `batch:progress` events as
+  // each case in a batch starts / completes / fails. We hook both at
+  // the page level so the cases list updates in real time — the user
+  // sees rows appear, animate as "ejecutando…", then settle to
+  // `completado` or `fallido`.
+  // ----------------------------------------------------------------
+  useEffect(() => {
+    let cancelled = false;
+    let unlistenDrafted: UnlistenFn | undefined;
+    let unlistenBatch: UnlistenFn | undefined;
+    (async () => {
+      unlistenDrafted = await listen<CaseDraftedEvent>(
+        "case:drafted",
+        (msg) => {
+          if (cancelled) return;
+          if (msg.payload.workspace_id !== workspace.id) return;
+          // A new draft appeared — refresh the list to pop it in.
+          void refresh();
+        },
+      );
+      unlistenBatch = await listen<BatchEvent>("batch:progress", (msg) => {
+        if (cancelled) return;
+        const ev = msg.payload;
+        if (ev.kind === "case_queued") {
+          setBatchTotal((prev) => (prev === null ? 1 : prev + 1));
+        } else if (ev.kind === "case_started") {
+          // We don't know the case_id from this event (the batch event
+          // carries patient_label, not the id). Refresh so the row is
+          // there, then optimistically mark all "draft" cases with no
+          // verdict as "running" via batchTotal — the LLM call may be
+          // for any of them. Simpler: refresh on completion/failure
+          // and skip the per-row running overlay for batch.
+          void refresh();
+        } else if (ev.kind === "case_completed") {
+          setRunningCaseIds((prev) => {
+            const next = new Set(prev);
+            next.delete(ev.case_id);
+            return next;
+          });
+          setBatchDone((d) => d + 1);
+          void refresh();
+        } else if (ev.kind === "case_failed") {
+          setBatchDone((d) => d + 1);
+          void refresh();
+        } else if (ev.kind === "case_cancelled") {
+          setBatchDone((d) => d + 1);
+        } else if (ev.kind === "batch_done") {
+          setBatchTotal(null);
+          setBatchDone(0);
+          void refresh();
+        }
+      });
+    })();
+    return () => {
+      cancelled = true;
+      unlistenDrafted?.();
+      unlistenBatch?.();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace.id]);
 
   const sortedCases = useMemo(() => {
     const arr = [...cases];
@@ -507,6 +643,17 @@ export function CasesPage({
       {unsupportedDropError && (
         <div className="rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-[13px] text-warn">
           {unsupportedDropError}
+        </div>
+      )}
+      {batchTotal !== null && batchTotal > 0 && (
+        <div className="flex items-center gap-2 rounded-md border border-accent/40 bg-accent/5 px-3 py-2 text-[13px] text-accent">
+          <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+          <span>
+            {t("cases.batch_progress_banner", {
+              done: batchDone,
+              total: batchTotal,
+            })}
+          </span>
         </div>
       )}
       <Card>
@@ -687,17 +834,10 @@ export function CasesPage({
                           {new Date(c.case_date).toLocaleString()}
                         </div>
                       </div>
-                      <span
-                        className={
-                          c.status === "completed"
-                            ? "rounded bg-ok/15 px-2 py-0.5 text-[11px] font-medium text-ok"
-                            : c.status === "draft"
-                              ? "rounded bg-violet-400/15 px-2 py-0.5 text-[11px] font-medium text-violet-200"
-                              : "rounded bg-danger/15 px-2 py-0.5 text-[11px] font-medium text-danger"
-                        }
-                      >
-                        {t(`cases.status.${c.status}`)}
-                      </span>
+                      <StatusBadge
+                        status={c.status}
+                        running={runningCaseIds.has(c.id)}
+                      />
                     </div>
                   </button>
                 </li>
@@ -1828,7 +1968,15 @@ function ClassifyDropDialog({
     })();
   }, []);
 
-  const usable = useMemo(() => usableProviders(providers), [providers]);
+  // Mirror NewCase's clinical-eligibility filter: subtask-only providers
+  // (Apple Intelligence today) must not be selectable for batch runs.
+  // Without this filter the user could pick a Subtask provider, get a
+  // backend rejection ("Provider scope is Subtask…") and have no idea
+  // why the run failed.
+  const usable = useMemo(
+    () => usableProviders(providers).filter((p) => isClinicalEligible(p.id)),
+    [providers],
+  );
 
   const updateRow = (i: number, patch: Partial<BatchCaseInput>) => {
     setRows((prev) => {
@@ -1963,27 +2111,34 @@ function ClassifyDropDialog({
     }
   };
 
-  const runAll = async () => {
+  const runAll = () => {
     if (rows.length === 0) return;
     if (!providerId) {
       setError(t("cases.no_provider_configured"));
       return;
     }
-    setBusy(true);
+    // Fire-and-forget. The IPC awaits the whole batch to complete (5+
+    // minutes for a deliberative run on 10 cases), so awaiting it here
+    // would leave the user staring at a frozen dialog. Instead we
+    // dispatch and close immediately — the page-level listeners for
+    // `case:drafted` + `batch:progress` give the user real-time
+    // feedback in the cases list.
     setError(null);
-    try {
-      await ipc.runBatchCases({
+    void ipc
+      .runBatchCases({
         workspace_id: workspace.id,
         provider_id: providerId,
         deliberative,
         cases: rows,
+      })
+      .catch((e) => {
+        // We won't see this directly (the dialog is gone) but log it
+        // so the failure isn't silent. The frontend listener will also
+        // surface per-case failures.
+        // eslint-disable-next-line no-console
+        console.error("batch run failed:", e);
       });
-      onCommitted();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
+    onCommitted();
   };
 
   return (

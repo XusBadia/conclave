@@ -1004,16 +1004,128 @@ pub struct CaseRunRequest {
 
 #[tauri::command]
 pub async fn run_case(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     request: CaseRunRequest,
 ) -> CommandResult<CaseRunResponse> {
-    run_case_impl(&state, request).await
+    run_case_impl(&app, &state, request).await
+}
+
+/// Drafted case ready for the LLM. The row is already persisted in
+/// SQLite with status `Draft` and the attachments are on disk under the
+/// canonical case directory — see [`stage_draft`].
+struct StagedDraft {
+    case: CaseRecord,
+    attachments: Vec<CaseAttachment>,
+}
+
+/// DTO emitted on `case:drafted` so the frontend can refresh the list
+/// the moment a case (or a batch of cases) becomes persistable.
+#[derive(Debug, Clone, Serialize)]
+pub struct CaseDraftedDto {
+    pub case_id: String,
+    pub workspace_id: String,
+}
+
+/// Drafts-first staging shared by every case runner (quick, deliberative,
+/// single, batch). Steps:
+///
+/// 1. Mint the canonical `case_id` up-front.
+/// 2. De-identify the clinical text (when present) so `masked_text` is
+///    the only copy that travels to disk / LLM.
+/// 3. Ingest attachments **directly** under `cases/<case_id>/attachments/`
+///    — no temp-dir shuffle. Attachment text is de-identified by
+///    `ingest_case_attachments`.
+/// 4. Insert the case row as `Draft` + the attachment rows in a single
+///    locked block (no awaits while the mutex is held).
+/// 5. Emit `case:drafted` so the UI can pop the row into the list
+///    immediately, before the LLM call even starts.
+///
+/// On any failure the function returns early; nothing is persisted.
+async fn stage_draft(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    workspace: &conclave_core::Workspace,
+    store: &Arc<Mutex<CaseStore>>,
+    request: &CaseRunRequest,
+) -> CommandResult<StagedDraft> {
+    let case_id = format!("case-{}", uuid::Uuid::new_v4());
+
+    let deid = PipelineDeidentifier::new();
+    let (masked_text, deident_pipeline_id) = if request.text.trim().is_empty() {
+        (String::new(), "noop".to_owned())
+    } else {
+        let r = deid.deidentify(&request.text).map_err(|e| e.to_string())?;
+        (r.masked_text.clone(), r.pipeline_id.to_owned())
+    };
+
+    let cases_root = state.paths.workspace_dir(&workspace.id).join("cases");
+    let attachments = if request.attached_file_paths.is_empty() {
+        Vec::new()
+    } else {
+        let paths: Vec<std::path::PathBuf> = request
+            .attached_file_paths
+            .iter()
+            .map(std::path::PathBuf::from)
+            .collect();
+        let mut atts = ingest_case_attachments(paths, &case_id, &cases_root, &deid)
+            .await
+            .map_err(|e| e.to_string())?;
+        for a in &mut atts {
+            a.case_id.clone_from(&case_id);
+        }
+        atts
+    };
+
+    let now = chrono::Utc::now();
+    let case = CaseRecord {
+        id: case_id,
+        created_at: now,
+        case_date: now,
+        workspace_id: workspace.id.clone(),
+        question: request.question.clone(),
+        original_text: request.text.clone(),
+        masked_text,
+        deident_pipeline_id,
+        status: conclave_verdict::CaseStatus::Draft,
+    };
+
+    {
+        let g = store.lock().map_err(|_| "store poisoned")?;
+        g.insert_case(&case).map_err(|e| e.to_string())?;
+        for att in &attachments {
+            if let Err(e) = g.insert_attachment(att) {
+                tracing::warn!(error = ?e, "could not persist draft attachment row");
+            }
+        }
+    }
+
+    let _ = app.emit(
+        "case:drafted",
+        CaseDraftedDto {
+            case_id: case.id.clone(),
+            workspace_id: workspace.id.clone(),
+        },
+    );
+
+    Ok(StagedDraft { case, attachments })
+}
+
+/// Best-effort transition: when an LLM-side failure leaves a draft
+/// orphaned, flip its status to `Failed` so the list reflects reality
+/// instead of an eternally-loading row.
+fn mark_case_failed_best_effort(store: &Arc<Mutex<CaseStore>>, case_id: &str) {
+    if let Ok(g) = store.lock() {
+        if let Err(e) = g.mark_case_status(case_id, conclave_verdict::CaseStatus::Failed) {
+            tracing::warn!(error = ?e, case_id, "could not mark draft as failed");
+        }
+    }
 }
 
 /// Free-function body of [`run_case`] so the batch runner can reuse it
-/// without going through the Tauri IPC layer. Kept in sync with
-/// [`run_case`] line-for-line — if you change one, change the other.
+/// without going through the Tauri IPC layer.
 pub(crate) async fn run_case_impl(
+    app: &tauri::AppHandle,
     state: &AppState,
     request: CaseRunRequest,
 ) -> CommandResult<CaseRunResponse> {
@@ -1039,9 +1151,12 @@ pub(crate) async fn run_case_impl(
     )?;
     ensure_general_scope(&provider)?;
 
+    let store = case_store_arc(state, &workspace.id)?;
+    let StagedDraft { case, attachments } =
+        stage_draft(app, state, &workspace, &store, &request).await?;
+
     let embedder = Arc::clone(&state.embedder);
     let repo = get_repo(state, &workspace.id).await?;
-    let store = case_store_arc(state, &workspace.id)?;
     let pipeline = VerdictPipeline::new(
         workspace.clone(),
         Box::new(PipelineDeidentifier::new()),
@@ -1057,79 +1172,20 @@ pub(crate) async fn run_case_impl(
         options.output_language = lang;
     }
 
-    // Stage attachments BEFORE the LLM call so we can pass them into the
-    // pipeline and pre-allocate a case id that owns the on-disk folder.
-    let case_id_for_attachments = format!("case-{}", uuid::Uuid::new_v4());
-    let attachments = if request.attached_file_paths.is_empty() {
-        Vec::new()
-    } else {
-        let cases_root = state.paths.workspace_dir(&workspace.id).join("cases");
-        let deid = PipelineDeidentifier::new();
-        let paths: Vec<std::path::PathBuf> = request
-            .attached_file_paths
-            .iter()
-            .map(std::path::PathBuf::from)
-            .collect();
-        ingest_case_attachments(paths, &case_id_for_attachments, &cases_root, &deid)
-            .await
-            .map_err(|e| e.to_string())?
-    };
-
-    let run = pipeline
-        .run(&request.text, &request.question, &attachments, &options)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    // Re-stamp attachments with the canonical case id minted by the
-    // pipeline and move them to the final per-case directory. We do all
-    // file IO first (await-friendly) and only acquire the DB lock once,
-    // synchronously, to avoid holding a non-Send guard across awaits.
-    let mut moved_attachments = Vec::with_capacity(attachments.len());
-    let workspace_cases = state.paths.workspace_dir(&workspace.id).join("cases");
-    if !attachments.is_empty() {
-        let final_dir = workspace_cases.join(&run.case.id).join("attachments");
-        if let Err(e) = tokio::fs::create_dir_all(&final_dir).await {
-            tracing::warn!(error = %e, "could not create attachments dir for case");
+    // `run_for_case` runs the pipeline against the already-persisted
+    // draft and promotes it to `Completed` on success.
+    match pipeline.run_for_case(&case, &attachments, &options).await {
+        Ok(run) => Ok(CaseRunResponse {
+            case: run.case,
+            verdict_record: run.verdict_record,
+            verdict: run.verdict,
+            attachments,
+        }),
+        Err(e) => {
+            mark_case_failed_best_effort(&store, &case.id);
+            Err(e.to_string())
         }
-        for mut att in attachments {
-            att.case_id = run.case.id.clone();
-            let src = std::path::PathBuf::from(&att.stored_path);
-            if let Some(filename) = src.file_name() {
-                let dst = final_dir.join(filename);
-                if src != dst {
-                    if let Err(e) = tokio::fs::rename(&src, &dst).await {
-                        tracing::debug!(error = %e, src = %src.display(), "could not move attachment to final dir");
-                    } else {
-                        att.stored_path = dst.to_string_lossy().into_owned();
-                    }
-                }
-            }
-            moved_attachments.push(att);
-        }
-        // Best-effort: remove the now-empty temp directory minted during
-        // ingest. Ignore errors — leftover empty dirs are harmless.
-        let temp_dir = workspace_cases.join(&case_id_for_attachments);
-        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
     }
-
-    // Persist DB rows synchronously, in its own scoped block, so the
-    // MutexGuard is dropped before any subsequent code that might await.
-    let persisted_attachments = {
-        let store_guard = store.lock().map_err(|_| "store poisoned")?;
-        for att in &moved_attachments {
-            if let Err(e) = store_guard.insert_attachment(att) {
-                tracing::warn!(error = ?e, "could not persist attachment row");
-            }
-        }
-        moved_attachments
-    };
-
-    Ok(CaseRunResponse {
-        case: run.case,
-        verdict_record: run.verdict_record,
-        verdict: run.verdict,
-        attachments: persisted_attachments,
-    })
 }
 
 #[tauri::command]
@@ -1323,7 +1379,10 @@ pub async fn run_draft_case(
     }
 
     // Provider + pipeline setup mirrors run_case_impl.
-    let api_key = if request.provider_id == "ollama" {
+    let api_key = if matches!(
+        request.provider_id.as_str(),
+        "ollama" | "apple-intelligence"
+    ) {
         String::new()
     } else {
         match secrets::load(&request.provider_id).map_err(|e| e.to_string())? {
@@ -1337,6 +1396,7 @@ pub async fn run_draft_case(
         request.model.clone(),
         state.paths.config_dir(),
     )?;
+    ensure_general_scope(&provider)?;
     let mut options = VerdictOptions::default();
     let cfg = state.config.lock().map_err(|_| "config poisoned")?.clone();
     options.top_k = cfg.rag.top_k;
@@ -1354,17 +1414,18 @@ pub async fn run_draft_case(
         provider,
         Arc::clone(&store),
     );
-    let run = pipeline
-        .run_for_case(&draft, &attachments, &options)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    Ok(CaseRunResponse {
-        case: run.case,
-        verdict_record: run.verdict_record,
-        verdict: run.verdict,
-        attachments,
-    })
+    match pipeline.run_for_case(&draft, &attachments, &options).await {
+        Ok(run) => Ok(CaseRunResponse {
+            case: run.case,
+            verdict_record: run.verdict_record,
+            verdict: run.verdict,
+            attachments,
+        }),
+        Err(e) => {
+            mark_case_failed_best_effort(&store, &draft.id);
+            Err(e.to_string())
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1467,31 +1528,13 @@ pub(crate) async fn run_case_deliberated_impl(
 
     let store = case_store_arc(state, &workspace.id)?;
 
-    // 1) De-identify the case text up-front (the deliberation works on the
-    //    masked text only — same invariant as the quick pipeline).
-    let deid = PipelineDeidentifier::new();
-    let deident_result = deid.deidentify(&request.text).map_err(|e| e.to_string())?;
-    let masked_text = deident_result.masked_text.clone();
-    let deident_pipeline_id = deident_result.pipeline_id.to_owned();
+    // Drafts-first: persist the case row + attachments before the (slow)
+    // 4-pass deliberation begins. Frontend can render the draft right
+    // away; we mark it `Completed`/`Failed` at the end.
+    let StagedDraft { case, attachments } =
+        stage_draft(app, state, &workspace, &store, &request).await?;
+    let masked_text = case.masked_text.clone();
 
-    // 2) Ingest attachments (same flow as run_case — local-only).
-    let case_id_for_attachments = format!("case-{}", uuid::Uuid::new_v4());
-    let cases_root = state.paths.workspace_dir(&workspace.id).join("cases");
-    let attachments = if request.attached_file_paths.is_empty() {
-        Vec::new()
-    } else {
-        let paths: Vec<std::path::PathBuf> = request
-            .attached_file_paths
-            .iter()
-            .map(std::path::PathBuf::from)
-            .collect();
-        ingest_case_attachments(paths, &case_id_for_attachments, &cases_root, &deid)
-            .await
-            .map_err(|e| e.to_string())?
-    };
-
-    // 3) Retrieve workspace knowledge-base evidence + similar past cases
-    //    using the same plumbing as the quick pipeline.
     let cfg = state.config.lock().map_err(|_| "config poisoned")?.clone();
     let mut options = VerdictOptions::default();
     options.top_k = cfg.rag.top_k;
@@ -1605,7 +1648,7 @@ pub(crate) async fn run_case_deliberated_impl(
 
     let deliberation_started = chrono::Utc::now();
     let deliberation_started_inst = std::time::Instant::now();
-    let outcome = run_deliberation(
+    let outcome = match run_deliberation(
         Arc::clone(&provider),
         inputs,
         allowed,
@@ -1613,25 +1656,22 @@ pub(crate) async fn run_case_deliberated_impl(
         tx,
     )
     .await
-    .map_err(|e| e.to_string())?;
+    {
+        Ok(o) => o,
+        Err(e) => {
+            // Mark draft as failed so the UI stops showing "running…".
+            mark_case_failed_best_effort(&store, &case.id);
+            let _ = forward_task.await;
+            return Err(e.to_string());
+        }
+    };
     let elapsed_ms = deliberation_started_inst.elapsed().as_millis() as u64;
     let _ = forward_task.await;
 
-    // 6) Persist case + verdict + trace. Same shape as the quick path so
-    //    list_cases / show_case continue to work uniformly.
-    let case_id = format!("case-{}", uuid::Uuid::new_v4());
+    // The case row is already persisted as Draft. Build the verdict-side
+    // records and promote to Completed in a single locked block below.
+    let case_id = case.id.clone();
     let now = chrono::Utc::now();
-    let case = CaseRecord {
-        id: case_id.clone(),
-        created_at: now,
-        case_date: now,
-        workspace_id: workspace.id.clone(),
-        question: request.question.clone(),
-        original_text: request.text.clone(),
-        masked_text: masked_text.clone(),
-        deident_pipeline_id,
-        status: conclave_verdict::CaseStatus::Completed,
-    };
     let verdict_record = VerdictRecord {
         id: format!("verdict-{}", uuid::Uuid::new_v4()),
         case_id: case.id.clone(),
@@ -1667,36 +1707,10 @@ pub(crate) async fn run_case_deliberated_impl(
         1_200,
     );
 
-    // Move attachments to the final case-id directory, mirroring run_case.
-    let mut moved_attachments = Vec::with_capacity(attachments.len());
-    if !attachments.is_empty() {
-        let workspace_cases = state.paths.workspace_dir(&workspace.id).join("cases");
-        let final_dir = workspace_cases.join(&case_id).join("attachments");
-        if let Err(e) = tokio::fs::create_dir_all(&final_dir).await {
-            tracing::warn!(error = %e, "could not create attachments dir");
-        }
-        for mut att in attachments {
-            att.case_id = case_id.clone();
-            let src = std::path::PathBuf::from(&att.stored_path);
-            if let Some(filename) = src.file_name() {
-                let dst = final_dir.join(filename);
-                if src != dst {
-                    if let Err(e) = tokio::fs::rename(&src, &dst).await {
-                        tracing::debug!(error = %e, "could not move attachment to final dir");
-                    } else {
-                        att.stored_path = dst.to_string_lossy().into_owned();
-                    }
-                }
-            }
-            moved_attachments.push(att);
-        }
-        let temp_dir = workspace_cases.join(&case_id_for_attachments);
-        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
-    }
-
-    let persisted_attachments = {
+    // Promote draft → Completed and persist the verdict-side records.
+    // The case row and attachments already exist on disk + in SQLite.
+    {
         let g = store.lock().map_err(|_| "store poisoned")?;
-        g.insert_case(&case).map_err(|e| e.to_string())?;
         g.insert_verdict(&verdict_record)
             .map_err(|e| e.to_string())?;
         g.insert_trace(&retrieval).map_err(|e| e.to_string())?;
@@ -1709,19 +1723,20 @@ pub(crate) async fn run_case_deliberated_impl(
             &verdict_summary,
         )
         .map_err(|e| e.to_string())?;
-        for att in &moved_attachments {
-            if let Err(e) = g.insert_attachment(att) {
-                tracing::warn!(error = ?e, "could not persist attachment row");
-            }
-        }
-        moved_attachments
-    };
+        g.mark_case_status(&case_id, conclave_verdict::CaseStatus::Completed)
+            .map_err(|e| e.to_string())?;
+    }
+
+    // The promoted record carries the canonical `Completed` status so
+    // the frontend response matches what's now in SQLite.
+    let mut promoted_case = case;
+    promoted_case.status = conclave_verdict::CaseStatus::Completed;
 
     Ok(CaseRunResponse {
-        case,
+        case: promoted_case,
         verdict_record,
         verdict: outcome.verdict,
-        attachments: persisted_attachments,
+        attachments,
     })
 }
 
@@ -1912,7 +1927,7 @@ pub async fn run_batch_cases(
                 let result = if deliberative {
                     run_case_deliberated_impl(&app_in_task, state_ref, req).await
                 } else {
-                    run_case_impl(state_ref, req).await
+                    run_case_impl(&app_in_task, state_ref, req).await
                 };
                 match result {
                     Ok(resp) => {

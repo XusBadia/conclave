@@ -118,9 +118,11 @@
     "no_question": "(no question)",
     "status": {
       "draft": "draft",
+      "running": "running…",
       "completed": "completed",
       "failed": "failed"
     },
+    "batch_progress_banner": "Running batch · {{done}}/{{total}} cases complete",
     "new_title": "New case",
     "new_subtitle": "Paste a clinical note — it will be de-identified before any LLM call",
     "field_text": "Case text",
