@@ -93,7 +93,11 @@ export interface ProviderInfo {
   default_model: string;
   requires_network: boolean;
   auth: "api-key" | "local" | "oauth";
-  kind: "standard" | "oauth";
+  // `subtask` flags providers that are restricted to non-clinical
+  // utility flows (Apple Intelligence today). The picker filter in
+  // Cases/Knowledge already hides them; we surface the kind so the
+  // Settings card can render the right badge.
+  kind: "standard" | "oauth" | "subtask";
   hint: string | null;
 }
 
@@ -120,7 +124,7 @@ export interface CaseRecord {
   original_text: string;
   masked_text: string;
   deident_pipeline_id: string;
-  status: "completed" | "failed";
+  status: "draft" | "completed" | "failed";
 }
 
 export interface VerdictRecord {
@@ -354,6 +358,20 @@ export const ipc = {
     cases: BatchCaseInput[];
   }) => invoke<BatchRunSummary>("run_batch_cases", { request: req }),
   batchCancel: () => invoke<void>("batch_cancel"),
+
+  // Drafts
+  createDraftCases: (req: {
+    workspace_id: string;
+    cases: BatchCaseInput[];
+  }) => invoke<CaseRecord[]>("create_draft_cases", { request: req }),
+  runDraftCase: (req: {
+    workspace_id: string;
+    case_id: string;
+    provider_id: string;
+    model?: string;
+    text?: string;
+    question?: string;
+  }) => invoke<CaseRunResponse>("run_draft_case", { request: req }),
 };
 
 // ---------------------------------------------------------------------------

@@ -103,6 +103,8 @@ pub fn run() {
             commands::show_case,
             commands::list_case_attachments,
             commands::get_deliberation_trace,
+            commands::create_draft_cases,
+            commands::run_draft_case,
             commands::submit_feedback,
             commands::update_case_date,
             commands::parse_batch_folder,

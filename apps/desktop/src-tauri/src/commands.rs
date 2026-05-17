@@ -11,9 +11,9 @@ use conclave_core::{Workspace, WorkspaceManager};
 use conclave_deident::{Deidentifier, PipelineDeidentifier};
 use conclave_providers::{
     open_in_browser, persist_tokens, secrets, AnthropicLoginFlow, AnthropicOAuthProvider,
-    AnthropicProvider, CompletionRequest, ImageInput, LlmProvider, Message, OllamaProvider,
-    OpenAILoginFlow, OpenAIOAuthProvider, OpenAiProvider, OpenRouterProvider, KNOWN_PROVIDERS,
-    OAUTH_PROVIDERS,
+    AnthropicProvider, AppleIntelligenceProvider, CompletionRequest, ImageInput, LlmProvider,
+    Message, OllamaProvider, OpenAILoginFlow, OpenAIOAuthProvider, OpenAiProvider,
+    OpenRouterProvider, ProviderScope, KNOWN_PROVIDERS, OAUTH_PROVIDERS,
 };
 use conclave_rag::{
     ChunkParams, DocumentRecord, DocumentRepository, IngestionEvent, IngestionPipeline,
@@ -486,7 +486,7 @@ pub async fn ask_documents(
         .load(&request.workspace_id)
         .map_err(|e| e.to_string())?;
     let api_key = match request.provider_id.as_str() {
-        "ollama" | "anthropic-oauth" | "openai-oauth" => String::new(),
+        "ollama" | "apple-intelligence" | "anthropic-oauth" | "openai-oauth" => String::new(),
         other => secrets::load(other)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("no API key for {other}"))?,
@@ -497,6 +497,7 @@ pub async fn ask_documents(
         request.model.clone(),
         state.paths.config_dir(),
     )?;
+    ensure_general_scope(&provider)?;
     let embedder = Arc::clone(&state.embedder);
     let repo = get_repo(&state, &request.workspace_id).await?;
     let top_k = state
@@ -592,10 +593,49 @@ pub async fn list_providers(state: State<'_, AppState>) -> CommandResult<Vec<Pro
                 let p = OllamaProvider::new();
                 (p.ping().await, "llama3.1:8b".into(), false)
             }
+            "apple-intelligence" => {
+                let p = AppleIntelligenceProvider::new();
+                let avail = p.availability().await;
+                let ready = matches!(
+                    avail,
+                    conclave_providers::AppleIntelligenceAvailability::Available
+                );
+                (
+                    ready,
+                    conclave_providers::APPLE_INTELLIGENCE_MODEL_LABEL.to_owned(),
+                    false,
+                )
+            }
             "anthropic" => (configured, "claude-sonnet-4-6-20250929".into(), true),
             "openai" => (configured, "gpt-5".into(), true),
             "openrouter" => (configured, "set per call".into(), true),
             _ => (false, "—".into(), false),
+        };
+        let auth = match *id {
+            "ollama" | "apple-intelligence" => "local",
+            _ => "api-key",
+        };
+        let kind = match *id {
+            "apple-intelligence" => "subtask",
+            _ => "standard",
+        };
+        // For the on-device subtask provider, surface the structural
+        // reason it's not available (no Apple Silicon, Intelligence off,
+        // model still downloading, etc.) so the Settings card can show
+        // a helpful explanation instead of a generic error.
+        let hint = if *id == "apple-intelligence" && !available {
+            let p = AppleIntelligenceProvider::new();
+            Some(p.availability().await.tag().to_owned())
+        } else {
+            None
+        };
+        // The "configured" flag means "ready to use" in the UI. Apple
+        // Intelligence has no key, so we surface the runtime
+        // availability check as the configured signal — matches Ollama.
+        let configured = if *id == "apple-intelligence" {
+            available
+        } else {
+            configured
         };
         out.push(ProviderInfo {
             id: (*id).to_owned(),
@@ -603,13 +643,9 @@ pub async fn list_providers(state: State<'_, AppState>) -> CommandResult<Vec<Pro
             available,
             default_model,
             requires_network: requires_net,
-            auth: if *id == "ollama" {
-                "local".into()
-            } else {
-                "api-key".into()
-            },
-            kind: "standard".into(),
-            hint: None,
+            auth: auth.into(),
+            kind: kind.into(),
+            hint,
         });
     }
     for id in OAUTH_PROVIDERS {
@@ -657,7 +693,7 @@ pub async fn list_providers(state: State<'_, AppState>) -> CommandResult<Vec<Pro
 
 #[tauri::command]
 pub async fn set_provider_key(id: String, api_key: String) -> CommandResult<()> {
-    if id == "ollama" {
+    if matches!(id.as_str(), "ollama" | "apple-intelligence") {
         return ok(());
     }
     if api_key.trim().is_empty() {
@@ -673,7 +709,7 @@ pub async fn test_provider(
     prompt: Option<String>,
 ) -> CommandResult<String> {
     let api_key = match id.as_str() {
-        "ollama" | "anthropic-oauth" | "openai-oauth" => String::new(),
+        "ollama" | "apple-intelligence" | "anthropic-oauth" | "openai-oauth" => String::new(),
         _ => match secrets::load(&id).map_err(|e| e.to_string())? {
             Some(k) => k,
             None => return err(format!("no API key for {id}")),
@@ -873,6 +909,9 @@ fn build_provider(
             }
             Arc::new(p)
         }
+        // On-device Apple Intelligence. No credentials, no model
+        // selection — `FoundationModels` picks the model itself.
+        "apple-intelligence" => Arc::new(AppleIntelligenceProvider::new()),
         // OAuth providers read only Conclave's own token file. We do NOT
         // fall back to `~/.codex/auth.json` / `~/.claude/.credentials.json`
         // — see `list_providers` for the rationale.
@@ -896,6 +935,20 @@ fn build_provider(
         }
         other => return Err(format!("unknown provider `{other}`")),
     })
+}
+
+/// Guard for clinical call sites. Subtask-only providers (e.g. Apple
+/// Intelligence, whose vendor guardrails reject clinical content) are
+/// barred from deliberation flows. The frontend filters them out of
+/// the relevant pickers; this is the backend-side belt-and-braces.
+fn ensure_general_scope(provider: &Arc<dyn LlmProvider>) -> CommandResult<()> {
+    if provider.capabilities().scope == ProviderScope::Subtask {
+        return err(format!(
+            "Provider `{}` is restricted to utility tasks and cannot be used for clinical deliberation.",
+            provider.id()
+        ));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -953,7 +1006,10 @@ pub(crate) async fn run_case_impl(
     let workspace = workspace_manager(state)
         .load(&request.workspace_id)
         .map_err(|e| e.to_string())?;
-    let api_key = if request.provider_id == "ollama" {
+    let api_key = if matches!(
+        request.provider_id.as_str(),
+        "ollama" | "apple-intelligence"
+    ) {
         String::new()
     } else {
         match secrets::load(&request.provider_id).map_err(|e| e.to_string())? {
@@ -967,6 +1023,7 @@ pub(crate) async fn run_case_impl(
         request.model.clone(),
         state.paths.config_dir(),
     )?;
+    ensure_general_scope(&provider)?;
 
     let embedder = Arc::clone(&state.embedder);
     let repo = get_repo(state, &workspace.id).await?;
@@ -1088,6 +1145,215 @@ pub fn get_deliberation_trace(
 }
 
 // ---------------------------------------------------------------------------
+// Draft cases — created from the classify-drop modal without running the
+// committee. The clinician later opens a draft from the list, optionally
+// adds clinical context in NewCase, and promotes it via `run_draft_case`.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct CreateDraftCasesRequest {
+    pub workspace_id: String,
+    pub cases: Vec<crate::batch::BatchCaseInput>,
+}
+
+#[tauri::command]
+pub async fn create_draft_cases(
+    state: State<'_, AppState>,
+    request: CreateDraftCasesRequest,
+) -> CommandResult<Vec<CaseRecord>> {
+    let workspace = workspace_manager(&state)
+        .load(&request.workspace_id)
+        .map_err(|e| e.to_string())?;
+    let store = case_store_arc(&state, &workspace.id)?;
+    let cases_root = state.paths.workspace_dir(&workspace.id).join("cases");
+    let deid = PipelineDeidentifier::new();
+
+    struct Staged {
+        record: CaseRecord,
+        attachments: Vec<CaseAttachment>,
+    }
+    let mut staged: Vec<Staged> = Vec::with_capacity(request.cases.len());
+
+    for input in request.cases {
+        let case_id = format!("case-{}", uuid::Uuid::new_v4());
+
+        let (masked_text, deident_pipeline_id) = if input.text.trim().is_empty() {
+            (String::new(), "noop".to_owned())
+        } else {
+            let r = deid.deidentify(&input.text).map_err(|e| e.to_string())?;
+            (r.masked_text.clone(), r.pipeline_id.to_owned())
+        };
+
+        let attachments = if input.attached_file_paths.is_empty() {
+            Vec::new()
+        } else {
+            let paths: Vec<std::path::PathBuf> = input
+                .attached_file_paths
+                .iter()
+                .map(std::path::PathBuf::from)
+                .collect();
+            let mut atts = ingest_case_attachments(paths, &case_id, &cases_root, &deid)
+                .await
+                .map_err(|e| e.to_string())?;
+            for a in &mut atts {
+                a.case_id.clone_from(&case_id);
+            }
+            atts
+        };
+
+        let now = chrono::Utc::now();
+        let record = CaseRecord {
+            id: case_id,
+            created_at: now,
+            case_date: now,
+            workspace_id: workspace.id.clone(),
+            question: input.question.clone(),
+            original_text: input.text.clone(),
+            masked_text,
+            deident_pipeline_id,
+            status: conclave_verdict::CaseStatus::Draft,
+        };
+        staged.push(Staged {
+            record,
+            attachments,
+        });
+    }
+
+    let store_guard = store.lock().map_err(|_| "store poisoned")?;
+    let mut out = Vec::with_capacity(staged.len());
+    for Staged {
+        record,
+        attachments,
+    } in staged
+    {
+        store_guard
+            .insert_case(&record)
+            .map_err(|e| e.to_string())?;
+        for att in &attachments {
+            if let Err(e) = store_guard.insert_attachment(att) {
+                tracing::warn!(error = ?e, "could not persist draft attachment row");
+            }
+        }
+        out.push(record);
+    }
+    Ok(out)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RunDraftCaseRequest {
+    pub workspace_id: String,
+    pub case_id: String,
+    pub provider_id: String,
+    pub model: Option<String>,
+    /// Optional override applied to the draft row before running.
+    pub text: Option<String>,
+    /// Optional override applied to the draft row before running.
+    pub question: Option<String>,
+}
+
+#[tauri::command]
+pub async fn run_draft_case(
+    state: State<'_, AppState>,
+    request: RunDraftCaseRequest,
+) -> CommandResult<CaseRunResponse> {
+    let workspace = workspace_manager(&state)
+        .load(&request.workspace_id)
+        .map_err(|e| e.to_string())?;
+    let store = case_store_arc(&state, &workspace.id)?;
+
+    // Load the draft + its attachments.
+    let (mut draft, attachments) = {
+        let g = store.lock().map_err(|_| "store poisoned")?;
+        let case = g
+            .get_case(&request.case_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("draft `{}` not found", request.case_id))?;
+        if case.status != conclave_verdict::CaseStatus::Draft {
+            return err(format!(
+                "case `{}` is not a draft (status: {:?})",
+                case.id, case.status
+            ));
+        }
+        let atts = g
+            .list_attachments_for_case(&request.case_id)
+            .map_err(|e| e.to_string())?;
+        (case, atts)
+    };
+
+    // Apply any clinical-context edits from NewCase before running.
+    let deid = PipelineDeidentifier::new();
+    if let Some(new_text) = request.text.clone() {
+        let (masked, pipeline_id) = if new_text.trim().is_empty() {
+            (String::new(), "noop".to_owned())
+        } else {
+            let r = deid.deidentify(&new_text).map_err(|e| e.to_string())?;
+            (r.masked_text.clone(), r.pipeline_id.to_owned())
+        };
+        draft.original_text = new_text;
+        draft.masked_text = masked;
+        draft.deident_pipeline_id = pipeline_id;
+    }
+    if let Some(new_question) = request.question.clone() {
+        draft.question = new_question;
+    }
+    {
+        let g = store.lock().map_err(|_| "store poisoned")?;
+        g.update_case_draft_content(
+            &draft.id,
+            &draft.original_text,
+            &draft.masked_text,
+            &draft.deident_pipeline_id,
+            &draft.question,
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    // Provider + pipeline setup mirrors run_case_impl.
+    let api_key = if request.provider_id == "ollama" {
+        String::new()
+    } else {
+        match secrets::load(&request.provider_id).map_err(|e| e.to_string())? {
+            Some(k) => k,
+            None => return err(format!("no API key for `{}`", request.provider_id)),
+        }
+    };
+    let provider = build_provider(
+        &request.provider_id,
+        &api_key,
+        request.model.clone(),
+        state.paths.config_dir(),
+    )?;
+    let mut options = VerdictOptions::default();
+    let cfg = state.config.lock().map_err(|_| "config poisoned")?.clone();
+    options.top_k = cfg.rag.top_k;
+    if let Some(lang) = workspace.language.clone() {
+        options.output_language = lang;
+    }
+
+    let embedder = Arc::clone(&state.embedder);
+    let repo = get_repo(&state, &workspace.id).await?;
+    let pipeline = VerdictPipeline::new(
+        workspace.clone(),
+        Box::new(PipelineDeidentifier::new()),
+        embedder,
+        repo,
+        provider,
+        Arc::clone(&store),
+    );
+    let run = pipeline
+        .run_for_case(&draft, &attachments, &options)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(CaseRunResponse {
+        case: run.case,
+        verdict_record: run.verdict_record,
+        verdict: run.verdict,
+        attachments,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Deliberative mode — multi-pass committee with streaming progress events
 // ---------------------------------------------------------------------------
 
@@ -1166,7 +1432,10 @@ pub(crate) async fn run_case_deliberated_impl(
     let workspace = workspace_manager(state)
         .load(&request.workspace_id)
         .map_err(|e| e.to_string())?;
-    let api_key = if request.provider_id == "ollama" {
+    let api_key = if matches!(
+        request.provider_id.as_str(),
+        "ollama" | "apple-intelligence"
+    ) {
         String::new()
     } else {
         match secrets::load(&request.provider_id).map_err(|e| e.to_string())? {
@@ -1180,6 +1449,7 @@ pub(crate) async fn run_case_deliberated_impl(
         request.model.clone(),
         state.paths.config_dir(),
     )?;
+    ensure_general_scope(&provider)?;
 
     let store = case_store_arc(state, &workspace.id)?;
 
@@ -1535,6 +1805,29 @@ pub async fn run_batch_cases(
     state: State<'_, AppState>,
     request: BatchRunRequest,
 ) -> CommandResult<BatchRunSummary> {
+    // Fail-fast before announcing 100 cases as queued: build the
+    // provider once and verify its scope. The per-case impls have the
+    // same guard, but doing it up here turns a "all cases failed"
+    // toast into a single clear error.
+    let probe_key = if matches!(
+        request.provider_id.as_str(),
+        "ollama" | "apple-intelligence"
+    ) {
+        String::new()
+    } else {
+        secrets::load(&request.provider_id)
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default()
+    };
+    let probe_provider = build_provider(
+        &request.provider_id,
+        &probe_key,
+        request.model.clone(),
+        state.paths.config_dir(),
+    )?;
+    ensure_general_scope(&probe_provider)?;
+    drop(probe_provider);
+
     // Reset the cancellation flag for this batch.
     state
         .batch_cancel

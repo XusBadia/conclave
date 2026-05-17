@@ -103,6 +103,10 @@ CREATE INDEX IF NOT EXISTS deliberation_traces_verdict_idx
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CaseStatus {
+    /// Case created with attachments but no verdict yet. The clinician
+    /// can later open it from the list to add clinical context and run
+    /// the committee — at which point it becomes `Completed` or `Failed`.
+    Draft,
     /// Verdict produced and persisted.
     Completed,
     /// LLM call or validation failed.
@@ -110,14 +114,16 @@ pub enum CaseStatus {
 }
 
 impl CaseStatus {
-    const fn as_db_str(self) -> &'static str {
+    pub const fn as_db_str(self) -> &'static str {
         match self {
+            Self::Draft => "draft",
             Self::Completed => "completed",
             Self::Failed => "failed",
         }
     }
-    fn from_db_str(s: &str) -> Option<Self> {
+    pub fn from_db_str(s: &str) -> Option<Self> {
         match s {
+            "draft" => Some(Self::Draft),
             "completed" => Some(Self::Completed),
             "failed" => Some(Self::Failed),
             _ => None,
@@ -363,6 +369,50 @@ impl CaseStore {
                     c.status.as_db_str(),
                     c.case_date.to_rfc3339(),
                 ],
+            )
+            .map_err(map_sql)?;
+        Ok(())
+    }
+
+    /// Overwrite the editable fields of a draft case. Used when the
+    /// clinician opens a draft from the list, adds clinical context, and
+    /// fires "Run committee" — the values flow back through this UPDATE
+    /// before the pipeline runs against the existing row.
+    pub fn update_case_draft_content(
+        &self,
+        case_id: &str,
+        original_text: &str,
+        masked_text: &str,
+        deident_pipeline_id: &str,
+        question: &str,
+    ) -> Result<()> {
+        self.conn
+            .execute(
+                "UPDATE cases
+                    SET original_text = ?1,
+                        masked_text = ?2,
+                        deident_pipeline_id = ?3,
+                        question = ?4
+                  WHERE id = ?5",
+                params![
+                    original_text,
+                    masked_text,
+                    deident_pipeline_id,
+                    question,
+                    case_id,
+                ],
+            )
+            .map_err(map_sql)?;
+        Ok(())
+    }
+
+    /// Transition a case to a new status — used to promote a `Draft` to
+    /// `Completed`/`Failed` once the pipeline has run against it.
+    pub fn mark_case_status(&self, case_id: &str, status: CaseStatus) -> Result<()> {
+        self.conn
+            .execute(
+                "UPDATE cases SET status = ?1 WHERE id = ?2",
+                params![status.as_db_str(), case_id],
             )
             .map_err(map_sql)?;
         Ok(())

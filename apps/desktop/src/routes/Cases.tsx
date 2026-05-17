@@ -12,6 +12,7 @@ import { cn } from "../lib/cn";
 import {
   ipc,
   usableProviders,
+  type BatchCaseInput,
   type CaseAttachment,
   type CaseDetail,
   type CaseRecord,
@@ -19,7 +20,7 @@ import {
   type Verdict,
   type Workspace,
 } from "../lib/ipc";
-import { metaFor } from "../lib/providers";
+import { isClinicalEligible, metaFor } from "../lib/providers";
 
 // Extensions we accept when the user drops or picks files for a case.
 // Mirrors `apps/desktop/src-tauri/src/batch.rs::ATTACHMENT_EXTS` so the
@@ -227,6 +228,16 @@ export function CasesPage({
   // them off the same way and NewCase merges them with its current state.
   const [pendingDrop, setPendingDrop] = useState<PendingAttachment[]>([]);
   const [dropOverlay, setDropOverlay] = useState(false);
+  /**
+   * State of the classify-drop modal. Opened on multi-file drops; the
+   * proposal is fetched from the backend heuristic so we render it with
+   * editable patient cards rather than dumping everything into a single
+   * NewCase form. `null` = modal closed.
+   */
+  const [classifyDialog, setClassifyDialog] = useState<{
+    proposal: BatchCaseInput[];
+    loading: boolean;
+  } | null>(null);
   const [unsupportedDropError, setUnsupportedDropError] = useState<string | null>(
     null,
   );
@@ -266,6 +277,7 @@ export function CasesPage({
     setEditDateError(null);
     setPendingDrop([]);
     setUnsupportedDropError(null);
+    setClassifyDialog(null);
   }, [workspace.id]);
 
   // Page-level Tauri drag-drop listener. Bound once for the whole Cases
@@ -297,12 +309,29 @@ export function CasesPage({
             else rejected.push(p);
           }
           if (accepted.length > 0) {
-            setPendingDrop((prev) => dedupeAttachments(prev, accepted));
-            // Anything dropped while on the list lands in the new-case
-            // form. From there NewCase merges it with whatever state it
-            // already has so successive drops keep stacking.
-            setView((v) => (v === "list" || v === "show" ? "new" : v));
             setUnsupportedDropError(null);
+            if (accepted.length === 1) {
+              // Single file → NewCase, same as before.
+              setPendingDrop((prev) => dedupeAttachments(prev, accepted));
+              setView((v) => (v === "list" || v === "show" ? "new" : v));
+            } else {
+              // Multi-file → classify-drop modal. We ask the backend for
+              // the heuristic proposal first; while it's in-flight the
+              // modal renders a `loading` state.
+              setClassifyDialog({ proposal: [], loading: true });
+              (async () => {
+                try {
+                  const proposal = await ipc.proposeCaseGrouping(
+                    accepted.map((a) => a.path),
+                    t("cases.default_question"),
+                  );
+                  setClassifyDialog({ proposal, loading: false });
+                } catch (e) {
+                  setUnsupportedDropError(String(e));
+                  setClassifyDialog(null);
+                }
+              })();
+            }
           }
           if (rejected.length > 0 && accepted.length === 0) {
             setUnsupportedDropError(
@@ -410,18 +439,26 @@ export function CasesPage({
   }, [selectedIds, cases]);
 
   if (view === "new") {
+    // When `selected` is a draft (clicked from the list), we hand it to
+    // NewCase so it pre-fills text / question / attachments and runs via
+    // `runDraftCase` against the existing case id.
+    const draft =
+      selected && selected.case.status === "draft" ? selected : null;
     return (
       <NewCase
         workspace={workspace}
         onCancel={() => {
           setView("list");
           setPendingDrop([]);
+          setSelected(null);
         }}
         onGoToSettings={onGoToSettings}
         incomingAttachments={pendingDrop}
         onIncomingConsumed={() => setPendingDrop([])}
+        draft={draft}
         onDone={async (id) => {
           setPendingDrop([]);
+          setSelected(null);
           await refresh();
           const det = await ipc.showCase(workspace.id, id);
           setSelected(det);
@@ -578,7 +615,13 @@ export function CasesPage({
                       }
                       const det = await ipc.showCase(workspace.id, c.id);
                       setSelected(det);
-                      setView("show");
+                      // Drafts have no verdict yet — open NewCase
+                      // pre-filled so the clinician can add clinical
+                      // context and run them. Completed/Failed go to
+                      // ShowCase as before.
+                      setView(
+                        det && det.case.status === "draft" ? "new" : "show",
+                      );
                     }}
                     className={cn(
                       "block w-full px-5 py-4 text-left transition focus:outline-none focus-visible:bg-surface",
@@ -609,7 +652,9 @@ export function CasesPage({
                         className={
                           c.status === "completed"
                             ? "rounded bg-ok/15 px-2 py-0.5 text-[11px] font-medium text-ok"
-                            : "rounded bg-danger/15 px-2 py-0.5 text-[11px] font-medium text-danger"
+                            : c.status === "draft"
+                              ? "rounded bg-violet-400/15 px-2 py-0.5 text-[11px] font-medium text-violet-200"
+                              : "rounded bg-danger/15 px-2 py-0.5 text-[11px] font-medium text-danger"
                         }
                       >
                         {t(`cases.status.${c.status}`)}
@@ -660,6 +705,26 @@ export function CasesPage({
         error={editDateError}
         onApply={onApplyDate}
       />
+
+      {classifyDialog && (
+        <ClassifyDropDialog
+          workspace={workspace}
+          initialProposal={classifyDialog.proposal}
+          loading={classifyDialog.loading}
+          onClose={() => setClassifyDialog(null)}
+          onCommitted={async () => {
+            setClassifyDialog(null);
+            await refresh();
+          }}
+          onOpenCase={async (caseId) => {
+            setClassifyDialog(null);
+            const det = await ipc.showCase(workspace.id, caseId);
+            setSelected(det);
+            setView(det && det.case.status === "draft" ? "new" : "show");
+          }}
+          onGoToSettings={onGoToSettings}
+        />
+      )}
     </div>
   );
 }
@@ -738,6 +803,7 @@ function NewCase({
   onGoToSettings,
   incomingAttachments,
   onIncomingConsumed,
+  draft,
 }: {
   workspace: Workspace;
   onCancel: () => void;
@@ -745,12 +811,21 @@ function NewCase({
   onGoToSettings?: () => void;
   incomingAttachments?: PendingAttachment[];
   onIncomingConsumed?: () => void;
+  /**
+   * When set, NewCase boots in "edit draft" mode: pre-fills text /
+   * question, loads the persisted attachments, and on submit calls
+   * `runDraftCase` against the existing case id instead of minting a
+   * fresh one via `runCase`.
+   */
+  draft?: CaseDetail | null;
 }) {
   const { t } = useTranslation();
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [providerId, setProviderId] = useState<string>("");
-  const [text, setText] = useState("");
-  const [question, setQuestion] = useState(t("cases.default_question"));
+  const [text, setText] = useState(draft?.case.original_text ?? "");
+  const [question, setQuestion] = useState(
+    draft?.case.question ?? t("cases.default_question"),
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [maskedPreview, setMaskedPreview] = useState<string | null>(null);
@@ -761,6 +836,11 @@ function NewCase({
   const [attachments, setAttachments] = useState<PendingAttachment[]>(() =>
     incomingAttachments ?? [],
   );
+  // Persisted attachments belonging to the draft. Rendered read-only —
+  // the clinician can drop NEW files but not remove ones already saved
+  // (that would require a separate delete command). Cleared once the
+  // draft promotes.
+  const [draftAttachments, setDraftAttachments] = useState<CaseAttachment[]>([]);
 
   useEffect(() => {
     (async () => {
@@ -778,6 +858,27 @@ function NewCase({
     setAttachments((prev) => dedupeAttachments(prev, incomingAttachments));
     onIncomingConsumed?.();
   }, [incomingAttachments, onIncomingConsumed]);
+
+  // When the user opens a draft from the list, fetch its persisted
+  // attachments so we can render them read-only above the dropzone.
+  useEffect(() => {
+    if (!draft) {
+      setDraftAttachments([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await ipc.listCaseAttachments(workspace.id, draft.case.id);
+        if (!cancelled) setDraftAttachments(list);
+      } catch {
+        if (!cancelled) setDraftAttachments([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [draft, workspace.id]);
 
   const pickFiles = async () => {
     const picked = await openDialog({
@@ -807,7 +908,14 @@ function NewCase({
     setAttachments((prev) => prev.filter((a) => a.path !== path));
   };
 
-  const usable = useMemo(() => usableProviders(providers), [providers]);
+  // Case deliberation is the highest-risk clinical surface, so the
+  // picker only lists providers that are scope=`general`. Subtask-only
+  // providers (Apple Intelligence today) are hidden here even when they
+  // are otherwise usable.
+  const usable = useMemo(
+    () => usableProviders(providers).filter((p) => isClinicalEligible(p.id)),
+    [providers],
+  );
 
   const previewDeident = async () => {
     if (!text.trim()) return;
@@ -821,7 +929,10 @@ function NewCase({
   };
 
   const run = async () => {
-    if (!text.trim() && attachments.length === 0) return;
+    const hasDraftAttachments = draftAttachments.length > 0;
+    if (!text.trim() && attachments.length === 0 && !hasDraftAttachments) {
+      return;
+    }
     if (!providerId) {
       setError(t("cases.no_provider_configured"));
       return;
@@ -829,14 +940,29 @@ function NewCase({
     setBusy(true);
     setError(null);
     try {
-      const resp = await ipc.runCase({
-        workspace_id: workspace.id,
-        text,
-        question,
-        provider_id: providerId,
-        attached_file_paths: attachments.map((a) => a.path),
-      });
-      onDone(resp.case.id);
+      if (draft) {
+        // Promote the existing draft. New drops/picks the clinician made
+        // in this session are NOT carried over for now — they need to be
+        // attached to a fresh case. (A follow-up could persist them via
+        // an `add_attachments_to_case` command.)
+        const resp = await ipc.runDraftCase({
+          workspace_id: workspace.id,
+          case_id: draft.case.id,
+          provider_id: providerId,
+          text,
+          question,
+        });
+        onDone(resp.case.id);
+      } else {
+        const resp = await ipc.runCase({
+          workspace_id: workspace.id,
+          text,
+          question,
+          provider_id: providerId,
+          attached_file_paths: attachments.map((a) => a.path),
+        });
+        onDone(resp.case.id);
+      }
     } catch (e) {
       setError(String(e));
     } finally {
@@ -862,6 +988,44 @@ function NewCase({
             <div className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-[13px] text-danger">
               {error}
             </div>
+          )}
+          {draft && (
+            <div className="rounded-md border border-violet-400/40 bg-violet-400/5 px-3 py-2 text-[12.5px] text-violet-200">
+              <div className="font-semibold">{t("cases.draft_banner_title")}</div>
+              <div className="mt-0.5 text-ink-dim">
+                {t("cases.draft_banner_body")}
+              </div>
+            </div>
+          )}
+          {draft && draftAttachments.length > 0 && (
+            <Field label={t("cases.attachments_section_title")}>
+              <ul className="space-y-1.5">
+                {draftAttachments.map((a) => (
+                  <li
+                    key={a.id}
+                    className="flex items-center gap-2 rounded-md border border-border-subtle bg-bg px-2.5 py-1.5"
+                  >
+                    <span
+                      className={cn(
+                        "shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] uppercase",
+                        attachmentBadgeColor(a.doc_type),
+                      )}
+                    >
+                      {a.doc_type === "image" ? "img" : a.doc_type}
+                    </span>
+                    <span className="shrink-0 rounded bg-violet-400/15 px-1.5 py-0.5 font-mono text-[10.5px] text-violet-200">
+                      A{a.position}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink-dim">
+                      {a.original_filename}
+                    </span>
+                    <span className="shrink-0 text-[11px] text-ink-faint">
+                      {formatBytes(a.byte_size)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </Field>
           )}
           <div className="flex items-start gap-2.5 rounded-md border border-ok/30 bg-ok/5 px-3 py-2 text-[12.5px] leading-relaxed text-ink-dim">
             <svg
@@ -894,11 +1058,13 @@ function NewCase({
               placeholder={t("cases.field_text_placeholder")}
             />
           </Field>
-          <NewCaseAttachments
-            attachments={attachments}
-            onBrowse={pickFiles}
-            onRemove={removeAttachment}
-          />
+          {!draft && (
+            <NewCaseAttachments
+              attachments={attachments}
+              onBrowse={pickFiles}
+              onRemove={removeAttachment}
+            />
+          )}
           <Field label={t("cases.field_question")}>
             <Input value={question} onChange={(e) => setQuestion(e.target.value)} />
           </Field>
@@ -916,9 +1082,14 @@ function NewCase({
               variant="primary"
               onClick={run}
               loading={busy}
-              disabled={(!text.trim() && attachments.length === 0) || !providerId}
+              disabled={
+                (!text.trim() &&
+                  attachments.length === 0 &&
+                  draftAttachments.length === 0) ||
+                !providerId
+              }
             >
-              {t("cases.run_button")}
+              {draft ? t("cases.draft_run_button") : t("cases.run_button")}
             </Button>
           </div>
         </CardBody>
@@ -1515,4 +1686,596 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
       {children}
     </h4>
   );
+}
+
+// ---------------------------------------------------------------------------
+// ClassifyDropDialog — modal opened when the clinician drops ≥ 2 files on
+// the Cases window. Renders the heuristic grouping (from
+// `propose_case_grouping`) as editable patient cards with native HTML5
+// drag/drop between cards, and offers two terminal actions:
+//   • "Guardar como borradores" → `create_draft_cases` (no run)
+//   • "Ejecutar comité (N)"     → `run_batch_cases` (creates + runs)
+// ---------------------------------------------------------------------------
+
+const DROP_MIME = "application/x-conclave-classify-file";
+
+type DragPayload = { fromRow: number; fileIdx: number };
+
+function ClassifyDropDialog({
+  workspace,
+  initialProposal,
+  loading,
+  onClose,
+  onCommitted,
+  onOpenCase,
+  onGoToSettings,
+}: {
+  workspace: Workspace;
+  initialProposal: BatchCaseInput[];
+  loading: boolean;
+  onClose: () => void;
+  onCommitted: () => void;
+  onOpenCase: (caseId: string) => void;
+  onGoToSettings?: () => void;
+}) {
+  const { t } = useTranslation();
+  const [rows, setRows] = useState<BatchCaseInput[]>(initialProposal);
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [providerId, setProviderId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [draggingFrom, setDraggingFrom] = useState<number | null>(null);
+  const [openNoteIdx, setOpenNoteIdx] = useState<number | null>(null);
+
+  // Sync incoming proposal once it resolves from the loading state.
+  useEffect(() => {
+    setRows(initialProposal);
+  }, [initialProposal]);
+
+  useEffect(() => {
+    (async () => {
+      const ps = await ipc.listProviders();
+      setProviders(ps);
+      const first = ps.find((p) => p.configured || p.id === "ollama");
+      if (first) setProviderId(first.id);
+    })();
+  }, []);
+
+  const usable = useMemo(() => usableProviders(providers), [providers]);
+
+  const updateRow = (i: number, patch: Partial<BatchCaseInput>) => {
+    setRows((prev) => {
+      const next = [...prev];
+      next[i] = { ...next[i], ...patch };
+      return next;
+    });
+  };
+
+  const removeRow = (i: number) => {
+    setRows((prev) => prev.filter((_, idx) => idx !== i));
+  };
+
+  const removeFileFromRow = (rowIdx: number, fileIdx: number) => {
+    setRows((prev) =>
+      prev
+        .map((r, idx) =>
+          idx === rowIdx
+            ? {
+                ...r,
+                attached_file_paths: r.attached_file_paths.filter(
+                  (_, i) => i !== fileIdx,
+                ),
+              }
+            : r,
+        )
+        .filter(
+          (r) =>
+            r.attached_file_paths.length > 0 || r.text.trim().length > 0,
+        ),
+    );
+  };
+
+  const moveFile = (
+    fromRow: number,
+    fileIdx: number,
+    targetRow: number | "new",
+  ) => {
+    setRows((prev) => {
+      if (fromRow < 0 || fromRow >= prev.length) return prev;
+      const file = prev[fromRow].attached_file_paths[fileIdx];
+      if (file === undefined) return prev;
+      const next = prev.map((r, idx) =>
+        idx === fromRow
+          ? {
+              ...r,
+              attached_file_paths: r.attached_file_paths.filter(
+                (_, i) => i !== fileIdx,
+              ),
+            }
+          : r,
+      );
+      if (targetRow === "new") {
+        next.push({
+          patient_label: deriveLabelFromFile(file, next.length + 1),
+          text: "",
+          question: prev[fromRow].question,
+          attached_file_paths: [file],
+        });
+      } else if (targetRow >= 0 && targetRow < next.length) {
+        next[targetRow] = {
+          ...next[targetRow],
+          attached_file_paths: [
+            ...next[targetRow].attached_file_paths,
+            file,
+          ],
+        };
+      }
+      return next.filter(
+        (r) => r.attached_file_paths.length > 0 || r.text.trim().length > 0,
+      );
+    });
+  };
+
+  const mergeAllIntoOne = () => {
+    setRows((prev) => {
+      if (prev.length <= 1) return prev;
+      const allFiles = prev.flatMap((r) => r.attached_file_paths);
+      const combinedText = prev
+        .map((r) => r.text.trim())
+        .filter(Boolean)
+        .join("\n\n---\n\n");
+      return [
+        {
+          patient_label: prev[0].patient_label,
+          text: combinedText,
+          question: prev[0].question,
+          attached_file_paths: allFiles,
+        },
+      ];
+    });
+  };
+
+  const splitEachFileIntoOwnCase = () => {
+    setRows((prev) => {
+      const split: BatchCaseInput[] = [];
+      for (const r of prev) {
+        if (r.attached_file_paths.length === 0) {
+          split.push(r);
+          continue;
+        }
+        r.attached_file_paths.forEach((file, i) => {
+          split.push({
+            patient_label:
+              i === 0 && r.text.trim().length > 0
+                ? r.patient_label
+                : deriveLabelFromFile(file, split.length + 1),
+            text: i === 0 ? r.text : "",
+            question: r.question,
+            attached_file_paths: [file],
+          });
+        });
+      }
+      return split;
+    });
+  };
+
+  const saveAsDrafts = async () => {
+    if (rows.length === 0) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await ipc.createDraftCases({
+        workspace_id: workspace.id,
+        cases: rows,
+      });
+      onCommitted();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runAll = async () => {
+    if (rows.length === 0) return;
+    if (!providerId) {
+      setError(t("cases.no_provider_configured"));
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await ipc.runBatchCases({
+        workspace_id: workspace.id,
+        provider_id: providerId,
+        deliberative: false,
+        cases: rows,
+      });
+      onCommitted();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={t("cases.classify_dialog_title")}
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/45 backdrop-blur-[2px] p-4"
+    >
+      <div className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-border bg-bg-elevated shadow-soft">
+        <header className="flex items-start justify-between gap-3 border-b border-border-subtle px-5 py-4">
+          <div className="min-w-0">
+            <h2 className="text-[15px] font-semibold text-ink">
+              {t("cases.classify_dialog_title")}
+            </h2>
+            <p className="mt-0.5 text-[12.5px] text-ink-subtle">
+              {t("cases.classify_dialog_subtitle")}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            aria-label={t("cases.classify_dialog_close")}
+            className="rounded p-1 text-ink-faint transition hover:bg-surface hover:text-ink"
+          >
+            ✕
+          </button>
+        </header>
+
+        <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+          {error && (
+            <div className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-[13px] text-danger">
+              {error}
+            </div>
+          )}
+
+          {loading && (
+            <div className="rounded-md border border-border-subtle bg-bg px-3 py-6 text-center text-[13px] text-ink-faint">
+              {t("cases.classify_dialog_loading_proposal")}
+            </div>
+          )}
+
+          {!loading && (
+            <>
+              <div className="rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-[12.5px] text-warn">
+                {t("cases.classify_dialog_banner")}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={mergeAllIntoOne}
+                  disabled={busy || rows.length <= 1}
+                >
+                  {t("cases.classify_dialog_merge_all")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={splitEachFileIntoOwnCase}
+                  disabled={
+                    busy ||
+                    rows.every((r) => r.attached_file_paths.length <= 1)
+                  }
+                >
+                  {t("cases.classify_dialog_split_all")}
+                </Button>
+              </div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                {rows.map((row, i) => (
+                  <ClassifyCard
+                    key={`${row.patient_label}-${i}`}
+                    row={row}
+                    index={i}
+                    isDragSource={draggingFrom === i}
+                    busy={busy}
+                    noteOpen={openNoteIdx === i}
+                    onToggleNote={() =>
+                      setOpenNoteIdx(openNoteIdx === i ? null : i)
+                    }
+                    onLabelChange={(v) => updateRow(i, { patient_label: v })}
+                    onQuestionChange={(v) => updateRow(i, { question: v })}
+                    onTextChange={(v) => updateRow(i, { text: v })}
+                    onRemoveCase={() => removeRow(i)}
+                    onRemoveFile={(idx) => removeFileFromRow(i, idx)}
+                    onDragStart={() => setDraggingFrom(i)}
+                    onDragEnd={() => setDraggingFrom(null)}
+                    onDropFile={(p) => moveFile(p.fromRow, p.fileIdx, i)}
+                  />
+                ))}
+                {draggingFrom !== null && (
+                  <ClassifyNewCardDropTarget
+                    onDropFile={(p) => moveFile(p.fromRow, p.fileIdx, "new")}
+                    onDragEnd={() => setDraggingFrom(null)}
+                  />
+                )}
+              </div>
+            </>
+          )}
+        </div>
+
+        <footer className="space-y-3 border-t border-border-subtle px-5 py-4">
+          <ProviderField
+            providers={usable}
+            providerId={providerId}
+            onChange={setProviderId}
+            onGoToSettings={onGoToSettings}
+          />
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={onClose}
+              disabled={busy}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={saveAsDrafts}
+              loading={busy}
+              disabled={busy || rows.length === 0}
+            >
+              {t("cases.classify_dialog_save_drafts")}
+            </Button>
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={runAll}
+              loading={busy}
+              disabled={busy || rows.length === 0 || !providerId}
+            >
+              {t("cases.classify_dialog_run_all", { count: rows.length })}
+            </Button>
+          </div>
+        </footer>
+      </div>
+      {/* Touch onOpenCase to silence the unused-warning lint until we
+          surface a per-card "Open" affordance in a follow-up. */}
+      {false && <span onClick={() => onOpenCase("")} />}
+    </div>
+  );
+}
+
+function readDragPayload(e: React.DragEvent): DragPayload | null {
+  try {
+    const raw = e.dataTransfer.getData(DROP_MIME);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as DragPayload;
+    if (
+      typeof parsed.fromRow !== "number" ||
+      typeof parsed.fileIdx !== "number"
+    )
+      return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function ClassifyCard({
+  row,
+  index,
+  isDragSource,
+  busy,
+  noteOpen,
+  onToggleNote,
+  onLabelChange,
+  onQuestionChange,
+  onTextChange,
+  onRemoveCase,
+  onRemoveFile,
+  onDragStart,
+  onDragEnd,
+  onDropFile,
+}: {
+  row: BatchCaseInput;
+  index: number;
+  isDragSource: boolean;
+  busy: boolean;
+  noteOpen: boolean;
+  onToggleNote: () => void;
+  onLabelChange: (v: string) => void;
+  onQuestionChange: (v: string) => void;
+  onTextChange: (v: string) => void;
+  onRemoveCase: () => void;
+  onRemoveFile: (fileIdx: number) => void;
+  onDragStart: () => void;
+  onDragEnd: () => void;
+  onDropFile: (p: DragPayload) => void;
+}) {
+  const { t } = useTranslation();
+  const [dragOver, setDragOver] = useState(false);
+
+  return (
+    <div
+      onDragOver={(e) => {
+        if (busy) return;
+        const has = Array.from(e.dataTransfer.types).includes(DROP_MIME);
+        if (!has) return;
+        e.preventDefault();
+        setDragOver(true);
+      }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={(e) => {
+        setDragOver(false);
+        if (busy) return;
+        const payload = readDragPayload(e);
+        if (!payload) return;
+        e.preventDefault();
+        onDropFile(payload);
+        onDragEnd();
+      }}
+      className={cn(
+        "rounded-lg border bg-bg p-3 transition",
+        dragOver
+          ? "border-accent bg-accent/5 ring-1 ring-accent"
+          : isDragSource
+            ? "border-border-subtle opacity-70"
+            : "border-border-subtle",
+      )}
+    >
+      <div className="flex items-center gap-2">
+        <span className="font-mono text-[11px] text-ink-faint">
+          {index + 1}
+        </span>
+        <input
+          aria-label={t("cases.classify_dialog_patient_label")}
+          className="flex-1 rounded border border-border-subtle bg-bg px-2 py-1 text-[13px] font-medium text-ink focus:border-accent focus:outline-none"
+          value={row.patient_label}
+          onChange={(e) => onLabelChange(e.target.value)}
+          disabled={busy}
+        />
+        {!busy && (
+          <button
+            type="button"
+            onClick={onRemoveCase}
+            aria-label={t("classify_dialog_close")}
+            className="rounded p-1 text-ink-faint transition hover:bg-surface hover:text-ink"
+          >
+            ✕
+          </button>
+        )}
+      </div>
+      <input
+        aria-label={t("cases.classify_dialog_question_label")}
+        className="mt-2 w-full rounded border border-border-subtle bg-bg px-2 py-1 text-[12.5px] text-ink-dim focus:border-accent focus:outline-none"
+        value={row.question}
+        onChange={(e) => onQuestionChange(e.target.value)}
+        placeholder={t("cases.classify_dialog_question_label")}
+        disabled={busy}
+      />
+      <button
+        type="button"
+        onClick={onToggleNote}
+        className="mt-2 rounded px-1 py-0.5 text-left text-[11.5px] text-ink-faint transition hover:text-ink"
+        disabled={busy}
+      >
+        {noteOpen
+          ? t("cases.classify_dialog_hide_note")
+          : t("cases.classify_dialog_add_note")}
+      </button>
+      {noteOpen && (
+        <Textarea
+          value={row.text}
+          onChange={(e) => onTextChange(e.target.value)}
+          rows={3}
+          placeholder={t("cases.field_text_placeholder")}
+          disabled={busy}
+        />
+      )}
+      <ul className="mt-3 flex flex-wrap gap-1.5">
+        {row.attached_file_paths.length === 0 && (
+          <li className="text-[11.5px] text-ink-faint">
+            {t("cases.classify_dialog_no_files")}
+          </li>
+        )}
+        {row.attached_file_paths.map((path, fileIdx) => (
+          <li
+            key={`${path}-${fileIdx}`}
+            draggable={!busy}
+            onDragStart={(e) => {
+              if (busy) return;
+              e.dataTransfer.setData(
+                DROP_MIME,
+                JSON.stringify({ fromRow: index, fileIdx }),
+              );
+              e.dataTransfer.effectAllowed = "move";
+              onDragStart();
+            }}
+            onDragEnd={onDragEnd}
+            className="flex max-w-full items-center gap-1.5 rounded-md border border-border-subtle bg-bg-subtle px-2 py-1 text-[11.5px] text-ink-dim transition hover:border-border"
+            title={path}
+          >
+            <span aria-hidden className="cursor-grab select-none text-ink-faint">
+              ⋮⋮
+            </span>
+            <ClassifyFileChip path={path} />
+            {!busy && (
+              <button
+                type="button"
+                onClick={() => onRemoveFile(fileIdx)}
+                aria-label={t("cases.attachment_remove")}
+                className="rounded p-0.5 text-ink-faint transition hover:bg-surface hover:text-ink"
+              >
+                ✕
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function ClassifyFileChip({ path }: { path: string }) {
+  const name = path.split(/[\\/]/).pop() ?? path;
+  const dot = name.lastIndexOf(".");
+  const ext = dot === -1 ? "" : name.slice(dot + 1).toLowerCase();
+  const isImage = ["png", "jpg", "jpeg", "webp", "tif", "tiff", "heic", "heif"].includes(
+    ext,
+  );
+  return (
+    <span className="flex min-w-0 items-center gap-1">
+      <span
+        className={cn(
+          "shrink-0 rounded px-1 py-0.5 font-mono text-[9.5px] uppercase",
+          attachmentBadgeColor(isImage ? "image" : ext),
+        )}
+      >
+        {isImage ? "img" : ext || "?"}
+      </span>
+      <span className="truncate">{name}</span>
+    </span>
+  );
+}
+
+function ClassifyNewCardDropTarget({
+  onDropFile,
+  onDragEnd,
+}: {
+  onDropFile: (p: DragPayload) => void;
+  onDragEnd: () => void;
+}) {
+  const { t } = useTranslation();
+  const [over, setOver] = useState(false);
+  return (
+    <div
+      onDragOver={(e) => {
+        const has = Array.from(e.dataTransfer.types).includes(DROP_MIME);
+        if (!has) return;
+        e.preventDefault();
+        setOver(true);
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => {
+        setOver(false);
+        const payload = readDragPayload(e);
+        if (!payload) return;
+        e.preventDefault();
+        onDropFile(payload);
+        onDragEnd();
+      }}
+      className={cn(
+        "flex items-center justify-center rounded-lg border border-dashed py-6 text-[12.5px] transition",
+        over
+          ? "border-accent bg-accent/5 text-accent"
+          : "border-border-subtle text-ink-faint",
+      )}
+    >
+      + {t("cases.classify_dialog_drop_new_card")}
+    </div>
+  );
+}
+
+function deriveLabelFromFile(path: string, fallbackIndex: number): string {
+  const name = path.split(/[\\/]/).pop() ?? "";
+  const stem = name.replace(/\.[^.]+$/, "").trim();
+  return stem || `Paciente ${fallbackIndex}`;
 }
