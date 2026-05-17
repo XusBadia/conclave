@@ -1,9 +1,12 @@
 //! Shared runtime state held by the Tauri app.
 
-use std::sync::Mutex;
+use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 
 use conclave_core::{paths::Paths, Config};
 use conclave_providers::AnthropicLoginFlow;
+use conclave_rag::{DocumentRepository, Embedder, FastEmbedEmbedder};
 use tokio::task::AbortHandle;
 
 /// One per app instance.
@@ -17,15 +20,35 @@ pub struct AppState {
     /// UI cancel a stuck flow, which drops the localhost:1455 listener so
     /// the next attempt can bind cleanly.
     pub openai_login: Mutex<Option<AbortHandle>>,
+    /// Embedder shared across every RAG command. `FastEmbedEmbedder::new()` is
+    /// cheap (it does not download the model until `embed()` is first called),
+    /// so building it at startup keeps the cold path bounded to the first
+    /// ingestion call rather than every single command.
+    pub embedder: Arc<dyn Embedder>,
+    /// Per-workspace cached repository handles. Opening a `DocumentRepository`
+    /// touches both SQLite and LanceDB, so we hold them across calls.
+    pub repos: tokio::sync::Mutex<HashMap<String, Arc<DocumentRepository>>>,
+    /// Flipped to `true` by the `ingest_cancel` command to ask an in-flight
+    /// ingestion batch to stop after the file currently being processed.
+    pub ingest_cancel: Arc<AtomicBool>,
 }
 
 impl AppState {
     pub fn new(paths: Paths, config: Config) -> Self {
+        // Pin fastembed's model cache under the OS app cache dir so launches
+        // from different CWDs (Tauri dev, `open .app`, packaged release)
+        // all hit the same on-disk ONNX model and never re-download.
+        let fastembed_cache = paths.cache_dir().join("fastembed");
+        let embedder: Arc<dyn Embedder> =
+            Arc::new(FastEmbedEmbedder::new().with_cache_dir(fastembed_cache));
         Self {
             paths,
             config: Mutex::new(config),
             anthropic_login: Mutex::new(None),
             openai_login: Mutex::new(None),
+            embedder,
+            repos: tokio::sync::Mutex::new(HashMap::new()),
+            ingest_cancel: Arc::new(AtomicBool::new(false)),
         }
     }
 }

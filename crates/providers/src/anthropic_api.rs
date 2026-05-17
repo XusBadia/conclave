@@ -168,6 +168,7 @@ impl LlmProvider for AnthropicProvider {
                 output_tokens: parsed.usage.output_tokens,
             },
             model: parsed.model,
+            web_citations: Vec::new(),
         })
     }
 }
@@ -239,6 +240,7 @@ mod tests {
             max_output_tokens: None,
             temperature: None,
             json_schema: None,
+            allow_web_search: false,
         };
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()

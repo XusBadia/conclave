@@ -65,6 +65,9 @@ pub(crate) async fn run(ctx: &CommandContext, args: IngestArgs) -> Result<()> {
             IngestionEvent::Failed { path, error } => {
                 println!("  ✗ {} failed: {error}", path.display());
             }
+            // Granular progress events are GUI-only (we forward them over a
+            // Tauri channel). The CLI keeps the existing per-file output.
+            IngestionEvent::Progress { .. } => {}
         })
         .await?;
     let elapsed = start.elapsed();

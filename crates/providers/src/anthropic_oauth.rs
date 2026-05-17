@@ -332,6 +332,7 @@ impl LlmProvider for AnthropicOAuthProvider {
                 output_tokens: parsed.usage.output_tokens,
             },
             model: parsed.model,
+            web_citations: Vec::new(),
         })
     }
 }

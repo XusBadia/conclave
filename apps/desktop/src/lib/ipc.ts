@@ -48,12 +48,37 @@ export interface IngestSummary {
   messages: string[];
 }
 
-export interface SearchHit {
-  chunk_id: string;
+export interface QaSource {
+  index: number;
   document_id: string;
-  text: string;
-  distance: number;
+  document_title: string;
+  chunk_id: string;
+  snippet: string;
 }
+
+export interface WebSource {
+  url: string;
+  title: string;
+  snippet: string;
+}
+
+export interface AskDocumentsResponse {
+  answer: string;
+  sources: QaSource[];
+  web_sources: WebSource[];
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+}
+
+export type IngestStage = "extracting" | "chunking" | "embedding" | "storing";
+
+export type IngestProgressEvent =
+  | { kind: "starting"; path: string }
+  | { kind: "progress"; path: string; stage: IngestStage; percent: number }
+  | { kind: "ingested"; path: string; doc_id: string }
+  | { kind: "skipped"; path: string; reason: string }
+  | { kind: "failed"; path: string; error: string };
 
 export interface DeidentResponse {
   masked_text: string;
@@ -149,8 +174,16 @@ export const ipc = {
     invoke<boolean>("remove_document", { workspaceId, id }),
   ingestPath: (workspaceId: string, path: string) =>
     invoke<IngestSummary>("ingest_path", { workspaceId, path }),
-  searchWorkspace: (workspaceId: string, query: string, k: number) =>
-    invoke<SearchHit[]>("search_workspace", { workspaceId, query, k }),
+  ingestPaths: (workspaceId: string, paths: string[]) =>
+    invoke<IngestSummary>("ingest_paths", { workspaceId, paths }),
+  ingestCancel: () => invoke<void>("ingest_cancel"),
+  askDocuments: (req: {
+    workspace_id: string;
+    question: string;
+    provider_id: string;
+    model?: string;
+    allow_general_knowledge?: boolean;
+  }) => invoke<AskDocumentsResponse>("ask_documents", { request: req }),
 
   // Deident
   deidentText: (text: string) => invoke<DeidentResponse>("deident_text", { text }),
@@ -217,5 +250,11 @@ export function connectedSlotProviders(list: ProviderInfo[]): ProviderInfo[] {
 }
 
 export function usableProviders(list: ProviderInfo[]): ProviderInfo[] {
-  return list.filter((p) => p.configured || p.id === "ollama");
+  // A provider is usable if it's configured (API key set / OAuth completed)
+  // OR if it's Ollama AND the local server is actually responding right now.
+  // We rely on `available` here so Ollama only shows up when it's reachable
+  // — we never advertise an AI the user can't actually call.
+  return list.filter(
+    (p) => (p.configured || p.id === "ollama") && p.available,
+  );
 }

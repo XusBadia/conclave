@@ -61,7 +61,7 @@ impl Message {
 }
 
 /// Inference request sent to a provider.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CompletionRequest {
     /// Model id understood by the provider. Empty string → provider default.
     pub model: String,
@@ -76,6 +76,10 @@ pub struct CompletionRequest {
     /// shape. Not every provider can guarantee schema compliance; flat
     /// JSON-mode is the minimum bar.
     pub json_schema: Option<serde_json::Value>,
+    /// If `true`, providers that support live web search should enable it
+    /// (e.g. Codex's `web_search_preview` tool). Providers without web
+    /// support silently ignore the flag and return empty `web_citations`.
+    pub allow_web_search: bool,
 }
 
 impl CompletionRequest {
@@ -87,8 +91,20 @@ impl CompletionRequest {
             max_output_tokens: None,
             temperature: None,
             json_schema: None,
+            allow_web_search: false,
         }
     }
+}
+
+/// A web page the model consulted to answer the question, surfaced so the
+/// UI can show "answer used the web" disclosure with clickable links.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct WebCitation {
+    pub url: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub snippet: String,
 }
 
 /// Successful completion result.
@@ -100,6 +116,11 @@ pub struct CompletionResponse {
     pub usage: Usage,
     /// Model id that actually served the request, as echoed by the provider.
     pub model: String,
+    /// URLs the model cited from a live web search, in order of first
+    /// appearance in the answer. Empty when the provider doesn't run a
+    /// web search or the model didn't trigger one.
+    #[serde(default)]
+    pub web_citations: Vec<WebCitation>,
 }
 
 /// Token usage reported by a provider.

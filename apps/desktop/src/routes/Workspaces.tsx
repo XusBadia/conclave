@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "../components/Button";
 import { Card, CardBody, CardHeader } from "../components/Card";
+import { Combobox } from "../components/Combobox";
 import { Field, Input } from "../components/Field";
 import { Sheet } from "../components/Sheet";
+import { specialtyOptions } from "../constants/specialties";
 import { ipc, type Workspace } from "../lib/ipc";
 
 export function WorkspacesPage({
@@ -122,7 +124,7 @@ export function WorkspacesPage({
                     key={ws.id}
                     className="flex items-start justify-between gap-4 px-5 py-4"
                   >
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         {active && (
                           <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-ok" />
@@ -131,15 +133,14 @@ export function WorkspacesPage({
                           {ws.name}
                         </div>
                       </div>
-                      <div className="mt-0.5 truncate text-[12px] text-ink-faint">
-                        <span className="font-mono">{ws.id}</span>
+                      <div className="mt-0.5 flex items-center gap-1.5 text-[12px] text-ink-faint">
                         {ws.specialty && (
-                          <span className="ml-2 rounded bg-surface px-1.5 py-0.5 text-ink-subtle">
+                          <span className="truncate rounded bg-surface px-1.5 py-0.5 text-ink-subtle">
                             {ws.specialty}
                           </span>
                         )}
                         {ws.language && (
-                          <span className="ml-1 rounded bg-surface px-1.5 py-0.5 text-ink-subtle">
+                          <span className="rounded bg-surface px-1.5 py-0.5 text-ink-subtle">
                             {ws.language}
                           </span>
                         )}
@@ -185,12 +186,16 @@ function CreateWorkspaceSheet({
   onOpenChange: (next: boolean) => void;
   onCreated: (ws: Workspace) => void | Promise<void>;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [name, setName] = useState("");
   const [specialty, setSpecialty] = useState("");
   const [language, setLanguage] = useState("es");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const specOptions = useMemo(
+    () => specialtyOptions(i18n.language),
+    [i18n.language],
+  );
 
   // Reset form whenever the sheet opens so the user always starts fresh.
   useEffect(() => {
@@ -250,10 +255,14 @@ function CreateWorkspaceSheet({
           />
         </Field>
 
-        <Field label={t("workspaces.field_specialty")}>
-          <Input
+        <Field
+          label={t("workspaces.field_specialty")}
+          hint={t("workspaces.field_specialty_hint")}
+        >
+          <Combobox
             value={specialty}
-            onChange={(e) => setSpecialty(e.target.value)}
+            onChange={setSpecialty}
+            options={specOptions}
             placeholder={t("workspaces.field_specialty_placeholder")}
           />
         </Field>

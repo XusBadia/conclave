@@ -256,6 +256,7 @@ async fn set(id: &str) -> Result<()> {
             max_output_tokens: Some(20),
             temperature: Some(0.0),
             json_schema: None,
+            allow_web_search: false,
         })
         .await
         .with_context(|| format!("hello call to {id} failed"))?;
@@ -282,6 +283,7 @@ async fn test(ctx: &CommandContext, id: &str, prompt: String, model: Option<Stri
             max_output_tokens: Some(256),
             temperature: Some(0.2),
             json_schema: None,
+            allow_web_search: false,
         })
         .await
         .with_context(|| format!("completion against {id} failed"))?;

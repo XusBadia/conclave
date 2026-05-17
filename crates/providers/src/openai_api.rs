@@ -238,5 +238,6 @@ pub(crate) async fn chat_completions_call(
             output_tokens: usage.completion_tokens,
         },
         model: parsed.model,
+        web_citations: Vec::new(),
     })
 }

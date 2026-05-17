@@ -39,10 +39,13 @@ pub trait Embedder: Send + Sync + fmt::Debug {
 pub struct FastEmbedEmbedder {
     model: Mutex<Option<fastembed::TextEmbedding>>,
     batch_size: usize,
+    cache_dir: Option<std::path::PathBuf>,
 }
 
 impl FastEmbedEmbedder {
-    /// Default constructor. Batch size 32 matches the Phase 1 spec.
+    /// Default constructor. Batch size 32 matches the Phase 1 spec. The
+    /// model is loaded into the CWD-relative `.fastembed_cache` on first
+    /// use — fine for the CLI and tests, where CWD is stable.
     pub const fn new() -> Self {
         Self::with_batch_size(32)
     }
@@ -52,7 +55,17 @@ impl FastEmbedEmbedder {
         Self {
             model: Mutex::new(None),
             batch_size,
+            cache_dir: None,
         }
+    }
+
+    /// Pin the on-disk cache directory the underlying ONNX model is read
+    /// from / downloaded to. Required for desktop launches where the CWD
+    /// depends on how the binary was started (Tauri dev vs `open .app`)
+    /// — without it, fastembed re-downloads on each launch flavor.
+    pub fn with_cache_dir(mut self, cache_dir: impl Into<std::path::PathBuf>) -> Self {
+        self.cache_dir = Some(cache_dir.into());
+        self
     }
 }
 
@@ -67,6 +80,7 @@ impl fmt::Debug for FastEmbedEmbedder {
         let loaded = self.model.lock().is_ok_and(|m| m.is_some());
         f.debug_struct("FastEmbedEmbedder")
             .field("batch_size", &self.batch_size)
+            .field("cache_dir", &self.cache_dir)
             .field("loaded", &loaded)
             .finish()
     }
@@ -93,7 +107,13 @@ impl Embedder for FastEmbedEmbedder {
             .lock()
             .map_err(|_| Error::Rag("fastembed lock poisoned".into()))?;
         if guard.is_none() {
-            let opts = fastembed::InitOptions::new(fastembed::EmbeddingModel::MultilingualE5Small);
+            let mut opts =
+                fastembed::InitOptions::new(fastembed::EmbeddingModel::MultilingualE5Small);
+            if let Some(dir) = &self.cache_dir {
+                std::fs::create_dir_all(dir)
+                    .map_err(|e| Error::Rag(format!("fastembed cache mkdir: {e}")))?;
+                opts = opts.with_cache_dir(dir.clone());
+            }
             let model = fastembed::TextEmbedding::try_new(opts)
                 .map_err(|e| Error::Rag(format!("fastembed init: {e}")))?;
             *guard = Some(model);

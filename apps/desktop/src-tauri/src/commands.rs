@@ -1,10 +1,11 @@
 //! Tauri commands — thin wrappers over the Rust core crates. Every error
 //! is mapped to a String so the frontend can render it directly.
 
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{Emitter, State};
 
 use conclave_core::{Workspace, WorkspaceManager};
 use conclave_deident::{Deidentifier, PipelineDeidentifier};
@@ -14,12 +15,12 @@ use conclave_providers::{
     OpenAIOAuthProvider, OpenAiProvider, OpenRouterProvider, KNOWN_PROVIDERS, OAUTH_PROVIDERS,
 };
 use conclave_rag::{
-    ChunkParams, DocumentRecord, DocumentRepository, Embedder, FastEmbedEmbedder, IngestionEvent,
-    IngestionPipeline, RepositoryLayout,
+    ChunkParams, DocumentRecord, DocumentRepository, IngestionEvent, IngestionPipeline,
+    ProgressStage, RepositoryLayout, SkipReason,
 };
 use conclave_verdict::{
     persistence::{FeedbackKind, FeedbackRecord},
-    CaseRecord, CaseStore, Verdict, VerdictOptions, VerdictPipeline, VerdictRecord,
+    CaseRecord, CaseStore, QaPipeline, Verdict, VerdictOptions, VerdictPipeline, VerdictRecord,
 };
 
 use crate::state::AppState;
@@ -131,27 +132,38 @@ pub fn active_workspace(state: State<'_, AppState>) -> CommandResult<Option<Work
 }
 
 #[tauri::command]
-pub fn delete_workspace(state: State<'_, AppState>, id_or_name: String) -> CommandResult<()> {
+pub async fn delete_workspace(state: State<'_, AppState>, id_or_name: String) -> CommandResult<()> {
     workspace_manager(&state)
         .delete(&id_or_name)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // Drop the cached repository handle so the next workspace with the same id
+    // (after re-creation) opens a fresh SQLite/LanceDB connection instead of
+    // reusing the now-deleted directory.
+    state.repos.lock().await.remove(&id_or_name);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
 // Documents (knowledge base)
 // ---------------------------------------------------------------------------
 
-async fn open_repo(
-    state: &AppState,
-    workspace_id: &str,
-    embedder: &Arc<dyn Embedder>,
-) -> Result<Arc<DocumentRepository>, String> {
+/// Return a repository handle for `workspace_id`, opening it the first time
+/// and caching the `Arc` for subsequent calls. SQLite + LanceDB setup is the
+/// second-most-expensive thing after the embedder, so we hold them open.
+async fn get_repo(state: &AppState, workspace_id: &str) -> Result<Arc<DocumentRepository>, String> {
+    let mut cache = state.repos.lock().await;
+    if let Some(repo) = cache.get(workspace_id) {
+        return Ok(Arc::clone(repo));
+    }
     let dir = state.paths.workspace_dir(workspace_id);
     let layout = RepositoryLayout::new(dir);
-    let repo = DocumentRepository::open(layout, embedder.dim())
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(Arc::new(repo))
+    let repo = Arc::new(
+        DocumentRepository::open(layout, state.embedder.dim())
+            .await
+            .map_err(|e| e.to_string())?,
+    );
+    cache.insert(workspace_id.to_string(), Arc::clone(&repo));
+    Ok(repo)
 }
 
 #[tauri::command]
@@ -159,8 +171,7 @@ pub async fn list_documents(
     state: State<'_, AppState>,
     workspace_id: String,
 ) -> CommandResult<Vec<DocumentRecord>> {
-    let embedder: Arc<dyn Embedder> = Arc::new(FastEmbedEmbedder::new());
-    let repo = open_repo(&state, &workspace_id, &embedder).await?;
+    let repo = get_repo(&state, &workspace_id).await?;
     repo.list().map_err(|e| e.to_string())
 }
 
@@ -177,8 +188,7 @@ pub async fn show_document(
     workspace_id: String,
     id: String,
 ) -> CommandResult<Option<DocumentDetail>> {
-    let embedder: Arc<dyn Embedder> = Arc::new(FastEmbedEmbedder::new());
-    let repo = open_repo(&state, &workspace_id, &embedder).await?;
+    let repo = get_repo(&state, &workspace_id).await?;
     match repo.show(&id).map_err(|e| e.to_string())? {
         Some(d) => Ok(Some(DocumentDetail {
             record: d.record,
@@ -195,8 +205,7 @@ pub async fn remove_document(
     workspace_id: String,
     id: String,
 ) -> CommandResult<bool> {
-    let embedder: Arc<dyn Embedder> = Arc::new(FastEmbedEmbedder::new());
-    let repo = open_repo(&state, &workspace_id, &embedder).await?;
+    let repo = get_repo(&state, &workspace_id).await?;
     repo.remove(&id).await.map_err(|e| e.to_string())
 }
 
@@ -208,14 +217,75 @@ pub struct IngestSummary {
     pub messages: Vec<String>,
 }
 
+/// DTO mirroring `IngestionEvent` for the frontend. We don't put `Serialize`
+/// on the rag crate's event type to keep that crate frontend-agnostic.
+#[derive(Debug, Serialize, Clone)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum IngestionEventDto {
+    Starting {
+        path: String,
+    },
+    Progress {
+        path: String,
+        stage: ProgressStage,
+        percent: u8,
+    },
+    Ingested {
+        path: String,
+        doc_id: String,
+    },
+    Skipped {
+        path: String,
+        reason: String,
+    },
+    Failed {
+        path: String,
+        error: String,
+    },
+}
+
+impl IngestionEventDto {
+    fn from_event(ev: &IngestionEvent) -> Self {
+        match ev {
+            IngestionEvent::Starting(p) => Self::Starting {
+                path: p.display().to_string(),
+            },
+            IngestionEvent::Progress {
+                path,
+                stage,
+                percent,
+            } => Self::Progress {
+                path: path.display().to_string(),
+                stage: *stage,
+                percent: *percent,
+            },
+            IngestionEvent::Ingested { path, record } => Self::Ingested {
+                path: path.display().to_string(),
+                doc_id: record.id.clone(),
+            },
+            IngestionEvent::Skipped { path, reason } => Self::Skipped {
+                path: path.display().to_string(),
+                reason: match reason {
+                    SkipReason::UnsupportedType => "unsupported_type".to_string(),
+                    SkipReason::NeedsOcr => "needs_ocr".to_string(),
+                },
+            },
+            IngestionEvent::Failed { path, error } => Self::Failed {
+                path: path.display().to_string(),
+                error: error.clone(),
+            },
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn ingest_path(
     state: State<'_, AppState>,
     workspace_id: String,
     path: String,
 ) -> CommandResult<IngestSummary> {
-    let embedder: Arc<dyn Embedder> = Arc::new(FastEmbedEmbedder::new());
-    let repo = open_repo(&state, &workspace_id, &embedder).await?;
+    let embedder = Arc::clone(&state.embedder);
+    let repo = get_repo(&state, &workspace_id).await?;
     let cfg = state.config.lock().map_err(|_| "config poisoned")?.clone();
     let chunk_params = ChunkParams::new(
         cfg.rag.chunk_size,
@@ -241,6 +311,7 @@ pub async fn ingest_path(
             IngestionEvent::Failed { path, error } => {
                 messages.push(format!("✗ {} failed: {error}", path.display()));
             }
+            IngestionEvent::Progress { .. } => {}
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -252,42 +323,216 @@ pub async fn ingest_path(
     })
 }
 
-#[derive(Debug, Serialize)]
-pub struct SearchHit {
-    pub chunk_id: String,
-    pub document_id: String,
-    pub text: String,
-    pub distance: f32,
+/// Multi-file ingestion with parallel processing and streaming progress
+/// events to the frontend over the `ingest:progress` Tauri event.
+///
+/// Up to four files are processed concurrently; the embedder's internal
+/// ONNX inference mutex naturally serializes the GPU/CPU-bound step so this
+/// is safe and gives a measurable wall-clock win on the extract/store phases.
+#[tauri::command]
+pub async fn ingest_paths(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    workspace_id: String,
+    paths: Vec<String>,
+) -> CommandResult<IngestSummary> {
+    let embedder = Arc::clone(&state.embedder);
+    let repo = get_repo(&state, &workspace_id).await?;
+    let cfg = state.config.lock().map_err(|_| "config poisoned")?.clone();
+    let chunk_params = ChunkParams::new(
+        cfg.rag.chunk_size,
+        cfg.rag
+            .chunk_size
+            .saturating_sub(cfg.rag.chunk_overlap)
+            .max(1),
+        cfg.rag.chunk_overlap,
+    )
+    .map_err(|e| e.to_string())?;
+
+    state.ingest_cancel.store(false, Ordering::SeqCst);
+    let cancel = Arc::clone(&state.ingest_cancel);
+
+    let pipeline =
+        Arc::new(IngestionPipeline::new(embedder, repo, chunk_params).map_err(|e| e.to_string())?);
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(4));
+    let mut handles = Vec::with_capacity(paths.len());
+
+    for path in paths {
+        let pipeline = Arc::clone(&pipeline);
+        let semaphore = Arc::clone(&semaphore);
+        let app = app.clone();
+        let cancel = Arc::clone(&cancel);
+        handles.push(tokio::spawn(async move {
+            let Ok(_permit) = semaphore.acquire().await else {
+                return None;
+            };
+            if cancel.load(Ordering::SeqCst) {
+                return None;
+            }
+            let p = std::path::PathBuf::from(&path);
+            let mut local_msgs: Vec<String> = Vec::new();
+            let app_for_cb = app.clone();
+            let result = pipeline
+                .ingest_path(&p, |ev| {
+                    let _ = app_for_cb.emit("ingest:progress", IngestionEventDto::from_event(&ev));
+                    match &ev {
+                        IngestionEvent::Ingested { path, record } => {
+                            local_msgs.push(format!("✓ {} → {}", path.display(), record.id));
+                        }
+                        IngestionEvent::Skipped { path, reason } => {
+                            local_msgs.push(format!("· {} skipped: {reason:?}", path.display()));
+                        }
+                        IngestionEvent::Failed { path, error } => {
+                            local_msgs.push(format!("✗ {} failed: {error}", path.display()));
+                        }
+                        _ => {}
+                    }
+                })
+                .await;
+            match result {
+                Ok(report) => Some((report, local_msgs)),
+                Err(e) => {
+                    let _ = app.emit(
+                        "ingest:progress",
+                        IngestionEventDto::Failed {
+                            path: p.display().to_string(),
+                            error: e.to_string(),
+                        },
+                    );
+                    None
+                }
+            }
+        }));
+    }
+
+    let mut summary = IngestSummary {
+        ingested: 0,
+        skipped: 0,
+        failed: 0,
+        messages: Vec::new(),
+    };
+    for h in handles {
+        if let Ok(Some((report, msgs))) = h.await {
+            summary.ingested += report.ingested.len();
+            summary.skipped += report.skipped.len();
+            summary.failed += report.failed.len();
+            summary.messages.extend(msgs);
+        }
+    }
+    Ok(summary)
 }
 
 #[tauri::command]
-pub async fn search_workspace(
+pub fn ingest_cancel(state: State<'_, AppState>) -> CommandResult<()> {
+    state.ingest_cancel.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AskDocumentsRequest {
+    pub workspace_id: String,
+    pub question: String,
+    pub provider_id: String,
+    pub model: Option<String>,
+    /// If `true`, when the workspace documents don't cover the question the
+    /// model may answer from its general training knowledge — but it MUST
+    /// flag the answer as such (the system prompt forces the disclosure).
+    /// No live web access is involved in either mode.
+    #[serde(default)]
+    pub allow_general_knowledge: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct QaSourceDto {
+    pub index: usize,
+    pub document_id: String,
+    pub document_title: String,
+    pub chunk_id: String,
+    pub snippet: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WebSourceDto {
+    pub url: String,
+    pub title: String,
+    pub snippet: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AskDocumentsResponse {
+    pub answer: String,
+    pub sources: Vec<QaSourceDto>,
+    pub web_sources: Vec<WebSourceDto>,
+    pub model: String,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+}
+
+#[tauri::command]
+pub async fn ask_documents(
     state: State<'_, AppState>,
-    workspace_id: String,
-    query: String,
-    k: usize,
-) -> CommandResult<Vec<SearchHit>> {
-    let embedder: Arc<dyn Embedder> = Arc::new(FastEmbedEmbedder::new());
-    let repo = open_repo(&state, &workspace_id, &embedder).await?;
-    let embedder_for_query = Arc::clone(&embedder);
-    let q = query.clone();
-    let vectors = tokio::task::spawn_blocking(move || embedder_for_query.embed(&[q]))
-        .await
-        .map_err(|e| e.to_string())?
+    request: AskDocumentsRequest,
+) -> CommandResult<AskDocumentsResponse> {
+    let workspace = workspace_manager(&state)
+        .load(&request.workspace_id)
         .map_err(|e| e.to_string())?;
-    let Some(vec) = vectors.into_iter().next() else {
-        return ok(Vec::new());
+    let api_key = match request.provider_id.as_str() {
+        "ollama" | "anthropic-oauth" | "openai-oauth" => String::new(),
+        other => secrets::load(other)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("no API key for {other}"))?,
     };
-    let hits = repo.search(&vec, k).await.map_err(|e| e.to_string())?;
-    Ok(hits
-        .into_iter()
-        .map(|h| SearchHit {
-            chunk_id: h.chunk_id,
-            document_id: h.document_id,
-            text: h.text,
-            distance: h.distance,
-        })
-        .collect())
+    let provider = build_provider(
+        &request.provider_id,
+        &api_key,
+        request.model.clone(),
+        state.paths.config_dir(),
+    )?;
+    let embedder = Arc::clone(&state.embedder);
+    let repo = get_repo(&state, &request.workspace_id).await?;
+    let top_k = state
+        .config
+        .lock()
+        .map_err(|_| "config poisoned")?
+        .rag
+        .top_k;
+    let lang = workspace.language.clone().unwrap_or_else(|| "es".into());
+    let pipeline = QaPipeline::new(embedder, repo, provider);
+    let r = pipeline
+        .ask(
+            &request.question,
+            top_k,
+            &lang,
+            request.allow_general_knowledge,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(AskDocumentsResponse {
+        answer: r.answer,
+        web_sources: r
+            .web_sources
+            .into_iter()
+            .map(|w| WebSourceDto {
+                url: w.url,
+                title: w.title,
+                snippet: w.snippet,
+            })
+            .collect(),
+        sources: r
+            .sources
+            .into_iter()
+            .map(|s| QaSourceDto {
+                index: s.index,
+                document_id: s.document_id,
+                document_title: s.document_title,
+                chunk_id: s.chunk_id,
+                snippet: s.snippet,
+            })
+            .collect(),
+        model: r.model,
+        input_tokens: r.input_tokens,
+        output_tokens: r.output_tokens,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -434,6 +679,7 @@ pub async fn test_provider(
             max_output_tokens: Some(50),
             temperature: Some(0.0),
             json_schema: None,
+            allow_web_search: false,
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -694,8 +940,8 @@ pub async fn run_case(
         state.paths.config_dir(),
     )?;
 
-    let embedder: Arc<dyn Embedder> = Arc::new(FastEmbedEmbedder::new());
-    let repo = open_repo(&state, &workspace.id, &embedder).await?;
+    let embedder = Arc::clone(&state.embedder);
+    let repo = get_repo(&state, &workspace.id).await?;
     let store = case_store_arc(&state, &workspace.id)?;
     let pipeline = VerdictPipeline::new(
         workspace.clone(),

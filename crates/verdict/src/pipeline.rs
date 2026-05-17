@@ -363,6 +363,7 @@ Return the JSON object only, citing only the supplied evidence ids."
             max_output_tokens: Some(options.max_output_tokens),
             temperature: Some(options.temperature),
             json_schema: Some(serde_json::json!({"type": "object"})),
+            allow_web_search: false,
         };
         let resp = self
             .provider
