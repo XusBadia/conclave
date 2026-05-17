@@ -3,6 +3,9 @@ import type { TFunction } from "i18next";
 import { Trans, useTranslation } from "react-i18next";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import { Button } from "../components/Button";
 import { Card, CardBody, CardHeader } from "../components/Card";
@@ -16,6 +19,9 @@ import {
   type CaseAttachment,
   type CaseDetail,
   type CaseRecord,
+  type DeliberationEvent,
+  type DeliberationPhase,
+  type DeliberationTrace,
   type ProviderInfo,
   type Verdict,
   type Workspace,
@@ -517,6 +523,39 @@ export function CasesPage({
               </Button>
               <Button
                 size="sm"
+                variant="ghost"
+                onClick={async () => {
+                  setUnsupportedDropError(null);
+                  try {
+                    const picked = await openDialog({
+                      multiple: false,
+                      directory: true,
+                      title: t("cases.process_folder_pick_title"),
+                    });
+                    if (!picked) return;
+                    setClassifyDialog({ proposal: [], loading: true });
+                    const proposal = await ipc.parseBatchFolder(
+                      String(picked),
+                      t("cases.default_question"),
+                    );
+                    if (proposal.length === 0) {
+                      setClassifyDialog(null);
+                      setUnsupportedDropError(
+                        t("cases.process_folder_empty"),
+                      );
+                      return;
+                    }
+                    setClassifyDialog({ proposal, loading: false });
+                  } catch (e) {
+                    setClassifyDialog(null);
+                    setUnsupportedDropError(String(e));
+                  }
+                }}
+              >
+                {t("cases.process_folder_button")}
+              </Button>
+              <Button
+                size="sm"
                 variant="primary"
                 onClick={() => setView("new")}
               >
@@ -841,6 +880,19 @@ function NewCase({
   // (that would require a separate delete command). Cleared once the
   // draft promotes.
   const [draftAttachments, setDraftAttachments] = useState<CaseAttachment[]>([]);
+  /**
+   * When ON, the run button calls `run_case_deliberated` instead of
+   * `run_case` — the LLM does briefing → drafting → red-team → finalize,
+   * costs more tokens, and the user sees a live 4-seat overlay while
+   * the committee thinks. Defaults to OFF.
+   */
+  const [deliberative, setDeliberative] = useState(false);
+  /**
+   * Set while a deliberative case is in flight. Owns the overlay and
+   * its event subscription. Cleared when the run resolves (either via
+   * `onDone` or an error).
+   */
+  const [deliberationActive, setDeliberationActive] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -939,18 +991,30 @@ function NewCase({
     }
     setBusy(true);
     setError(null);
+    if (deliberative && !draft) setDeliberationActive(true);
     try {
       if (draft) {
         // Promote the existing draft. New drops/picks the clinician made
         // in this session are NOT carried over for now — they need to be
         // attached to a fresh case. (A follow-up could persist them via
-        // an `add_attachments_to_case` command.)
+        // an `add_attachments_to_case` command.) Draft promotion runs
+        // through the quick pipeline; deliberative-from-draft is a
+        // follow-up.
         const resp = await ipc.runDraftCase({
           workspace_id: workspace.id,
           case_id: draft.case.id,
           provider_id: providerId,
           text,
           question,
+        });
+        onDone(resp.case.id);
+      } else if (deliberative) {
+        const resp = await ipc.runCaseDeliberated({
+          workspace_id: workspace.id,
+          text,
+          question,
+          provider_id: providerId,
+          attached_file_paths: attachments.map((a) => a.path),
         });
         onDone(resp.case.id);
       } else {
@@ -967,6 +1031,7 @@ function NewCase({
       setError(String(e));
     } finally {
       setBusy(false);
+      setDeliberationActive(false);
     }
   };
 
@@ -1074,6 +1139,12 @@ function NewCase({
             onChange={setProviderId}
             onGoToSettings={onGoToSettings}
           />
+          {!draft && (
+            <DeliberativeToggle
+              checked={deliberative}
+              onChange={setDeliberative}
+            />
+          )}
           <div className="flex gap-2 pt-1">
             <Button onClick={previewDeident} disabled={!text.trim()}>
               {t("cases.preview_button")}
@@ -1089,7 +1160,11 @@ function NewCase({
                 !providerId
               }
             >
-              {draft ? t("cases.draft_run_button") : t("cases.run_button")}
+              {draft
+                ? t("cases.draft_run_button")
+                : deliberative
+                  ? t("cases.run_button_deliberative")
+                  : t("cases.run_button")}
             </Button>
           </div>
         </CardBody>
@@ -1136,6 +1211,7 @@ function NewCase({
         </CardBody>
       </Card>
       </div>
+      {deliberationActive && <DeliberationOverlay />}
     </div>
   );
 }
@@ -1332,6 +1408,13 @@ function ShowCase({
           )}
         </CardBody>
       </Card>
+
+      {detail.verdict_record && (
+        <DeliberationTraceAccordion
+          workspaceId={workspace.id}
+          verdictId={detail.verdict_record.id}
+        />
+      )}
 
       <Card>
         <CardHeader
@@ -1726,6 +1809,10 @@ function ClassifyDropDialog({
   const [error, setError] = useState<string | null>(null);
   const [draggingFrom, setDraggingFrom] = useState<number | null>(null);
   const [openNoteIdx, setOpenNoteIdx] = useState<number | null>(null);
+  // Deliberative toggle for the batch path. When ON, every case in the
+  // batch runs through the 4-pass committee. Drafts ignore the toggle
+  // (they're persisted-only) — promoting a draft later uses quick mode.
+  const [deliberative, setDeliberative] = useState(false);
 
   // Sync incoming proposal once it resolves from the loading state.
   useEffect(() => {
@@ -1888,7 +1975,7 @@ function ClassifyDropDialog({
       await ipc.runBatchCases({
         workspace_id: workspace.id,
         provider_id: providerId,
-        deliberative: false,
+        deliberative,
         cases: rows,
       });
       onCommitted();
@@ -2005,6 +2092,10 @@ function ClassifyDropDialog({
             providerId={providerId}
             onChange={setProviderId}
             onGoToSettings={onGoToSettings}
+          />
+          <DeliberativeToggle
+            checked={deliberative}
+            onChange={setDeliberative}
           />
           <div className="flex flex-wrap items-center justify-end gap-2">
             <Button
@@ -2278,4 +2369,367 @@ function deriveLabelFromFile(path: string, fallbackIndex: number): string {
   const name = path.split(/[\\/]/).pop() ?? "";
   const stem = name.replace(/\.[^.]+$/, "").trim();
   return stem || `Paciente ${fallbackIndex}`;
+}
+
+// ---------------------------------------------------------------------------
+// Deliberative mode — toggle, in-flight overlay, post-hoc trace accordion.
+// ---------------------------------------------------------------------------
+
+function DeliberativeToggle({
+  checked,
+  onChange,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!checked)}
+      aria-pressed={checked}
+      className={cn(
+        "group w-full rounded-lg border px-3 py-2.5 text-left transition focus:outline-none focus-visible:ring-conclave",
+        checked
+          ? "border-accent bg-accent/5"
+          : "border-border-subtle bg-bg-subtle hover:border-border",
+      )}
+    >
+      <div className="flex items-center gap-3">
+        <span
+          className={cn(
+            "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition",
+            checked ? "bg-accent" : "bg-border",
+          )}
+        >
+          <span
+            className={cn(
+              "inline-block h-4 w-4 transform rounded-full bg-white transition",
+              checked ? "translate-x-4" : "translate-x-0.5",
+            )}
+          />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-medium text-ink">
+            {t("cases.deliberative_toggle_title")}
+          </div>
+          <div className="mt-0.5 text-[11.5px] text-ink-subtle">
+            {t("cases.deliberative_toggle_subtitle")}
+          </div>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+const PHASE_ORDER: DeliberationPhase[] = [
+  "briefing",
+  "drafting",
+  "redteam",
+  "finalize",
+];
+
+type PhaseState = {
+  status: "pending" | "active" | "done" | "failed";
+  output?: string;
+  error?: string;
+};
+
+function phaseIcon(phase: DeliberationPhase): string {
+  switch (phase) {
+    case "briefing":
+      return "🩺";
+    case "drafting":
+      return "✍️";
+    case "redteam":
+      return "🛡️";
+    case "finalize":
+      return "📋";
+  }
+}
+
+/**
+ * In-flight overlay shown while a deliberative case is running. Listens
+ * to the backend's `deliberation:progress` events and renders four
+ * "committee seats" that pulse / fill in / mark ✓ as the LLM works
+ * through each phase. Disappears when the parent flips
+ * `deliberationActive` back to `false`.
+ */
+function DeliberationOverlay() {
+  const { t } = useTranslation();
+  const [phases, setPhases] = useState<Record<DeliberationPhase, PhaseState>>(
+    () => ({
+      briefing: { status: "pending" },
+      drafting: { status: "pending" },
+      redteam: { status: "pending" },
+      finalize: { status: "pending" },
+    }),
+  );
+  const [expanded, setExpanded] = useState<DeliberationPhase | null>(null);
+
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let cancelled = false;
+    (async () => {
+      unlisten = await listen<DeliberationEvent>(
+        "deliberation:progress",
+        (msg) => {
+          if (cancelled) return;
+          const ev = msg.payload;
+          setPhases((prev) => {
+            const next = { ...prev };
+            if (ev.kind === "phase_started") {
+              next[ev.phase] = { status: "active" };
+              setExpanded(ev.phase);
+            } else if (ev.kind === "phase_completed") {
+              next[ev.phase] = { status: "done", output: ev.output };
+            } else if (ev.kind === "phase_failed") {
+              next[ev.phase] = { status: "failed", error: ev.error };
+            }
+            return next;
+          });
+        },
+      );
+    })();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={t("cases.deliberation_overlay_title")}
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/55 backdrop-blur-[2px] p-4"
+    >
+      <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-border bg-bg-elevated shadow-soft">
+        <header className="border-b border-border-subtle px-5 py-4">
+          <h2 className="text-[15px] font-semibold text-ink">
+            {t("cases.deliberation_overlay_title")}
+          </h2>
+          <p className="mt-0.5 text-[12.5px] text-ink-subtle">
+            {t("cases.deliberation_overlay_subtitle")}
+          </p>
+        </header>
+        <div className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
+          {PHASE_ORDER.map((phase, i) => (
+            <DeliberationPhaseRow
+              key={phase}
+              phase={phase}
+              index={i}
+              state={phases[phase]}
+              expanded={expanded === phase}
+              onToggle={() =>
+                setExpanded(expanded === phase ? null : phase)
+              }
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeliberationPhaseRow({
+  phase,
+  index,
+  state,
+  expanded,
+  onToggle,
+}: {
+  phase: DeliberationPhase;
+  index: number;
+  state: PhaseState;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const { t } = useTranslation();
+  const badge = (() => {
+    switch (state.status) {
+      case "pending":
+        return (
+          <span className="rounded bg-surface px-2 py-0.5 text-[10.5px] uppercase tracking-wide text-ink-faint">
+            {t("cases.phase_status_pending")}
+          </span>
+        );
+      case "active":
+        return (
+          <span className="flex items-center gap-1 rounded bg-accent/15 px-2 py-0.5 text-[10.5px] font-medium uppercase tracking-wide text-accent">
+            <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+            {t("cases.phase_status_active")}
+          </span>
+        );
+      case "done":
+        return (
+          <span className="rounded bg-ok/15 px-2 py-0.5 text-[10.5px] font-medium uppercase tracking-wide text-ok">
+            ✓ {t("cases.phase_status_done")}
+          </span>
+        );
+      case "failed":
+        return (
+          <span className="rounded bg-danger/15 px-2 py-0.5 text-[10.5px] font-medium uppercase tracking-wide text-danger">
+            ✗ {t("cases.phase_status_failed")}
+          </span>
+        );
+    }
+  })();
+
+  return (
+    <div
+      className={cn(
+        "rounded-lg border transition",
+        state.status === "active"
+          ? "border-accent/60 bg-accent/5"
+          : "border-border-subtle bg-bg",
+      )}
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center gap-3 px-3 py-2.5 text-left focus:outline-none focus-visible:ring-conclave"
+      >
+        <span className="font-mono text-[11px] text-ink-faint">
+          {index + 1}/4
+        </span>
+        <span className="text-base">{phaseIcon(phase)}</span>
+        <div className="min-w-0 flex-1">
+          <div className="text-[13.5px] font-medium text-ink">
+            {t(`cases.deliberation_phase.${phase}_title`)}
+          </div>
+          <div className="mt-0.5 text-[11.5px] text-ink-subtle">
+            {t(`cases.deliberation_phase.${phase}_subtitle`)}
+          </div>
+        </div>
+        {badge}
+      </button>
+      {expanded && (state.output || state.error) && (
+        <div className="border-t border-border-subtle px-3 py-3">
+          {state.error && (
+            <div className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-[12px] text-danger">
+              {state.error}
+            </div>
+          )}
+          {state.output && (
+            <div className="prose-conclave max-h-[360px] overflow-auto text-[12.5px]">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {state.output}
+              </ReactMarkdown>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Post-hoc trace shown inside ShowCase. Fetches the persisted
+ * deliberation trace for the verdict; renders nothing for quick-mode
+ * cases (the IPC returns `null`).
+ */
+function DeliberationTraceAccordion({
+  workspaceId,
+  verdictId,
+}: {
+  workspaceId: string;
+  verdictId: string;
+}) {
+  const { t } = useTranslation();
+  const [trace, setTrace] = useState<DeliberationTrace | null | undefined>(
+    undefined,
+  );
+  const [open, setOpen] = useState(false);
+  const [expanded, setExpanded] = useState<DeliberationPhase | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await ipc.getDeliberationTrace(workspaceId, verdictId);
+        if (!cancelled) setTrace(result);
+      } catch {
+        if (!cancelled) setTrace(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId, verdictId]);
+
+  if (trace === undefined) return null; // still loading
+  if (trace === null) return null; // not a deliberative case
+
+  const phases: { phase: DeliberationPhase; output: string | null }[] = [
+    { phase: "briefing", output: trace.briefing_output },
+    { phase: "drafting", output: trace.drafting_output },
+    { phase: "redteam", output: trace.redteam_output },
+  ];
+  const totalTokens = trace.total_input_tokens + trace.total_output_tokens;
+  const seconds = Math.round(trace.duration_ms / 100) / 10;
+
+  return (
+    <Card>
+      <CardHeader
+        title={t("cases.deliberation_trace_title")}
+        subtitle={t("cases.deliberation_trace_subtitle", {
+          tokens: totalTokens,
+          duration: seconds,
+        })}
+        right={
+          <Button size="sm" variant="ghost" onClick={() => setOpen(!open)}>
+            {open
+              ? t("cases.deliberation_trace_collapse")
+              : t("cases.deliberation_trace_expand")}
+          </Button>
+        }
+      />
+      {open && (
+        <CardBody className="space-y-2">
+          {trace.vision_used && (
+            <div className="rounded-md border border-violet-400/40 bg-violet-400/5 px-3 py-2 text-[12px] text-violet-200">
+              {t("cases.deliberation_vision_used")}
+            </div>
+          )}
+          {phases.map(({ phase, output }) => (
+            <div
+              key={phase}
+              className="rounded-lg border border-border-subtle bg-bg"
+            >
+              <button
+                type="button"
+                onClick={() =>
+                  setExpanded(expanded === phase ? null : phase)
+                }
+                className="flex w-full items-center gap-3 px-3 py-2 text-left focus:outline-none focus-visible:ring-conclave"
+              >
+                <span className="text-base">{phaseIcon(phase)}</span>
+                <span className="flex-1 text-[13px] font-medium text-ink">
+                  {t(`cases.deliberation_phase.${phase}_title`)}
+                </span>
+                <span className="text-[11px] text-ink-faint">
+                  {expanded === phase ? "▾" : "▸"}
+                </span>
+              </button>
+              {expanded === phase && output && (
+                <div className="border-t border-border-subtle px-3 py-3">
+                  <div className="prose-conclave max-h-[400px] overflow-auto text-[12.5px]">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {output}
+                    </ReactMarkdown>
+                  </div>
+                </div>
+              )}
+              {expanded === phase && !output && (
+                <div className="border-t border-border-subtle px-3 py-2 text-[12px] text-ink-faint">
+                  {t("cases.deliberation_phase_empty")}
+                </div>
+              )}
+            </div>
+          ))}
+        </CardBody>
+      )}
+    </Card>
+  );
 }
