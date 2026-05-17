@@ -258,6 +258,7 @@ Return the JSON object only, citing only the supplied evidence ids."
         let case = CaseRecord {
             id: format!("case-{}", Uuid::new_v4()),
             created_at: now,
+            case_date: now,
             workspace_id: self.workspace.id.clone(),
             question: question.to_owned(),
             original_text: case_text.to_owned(),

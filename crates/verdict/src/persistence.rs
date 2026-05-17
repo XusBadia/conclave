@@ -19,10 +19,13 @@ CREATE TABLE IF NOT EXISTS cases (
     original_text TEXT NOT NULL,
     masked_text TEXT NOT NULL,
     deident_pipeline_id TEXT NOT NULL,
-    status TEXT NOT NULL
+    status TEXT NOT NULL,
+    case_date TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS cases_created_at_idx ON cases(created_at DESC);
+-- The cases_case_date_idx index lives in `migrate_cases_case_date` because
+-- legacy DBs need ALTER TABLE before the index column exists.
 
 CREATE TABLE IF NOT EXISTS verdicts (
     id TEXT PRIMARY KEY,
@@ -127,6 +130,10 @@ impl CaseStatus {
 pub struct CaseRecord {
     pub id: String,
     pub created_at: DateTime<Utc>,
+    /// User-facing date of the clinical consultation. Editable from the UI;
+    /// defaults to `created_at` on insert. Used as the primary sort key
+    /// in the cases list so backdated rows surface in the right slot.
+    pub case_date: DateTime<Utc>,
     pub workspace_id: String,
     pub question: String,
     pub original_text: String,
@@ -270,6 +277,7 @@ impl CaseStore {
             .map_err(map_sql)?;
         conn.execute_batch(SCHEMA_SQL).map_err(map_sql)?;
         Self::migrate_retrieval_traces_attachments(&conn)?;
+        Self::migrate_cases_case_date(&conn)?;
         Ok(Self { conn, path })
     }
 
@@ -296,6 +304,41 @@ impl CaseStore {
         Ok(())
     }
 
+    /// Idempotent migration: add the `case_date` column to `cases` if it
+    /// does not exist yet, then backfill any row whose `case_date` is empty
+    /// — covering both the very first open of an old DB AND any future
+    /// rows accidentally inserted by an older binary version that still
+    /// uses the 8-column INSERT (SQLite would accept that thanks to the
+    /// `DEFAULT ''`, but those rows would otherwise be unsortable).
+    fn migrate_cases_case_date(conn: &Connection) -> Result<()> {
+        let mut stmt = conn.prepare("PRAGMA table_info(cases)").map_err(map_sql)?;
+        let cols: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .map_err(map_sql)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(map_sql)?;
+        if !cols.iter().any(|c| c == "case_date") {
+            conn.execute(
+                "ALTER TABLE cases ADD COLUMN case_date TEXT NOT NULL DEFAULT ''",
+                [],
+            )
+            .map_err(map_sql)?;
+        }
+        conn.execute(
+            "UPDATE cases SET case_date = created_at WHERE case_date = ''",
+            [],
+        )
+        .map_err(map_sql)?;
+        // Index lives here (not in SCHEMA_SQL) because legacy DBs need the
+        // ALTER TABLE above before the column is real.
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS cases_case_date_idx ON cases(case_date DESC)",
+            [],
+        )
+        .map_err(map_sql)?;
+        Ok(())
+    }
+
     /// Path the connection was opened against.
     pub fn path(&self) -> &Path {
         &self.path
@@ -307,8 +350,8 @@ impl CaseStore {
             .execute(
                 "INSERT INTO cases
                    (id, created_at, workspace_id, question, original_text, masked_text,
-                    deident_pipeline_id, status)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    deident_pipeline_id, status, case_date)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     c.id,
                     c.created_at.to_rfc3339(),
@@ -318,6 +361,7 @@ impl CaseStore {
                     c.masked_text,
                     c.deident_pipeline_id,
                     c.status.as_db_str(),
+                    c.case_date.to_rfc3339(),
                 ],
             )
             .map_err(map_sql)?;
@@ -497,15 +541,16 @@ impl CaseStore {
         Ok(())
     }
 
-    /// List cases, most-recent first.
+    /// List cases ordered by `case_date` (user-facing date) descending.
+    /// Falls back to `created_at` on ties for stable order.
     pub fn list_cases(&self, limit: usize) -> Result<Vec<CaseRecord>> {
         let mut stmt = self
             .conn
             .prepare(
                 "SELECT id, created_at, workspace_id, question, original_text, masked_text,
-                        deident_pipeline_id, status
+                        deident_pipeline_id, status, case_date
                  FROM cases
-                 ORDER BY created_at DESC
+                 ORDER BY case_date DESC, created_at DESC
                  LIMIT ?1",
             )
             .map_err(map_sql)?;
@@ -524,13 +569,34 @@ impl CaseStore {
         self.conn
             .query_row(
                 "SELECT id, created_at, workspace_id, question, original_text, masked_text,
-                        deident_pipeline_id, status
+                        deident_pipeline_id, status, case_date
                  FROM cases WHERE id = ?1",
                 params![id],
                 row_to_case,
             )
             .optional()
             .map_err(map_sql)
+    }
+
+    /// Bulk-update the `case_date` of one or many cases. Uses a single
+    /// transaction so partial failures roll back. N is expected to stay
+    /// small (UI typically operates on ≤ 50 ids).
+    pub fn update_case_date(&mut self, ids: &[String], new_date: DateTime<Utc>) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let new_date_str = new_date.to_rfc3339();
+        let tx = self.conn.transaction().map_err(map_sql)?;
+        {
+            let mut stmt = tx
+                .prepare("UPDATE cases SET case_date = ?1 WHERE id = ?2")
+                .map_err(map_sql)?;
+            for id in ids {
+                stmt.execute(params![new_date_str, id]).map_err(map_sql)?;
+            }
+        }
+        tx.commit().map_err(map_sql)?;
+        Ok(())
     }
 
     /// Latest verdict for a given case.
@@ -740,6 +806,7 @@ impl CaseStore {
             out.push(ExportedCase {
                 case_id: c.id,
                 created_at: c.created_at,
+                case_date: c.case_date,
                 workspace_id: c.workspace_id,
                 question: c.question,
                 masked_text: c.masked_text,
@@ -785,6 +852,7 @@ pub struct StoreStats {
 pub struct ExportedCase {
     pub case_id: String,
     pub created_at: DateTime<Utc>,
+    pub case_date: DateTime<Utc>,
     pub workspace_id: String,
     pub question: String,
     pub masked_text: String,
@@ -831,9 +899,20 @@ fn cosine_norm(a: &[f32], b: &[f32], norm_a: f32) -> f32 {
 }
 
 fn row_to_case(r: &rusqlite::Row<'_>) -> rusqlite::Result<CaseRecord> {
+    let created_at = parse_dt(&r.get::<_, String>(1)?);
+    let case_date_str: String = r.get(8)?;
+    // Defensive: blank `case_date` shouldn't happen post-migration, but
+    // fall back to `created_at` rather than `now()` so stale rows don't
+    // appear to time-travel.
+    let case_date = if case_date_str.is_empty() {
+        created_at
+    } else {
+        parse_dt(&case_date_str)
+    };
     Ok(CaseRecord {
         id: r.get(0)?,
-        created_at: parse_dt(&r.get::<_, String>(1)?),
+        created_at,
+        case_date,
         workspace_id: r.get(2)?,
         question: r.get(3)?,
         original_text: r.get(4)?,
@@ -915,9 +994,11 @@ mod tests {
     use super::*;
 
     fn sample_case(id: &str) -> CaseRecord {
+        let now = Utc::now();
         CaseRecord {
             id: id.into(),
-            created_at: Utc::now(),
+            created_at: now,
+            case_date: now,
             workspace_id: "ws".into(),
             question: "q".into(),
             original_text: "o".into(),

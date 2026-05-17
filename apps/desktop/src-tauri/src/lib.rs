@@ -104,6 +104,7 @@ pub fn run() {
             commands::list_case_attachments,
             commands::get_deliberation_trace,
             commands::submit_feedback,
+            commands::update_case_date,
             commands::parse_batch_folder,
             commands::propose_case_grouping,
             commands::run_batch_cases,

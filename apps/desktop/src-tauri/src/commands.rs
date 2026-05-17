@@ -1340,6 +1340,7 @@ pub(crate) async fn run_case_deliberated_impl(
     let case = CaseRecord {
         id: case_id.clone(),
         created_at: now,
+        case_date: now,
         workspace_id: workspace.id.clone(),
         question: request.question.clone(),
         original_text: request.text.clone(),
@@ -1739,5 +1740,32 @@ pub fn submit_feedback(state: State<'_, AppState>, request: FeedbackRequest) -> 
             modified_verdict_json: None,
             created_at: chrono::Utc::now(),
         })
+        .map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateCaseDateRequest {
+    pub workspace_id: String,
+    pub case_ids: Vec<String>,
+    /// RFC3339 timestamp. The UI typically sends a `datetime-local` value
+    /// converted to ISO 8601 with the user's local offset.
+    pub new_date: String,
+}
+
+#[tauri::command]
+pub fn update_case_date(
+    state: State<'_, AppState>,
+    request: UpdateCaseDateRequest,
+) -> CommandResult<()> {
+    if request.case_ids.is_empty() {
+        return Ok(());
+    }
+    let new_date = chrono::DateTime::parse_from_rfc3339(&request.new_date)
+        .map_err(|e| format!("invalid date `{}`: {e}", request.new_date))?
+        .with_timezone(&chrono::Utc);
+    let store = case_store_arc(&state, &request.workspace_id)?;
+    let mut store = store.lock().map_err(|_| "store poisoned")?;
+    store
+        .update_case_date(&request.case_ids, new_date)
         .map_err(|e| e.to_string())
 }
