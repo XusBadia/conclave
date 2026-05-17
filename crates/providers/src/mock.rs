@@ -6,7 +6,9 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 
 use crate::error::ProviderError;
-use crate::types::{CompletionRequest, CompletionResponse, ProviderCapabilities, Usage};
+use crate::types::{
+    CompletionRequest, CompletionResponse, ProviderCapabilities, ProviderScope, Usage,
+};
 use crate::LlmProvider;
 
 /// Deterministic mock provider.
@@ -54,6 +56,7 @@ impl LlmProvider for MockProvider {
             supports_json_mode: true,
             supports_streaming: false,
             vision: false,
+            scope: ProviderScope::General,
         }
     }
 

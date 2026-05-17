@@ -11,9 +11,10 @@ use conclave_core::{Workspace, WorkspaceManager};
 use conclave_deident::{Deidentifier, PipelineDeidentifier};
 use conclave_providers::{
     open_in_browser, persist_tokens, secrets, AnthropicLoginFlow, AnthropicOAuthProvider,
-    AnthropicProvider, AppleIntelligenceProvider, CompletionRequest, ImageInput, LlmProvider,
-    Message, OllamaProvider, OpenAILoginFlow, OpenAIOAuthProvider, OpenAiProvider,
-    OpenRouterProvider, ProviderScope, KNOWN_PROVIDERS, OAUTH_PROVIDERS,
+    AnthropicProvider, AppleIntelligenceAvailability, AppleIntelligenceProvider, CompletionRequest,
+    ImageInput, LlmProvider, Message, OllamaProvider, OpenAILoginFlow, OpenAIOAuthProvider,
+    OpenAiProvider, OpenRouterProvider, ProviderScope, APPLE_INTELLIGENCE_MODEL_LABEL,
+    KNOWN_PROVIDERS, OAUTH_PROVIDERS,
 };
 use conclave_rag::{
     ChunkParams, DocumentRecord, DocumentRepository, IngestionEvent, IngestionPipeline,
@@ -583,59 +584,68 @@ pub struct ProviderInfo {
     pub hint: Option<String>,
 }
 
+/// Build the `ProviderInfo` entry for Apple Intelligence — or return
+/// `None` when the host can't run it.
+///
+/// We surface the provider only when the user has a plausible path to
+/// using it: the model is ready, Apple Intelligence is toggled off in
+/// System Settings, or the on-device model is still downloading.
+/// Devices that are structurally ineligible (Intel Macs, macOS < 26,
+/// frameworks missing) get `None` so the Settings card and every
+/// downstream picker simply skip the entry.
+async fn apple_intelligence_info() -> Option<ProviderInfo> {
+    let availability = AppleIntelligenceProvider::new().availability().await;
+    if !availability.is_user_actionable() {
+        return None;
+    }
+    let available = matches!(availability, AppleIntelligenceAvailability::Available);
+    Some(ProviderInfo {
+        id: "apple-intelligence".to_owned(),
+        // No keychain entry to consult — the runtime availability is
+        // the only "is this ready?" signal. Mirrors how Ollama is
+        // surfaced (always present, configured == reachable).
+        configured: available,
+        available,
+        default_model: APPLE_INTELLIGENCE_MODEL_LABEL.to_owned(),
+        requires_network: false,
+        auth: "local".into(),
+        kind: "subtask".into(),
+        // Stable tag the frontend maps to its i18n string ("not_enabled"
+        // → "Turn on Apple Intelligence in System Settings", etc.).
+        hint: if available {
+            None
+        } else {
+            Some(availability.tag().to_owned())
+        },
+    })
+}
+
 #[tauri::command]
 pub async fn list_providers(state: State<'_, AppState>) -> CommandResult<Vec<ProviderInfo>> {
     let mut out = Vec::new();
     for id in KNOWN_PROVIDERS {
+        // Apple Intelligence is omitted entirely on hosts where it
+        // is structurally unreachable (Intel Mac, macOS < 26, etc.).
+        // We surface it only when the user can plausibly turn it on
+        // or wait for the model download — see
+        // `AppleIntelligenceAvailability::is_user_actionable`.
+        if *id == "apple-intelligence" {
+            if let Some(info) = apple_intelligence_info().await {
+                out.push(info);
+            }
+            continue;
+        }
+
         let configured = secrets::load(id).unwrap_or(None).is_some();
         let (available, default_model, requires_net) = match *id {
             "ollama" => {
                 let p = OllamaProvider::new();
                 (p.ping().await, "llama3.1:8b".into(), false)
             }
-            "apple-intelligence" => {
-                let p = AppleIntelligenceProvider::new();
-                let avail = p.availability().await;
-                let ready = matches!(
-                    avail,
-                    conclave_providers::AppleIntelligenceAvailability::Available
-                );
-                (
-                    ready,
-                    conclave_providers::APPLE_INTELLIGENCE_MODEL_LABEL.to_owned(),
-                    false,
-                )
-            }
             "anthropic" => (configured, "claude-sonnet-4-6-20250929".into(), true),
             "openai" => (configured, "gpt-5".into(), true),
             "openrouter" => (configured, "set per call".into(), true),
             _ => (false, "—".into(), false),
-        };
-        let auth = match *id {
-            "ollama" | "apple-intelligence" => "local",
-            _ => "api-key",
-        };
-        let kind = match *id {
-            "apple-intelligence" => "subtask",
-            _ => "standard",
-        };
-        // For the on-device subtask provider, surface the structural
-        // reason it's not available (no Apple Silicon, Intelligence off,
-        // model still downloading, etc.) so the Settings card can show
-        // a helpful explanation instead of a generic error.
-        let hint = if *id == "apple-intelligence" && !available {
-            let p = AppleIntelligenceProvider::new();
-            Some(p.availability().await.tag().to_owned())
-        } else {
-            None
-        };
-        // The "configured" flag means "ready to use" in the UI. Apple
-        // Intelligence has no key, so we surface the runtime
-        // availability check as the configured signal — matches Ollama.
-        let configured = if *id == "apple-intelligence" {
-            available
-        } else {
-            configured
         };
         out.push(ProviderInfo {
             id: (*id).to_owned(),
@@ -643,9 +653,13 @@ pub async fn list_providers(state: State<'_, AppState>) -> CommandResult<Vec<Pro
             available,
             default_model,
             requires_network: requires_net,
-            auth: auth.into(),
-            kind: kind.into(),
-            hint,
+            auth: if *id == "ollama" {
+                "local".into()
+            } else {
+                "api-key".into()
+            },
+            kind: "standard".into(),
+            hint: None,
         });
     }
     for id in OAUTH_PROVIDERS {

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::ProviderError;
 use crate::types::{
-    CompletionRequest, CompletionResponse, MessageRole, ProviderCapabilities, Usage,
+    CompletionRequest, CompletionResponse, MessageRole, ProviderCapabilities, ProviderScope, Usage,
 };
 use crate::LlmProvider;
 
@@ -70,6 +70,7 @@ impl LlmProvider for AnthropicProvider {
             supports_json_mode: true,
             supports_streaming: true,
             vision: true,
+            scope: ProviderScope::General,
         }
     }
 

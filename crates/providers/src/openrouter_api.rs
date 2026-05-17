@@ -8,7 +8,7 @@ use crate::openai_api::{
     attach_images_to_last_user, build_chat_messages, chat_completions_call, ChatBody, ChatHeaders,
     ResponseFormat,
 };
-use crate::types::{CompletionRequest, CompletionResponse, ProviderCapabilities};
+use crate::types::{CompletionRequest, CompletionResponse, ProviderCapabilities, ProviderScope};
 use crate::LlmProvider;
 
 const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api";
@@ -70,6 +70,7 @@ impl LlmProvider for OpenRouterProvider {
             supports_json_mode: true,
             supports_streaming: true,
             vision: false,
+            scope: ProviderScope::General,
         }
     }
 

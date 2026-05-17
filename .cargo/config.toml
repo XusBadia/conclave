@@ -1,0 +1,19 @@
+# The Apple Intelligence Swift bridge in `conclave-providers` references
+# `libswift_Concurrency.dylib`. On macOS 26 the runtime no longer lives
+# on disk at `/usr/lib/swift/` — it's served from the dyld shared
+# cache. Production builds rewrite the link to `/usr/lib/swift/...`
+# (absolute path → cache hit) via Tauri's `beforeBundleCommand`. For
+# `cargo run` / `cargo test` from a source checkout we still need the
+# `@rpath/...` reference to resolve, so the workspace rpath falls back
+# to the back-deploy copy shipped with the developer tools.
+#
+# Cargo doesn't propagate `cargo:rustc-link-arg` across crates, so the
+# rpaths live here at workspace level instead of in any single crate.
+# Non-macOS targets ignore these flags; the bridge is stubbed there.
+
+[target.'cfg(target_os = "macos")']
+rustflags = [
+  "-C", "link-arg=-Wl,-rpath,/usr/lib/swift",
+  "-C", "link-arg=-Wl,-rpath,/Library/Developer/CommandLineTools/usr/lib/swift-5.5/macosx",
+  "-C", "link-arg=-Wl,-rpath,/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.5/macosx",
+]

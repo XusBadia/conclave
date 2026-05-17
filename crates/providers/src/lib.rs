@@ -56,6 +56,7 @@ use async_trait::async_trait;
 
 mod anthropic_api;
 mod anthropic_oauth;
+mod apple_intelligence;
 mod error;
 mod mock;
 mod oauth_flow;
@@ -69,6 +70,10 @@ mod types;
 
 pub use anthropic_api::AnthropicProvider;
 pub use anthropic_oauth::AnthropicOAuthProvider;
+pub use apple_intelligence::{
+    AppleIntelligenceProvider, Availability as AppleIntelligenceAvailability,
+    DEFAULT_MODEL_LABEL as APPLE_INTELLIGENCE_MODEL_LABEL,
+};
 pub use error::ProviderError;
 pub use mock::MockProvider;
 pub use oauth_flow::{
@@ -82,7 +87,7 @@ pub use openrouter_api::OpenRouterProvider;
 pub use registry::{ProviderRegistry, KNOWN_PROVIDERS, OAUTH_PROVIDERS};
 pub use types::{
     CompletionRequest, CompletionResponse, ImageInput, Message, MessageRole, ProviderCapabilities,
-    Usage, WebCitation,
+    ProviderScope, Usage, WebCitation,
 };
 
 /// Anything that can take a structured request and return generated text.

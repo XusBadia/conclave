@@ -7,8 +7,9 @@ use clap::{Args, Subcommand};
 
 use conclave_providers::{
     open_in_browser, persist_tokens, secrets, AnthropicLoginFlow, AnthropicOAuthProvider,
-    AnthropicProvider, CompletionRequest, LlmProvider, Message, MockProvider, OllamaProvider,
-    OpenAILoginFlow, OpenAIOAuthProvider, OpenAiProvider, OpenRouterProvider, KNOWN_PROVIDERS,
+    AnthropicProvider, AppleIntelligenceAvailability, AppleIntelligenceProvider, CompletionRequest,
+    LlmProvider, Message, MockProvider, OllamaProvider, OpenAILoginFlow, OpenAIOAuthProvider,
+    OpenAiProvider, OpenRouterProvider, APPLE_INTELLIGENCE_MODEL_LABEL, KNOWN_PROVIDERS,
     OAUTH_PROVIDERS,
 };
 
@@ -143,6 +144,25 @@ async fn list(ctx: &CommandContext) -> Result<()> {
     println!("providers — default: {default}\n");
     println!("id                  configured   available    auth        default-model");
     for id in KNOWN_PROVIDERS {
+        // Apple Intelligence is omitted on hosts where it isn't
+        // user-actionable, mirroring `list_providers` in the Tauri
+        // backend so the CLI and the desktop UI agree on what's
+        // visible.
+        if *id == "apple-intelligence" {
+            let avail = AppleIntelligenceProvider::new().availability().await;
+            if !avail.is_user_actionable() {
+                continue;
+            }
+            let available = matches!(avail, AppleIntelligenceAvailability::Available);
+            println!(
+                "{id:<19} {:<12} {:<12} {:<11} {}",
+                yes_no(available),
+                yes_no(available),
+                "local",
+                APPLE_INTELLIGENCE_MODEL_LABEL,
+            );
+            continue;
+        }
         let configured = secrets::load(id).unwrap_or(None).is_some();
         let (available, default_model) = match *id {
             "ollama" => {
@@ -270,7 +290,7 @@ async fn set(id: &str) -> Result<()> {
 
 async fn test(ctx: &CommandContext, id: &str, prompt: String, model: Option<String>) -> Result<()> {
     let api_key = match id {
-        "ollama" | "anthropic-oauth" | "openai-oauth" => String::new(),
+        "ollama" | "apple-intelligence" | "anthropic-oauth" | "openai-oauth" => String::new(),
         _ => secrets::load(id)?
             .ok_or_else(|| anyhow!("no API key configured for {id} — run `providers set {id}`"))?,
     };
@@ -369,6 +389,7 @@ fn build_provider(id: &str, api_key: &str, model: Option<String>) -> Result<Box<
             }
             Ok(Box::new(p))
         }
+        "apple-intelligence" => Ok(Box::new(AppleIntelligenceProvider::new())),
         "anthropic-oauth" => {
             let mut p =
                 AnthropicOAuthProvider::from_default_location().map_err(|e| anyhow!("{e}"))?;

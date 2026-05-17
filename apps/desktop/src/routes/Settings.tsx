@@ -55,6 +55,14 @@ export function SettingsPage() {
     () => providers.find((p) => p.id === "ollama"),
     [providers],
   );
+  // Surfaces Apple Intelligence when the host can plausibly run it.
+  // The backend omits the entry on Intel Macs / macOS < 26, so
+  // `appleIntel` ends up `undefined` for users with no path to using
+  // it — every UI that consumes this value just skips the note.
+  const appleIntel = useMemo(
+    () => providers.find((p) => p.id === "apple-intelligence"),
+    [providers],
+  );
 
   const refresh = async () => {
     setLoading(true);
@@ -314,7 +322,9 @@ export function SettingsPage() {
               provider={active}
               busy={busy}
               ollamaAvailable={!!ollama?.available}
+              appleIntel={appleIntel}
               onTest={() => testActive(active.id)}
+              onTestAppleIntel={() => testActive("apple-intelligence")}
               onSwitch={() => switchProvider(active)}
               onDisconnect={() => disconnect(active, { confirm: true })}
             />
@@ -323,6 +333,8 @@ export function SettingsPage() {
               providers={providers}
               busy={busy}
               ollamaAvailable={!!ollama?.available}
+              appleIntel={appleIntel}
+              onTestAppleIntel={() => testActive("apple-intelligence")}
               onPick={pickProvider}
             />
           )}
@@ -471,11 +483,15 @@ function ProviderPicker({
   providers,
   busy,
   ollamaAvailable,
+  appleIntel,
+  onTestAppleIntel,
   onPick,
 }: {
   providers: ProviderInfo[];
   busy: boolean;
   ollamaAvailable: boolean;
+  appleIntel: ProviderInfo | undefined;
+  onTestAppleIntel: () => void;
   onPick: (id: string) => void;
 }) {
   const { t } = useTranslation();
@@ -507,6 +523,11 @@ function ProviderPicker({
       ))}
 
       <OllamaNote available={ollamaAvailable} />
+      <AppleIntelligenceNote
+        info={appleIntel}
+        busy={busy}
+        onTest={onTestAppleIntel}
+      />
     </div>
   );
 }
@@ -584,6 +605,60 @@ function OllamaNote({ available }: { available: boolean }) {
   );
 }
 
+// Apple Intelligence note. Mirrors the Ollama pattern (informational
+// tile, not a picker tile, because there's nothing to "connect" to)
+// but with a small Test button when the model is ready — there's no
+// active-provider flow that would surface this provider otherwise,
+// since it's barred from the clinical pickers.
+//
+// Renders nothing when `info` is undefined (hard-unavailable hosts).
+function AppleIntelligenceNote({
+  info,
+  busy,
+  onTest,
+}: {
+  info: ProviderInfo | undefined;
+  busy: boolean;
+  onTest: () => void;
+}) {
+  const { t } = useTranslation();
+  if (!info) return null;
+  // `hint` carries the stable Availability tag ("not_enabled",
+  // "downloading", etc.) when the provider isn't fully ready, so the
+  // copy can be precise about what the user can do.
+  const stateKey = info.available
+    ? "settings.apple_intel_ready"
+    : info.hint === "not_enabled"
+      ? "settings.apple_intel_unavailable_not_enabled"
+      : info.hint === "downloading"
+        ? "settings.apple_intel_unavailable_downloading"
+        : "settings.apple_intel_unavailable_other";
+  return (
+    <div className="flex items-start gap-3 rounded-lg border border-border-subtle bg-bg-subtle p-3.5 text-[12px] text-ink-subtle">
+      <div className="mt-0.5 grid h-7 w-7 shrink-0 place-content-center rounded-md bg-sky-400/10 text-sky-300">
+        <LocalIcon />
+      </div>
+      <div className="min-w-0 flex-1 leading-relaxed">
+        <span className="font-medium text-ink-dim">
+          {t("settings.apple_intel_label")}
+        </span>{" "}
+        {t(stateKey)}
+      </div>
+      {info.available && (
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={onTest}
+          loading={busy}
+          className="shrink-0"
+        >
+          {t("settings.action_test")}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 // ===========================================================================
 // Active provider (connected state)
 // ===========================================================================
@@ -591,14 +666,18 @@ function ActiveProviderView({
   provider,
   busy,
   ollamaAvailable,
+  appleIntel,
   onTest,
+  onTestAppleIntel,
   onSwitch,
   onDisconnect,
 }: {
   provider: ProviderInfo;
   busy: boolean;
   ollamaAvailable: boolean;
+  appleIntel: ProviderInfo | undefined;
   onTest: () => void;
+  onTestAppleIntel: () => void;
   onSwitch: () => void;
   onDisconnect: () => void;
 }) {
@@ -675,6 +754,11 @@ function ActiveProviderView({
           <span>{t("settings.ollama_secondary")}</span>
         </div>
       )}
+      <AppleIntelligenceNote
+        info={appleIntel}
+        busy={busy}
+        onTest={onTestAppleIntel}
+      />
     </div>
   );
 }

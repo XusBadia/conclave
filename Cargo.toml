@@ -111,7 +111,12 @@ tesseract-rs = "0.2"
 tempfile = "3"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# `deny` instead of `forbid` so individual modules can opt in with
+# `#[allow(unsafe_code)]` when an FFI bridge genuinely needs it. The
+# only opt-in today is the Apple Intelligence Swift bridge in
+# `crates/providers/src/apple_intelligence.rs`; any future use must
+# be similarly local and justified.
+unsafe_code = "deny"
 missing_debug_implementations = "warn"
 missing_docs = "allow"
 unreachable_pub = "warn"

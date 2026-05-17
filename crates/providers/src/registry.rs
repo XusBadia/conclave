@@ -8,12 +8,20 @@ use std::sync::Arc;
 
 use crate::error::ProviderError;
 use crate::{
-    secrets, AnthropicOAuthProvider, AnthropicProvider, LlmProvider, OllamaProvider,
-    OpenAIOAuthProvider, OpenAiProvider, OpenRouterProvider,
+    secrets, AnthropicOAuthProvider, AnthropicProvider, AppleIntelligenceProvider, LlmProvider,
+    OllamaProvider, OpenAIOAuthProvider, OpenAiProvider, OpenRouterProvider,
 };
 
-/// API-key + local providers.
-pub const KNOWN_PROVIDERS: &[&str] = &["anthropic", "openai", "openrouter", "ollama"];
+/// API-key + local providers. Listed in the order the UI groups them:
+/// API keys first, then on-device providers (Ollama and Apple
+/// Intelligence) which are always available without credentials.
+pub const KNOWN_PROVIDERS: &[&str] = &[
+    "anthropic",
+    "openai",
+    "openrouter",
+    "ollama",
+    "apple-intelligence",
+];
 
 /// OAuth (subscription-based) providers. Experimental.
 pub const OAUTH_PROVIDERS: &[&str] = &["anthropic-oauth", "openai-oauth"];
@@ -46,6 +54,15 @@ impl ProviderRegistry {
     pub fn from_keychain() -> Result<Self, ProviderError> {
         let mut me = Self::new();
         me.inner.insert("ollama", Arc::new(OllamaProvider::new()));
+        // Apple Intelligence is registered unconditionally; the
+        // provider itself reports `Availability::FrameworkUnavailable`
+        // on hosts where the on-device model isn't reachable, so the
+        // UI can render a "not supported" card without a separate
+        // platform check here.
+        me.inner.insert(
+            "apple-intelligence",
+            Arc::new(AppleIntelligenceProvider::new()),
+        );
         if let Some(key) = secrets::load("anthropic")? {
             me.inner
                 .insert("anthropic", Arc::new(AnthropicProvider::new(key)));

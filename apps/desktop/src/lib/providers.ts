@@ -8,7 +8,18 @@ export type ProviderId =
   | "openrouter"
   | "ollama"
   | "anthropic-oauth"
-  | "openai-oauth";
+  | "openai-oauth"
+  | "apple-intelligence";
+
+// Where a provider can be plugged in. Mirrors the Rust-side
+// `ProviderScope` enum in `crates/providers/src/types.rs`.
+//
+// • `general` — eligible for every flow, including clinical
+//   deliberation (Cases, Q&A, batch).
+// • `subtask` — restricted to non-clinical utility surfaces. Hidden
+//   from the deliberation pickers; the backend also refuses subtask
+//   ids in those commands as a belt-and-braces.
+export type ProviderScope = "general" | "subtask";
 
 export type ProviderMeta = {
   id: ProviderId;
@@ -19,9 +30,12 @@ export type ProviderMeta = {
   // Tailwind color stem (e.g. "amber") used for the monogram tint and hover ring.
   brand: "amber" | "emerald" | "sky" | "violet" | "slate";
   // `true` when the provider is available without a credential and should not
-  // count against the one-active-provider rule. Only ollama qualifies today.
+  // count against the one-active-provider rule. Ollama and Apple Intelligence
+  // qualify today.
   alwaysAvailable?: boolean;
   recommended?: boolean;
+  // Defaults to "general" when omitted — keeps existing entries terse.
+  scope?: ProviderScope;
 };
 
 export const PROVIDER_META: Record<string, ProviderMeta> = {
@@ -75,6 +89,16 @@ export const PROVIDER_META: Record<string, ProviderMeta> = {
     brand: "slate",
     alwaysAvailable: true,
   },
+  "apple-intelligence": {
+    id: "apple-intelligence",
+    name: "Apple Intelligence",
+    tagline: "On-device · solo subtareas",
+    authLabel: "Local",
+    monogram: "",
+    brand: "sky",
+    alwaysAvailable: true,
+    scope: "subtask",
+  },
 };
 
 export function metaFor(id: string): ProviderMeta {
@@ -92,6 +116,13 @@ export function metaFor(id: string): ProviderMeta {
 
 export function isOccupyingSlot(id: string): boolean {
   return !PROVIDER_META[id]?.alwaysAvailable;
+}
+
+// Eligible for clinical deliberation (Cases, Q&A, batch). Subtask-only
+// providers (e.g. Apple Intelligence) are filtered out of those pickers
+// because their vendor guardrails reject clinical content.
+export function isClinicalEligible(id: string): boolean {
+  return (PROVIDER_META[id]?.scope ?? "general") !== "subtask";
 }
 
 // Tailwind class fragments per brand. Inline (rather than computed) so the
@@ -115,6 +146,11 @@ export const BRAND_HOVER: Record<ProviderMeta["brand"], string> = {
 // Display order in the picker grid. OAuth (subscription) first because that's
 // the friendliest onboarding path — no API keys required. Group titles are
 // expressed as i18n keys so the UI stays locale-aware.
+//
+// On-device providers (Ollama, Apple Intelligence) are *not* listed here:
+// they're surfaced through dedicated notes rendered alongside the picker and
+// active-provider views, because they don't have a "connect" step the user
+// has to walk through.
 export const PICKER_GROUPS: { titleKey: string; ids: ProviderId[] }[] = [
   {
     titleKey: "settings.picker_group_oauth",

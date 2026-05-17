@@ -20,6 +20,7 @@ import {
   type ProviderInfo,
   type Workspace,
 } from "../lib/ipc";
+import { isClinicalEligible } from "../lib/providers";
 
 /**
  * Pull the optional `⚠️ …` opening paragraph out of an LLM answer so the
@@ -77,7 +78,13 @@ export function KnowledgePage({ workspace }: { workspace: Workspace }) {
   // No live web access is involved.
   const [allowGeneralKnowledge, setAllowGeneralKnowledge] = useState(false);
 
-  const usable = useMemo(() => usableProviders(providers), [providers]);
+  // Q&A over documents is a clinical surface — Apple Intelligence and
+  // any other subtask-only provider is filtered out here so it never
+  // appears in the picker.
+  const usable = useMemo(
+    () => usableProviders(providers).filter((p) => isClinicalEligible(p.id)),
+    [providers],
+  );
   const askParts = useMemo(
     () =>
       askResp

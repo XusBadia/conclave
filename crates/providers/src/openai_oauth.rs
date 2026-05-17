@@ -17,7 +17,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::ProviderError;
 use crate::types::{
-    CompletionRequest, CompletionResponse, MessageRole, ProviderCapabilities, Usage, WebCitation,
+    CompletionRequest, CompletionResponse, MessageRole, ProviderCapabilities, ProviderScope, Usage,
+    WebCitation,
 };
 use crate::LlmProvider;
 
@@ -188,6 +189,7 @@ impl LlmProvider for OpenAIOAuthProvider {
             supports_json_mode: false, // Responses API has its own format.
             supports_streaming: true,
             vision: false,
+            scope: ProviderScope::General,
         }
     }
 

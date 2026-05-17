@@ -13,6 +13,29 @@ pub struct ProviderCapabilities {
     pub supports_streaming: bool,
     /// Provider accepts image input.
     pub vision: bool,
+    /// Where the provider is allowed to be used.
+    ///
+    /// `General` providers can serve clinical deliberation flows
+    /// (`ask_documents`, `run_case`, `run_case_deliberated`, `run_batch_cases`).
+    /// `Subtask` providers are restricted to utility surfaces — typically
+    /// because of model size limits or vendor guardrails that would refuse
+    /// clinical content.
+    pub scope: ProviderScope,
+}
+
+/// Where a provider may be used inside Conclave.
+///
+/// Surfaced through [`ProviderCapabilities::scope`] so call sites can refuse
+/// to wire a subtask-only provider into clinical flows. Every existing
+/// provider is `General`; only Apple Intelligence is `Subtask` today.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProviderScope {
+    /// Eligible for every call site, including clinical deliberation.
+    #[default]
+    General,
+    /// Restricted to non-clinical utility tasks.
+    Subtask,
 }
 
 /// Role of a chat message inside a [`CompletionRequest`].

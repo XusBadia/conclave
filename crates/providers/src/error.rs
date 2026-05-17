@@ -22,6 +22,13 @@ pub enum ProviderError {
     /// Request would exceed the model's context window.
     #[error("context window overflow")]
     ContextOverflow,
+    /// Provider is structurally unable to serve the request right now —
+    /// e.g. the on-device backend is not installed, not enabled, or the
+    /// host platform doesn't support it. Distinct from `Network` and
+    /// `Auth` because there's nothing the user can fix with a retry or
+    /// a new key; the message describes the structural reason.
+    #[error("provider unavailable: {0}")]
+    Unavailable(String),
     /// Anything else: parse failure, unexpected status, etc.
     #[error("provider error: {0}")]
     Other(String),
