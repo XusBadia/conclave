@@ -239,23 +239,34 @@ const MODALITY_TOKENS: &[&str] = &[
     "copia",
 ];
 
+/// Maximum length of a bare-digit token that we still treat as a
+/// patient identifier. Anything longer (e.g. an 8-digit date
+/// `20240312`) is rejected so it doesn't pollute the key.
+const MAX_ID_NUMERIC_LEN: usize = 4;
+
 /// Propose a grouping for a flat list of file paths the user dropped or
-/// picked, using a filename-prefix heuristic. The frontend treats this as
-/// an *initial* proposal — the user can always reorganize it in the
+/// picked, using a filename-prefix heuristic. The frontend treats this
+/// as an *initial* proposal — the user can always reorganize it in the
 /// review screen before running.
 ///
-/// Algorithm:
-/// 1. Compute a "normalized stem" per file: lowercased file stem with
-///    separators unified to `-`, modality / document-type tokens stripped,
-///    bare digit runs stripped, dates collapsed. The result is intended
-///    to be the patient identifier hiding inside the filename.
-/// 2. If every file collapses to the same (or empty) stem → one group.
-/// 3. Otherwise → one group per distinct stem, label = first original
-///    file-stem encountered for that key (preserves the user's casing).
+/// Algorithm (per file):
+/// 1. Split the file stem on `-`/`_`/space/`.` into tokens.
+/// 2. If any token is a short bare number (≤4 digits, ≥1 digit) it is
+///    treated as the **patient identifier numeric**. The key is the
+///    tokens from index 0 up to and including that numeric, joined with
+///    `-`. This handles "CR-IA-001_recto…" → key `cr-ia-001` and
+///    multi-document patients like "CR-IA-011_07_RM_pelvis" (the second
+///    `07` is ignored because we stop at the first numeric).
+/// 3. If no short numeric token exists, fall back to the **first
+///    non-modality, non-bare-numeric alpha token**. This keeps the
+///    older `juan-ecg.png` + `juan-labs.pdf` pattern working: both
+///    collapse to key `juan`.
+/// 4. Files whose key resolves to empty (e.g. `scan.pdf` — only
+///    modality tokens) inherit the **first non-empty key** so they
+///    join the first identified patient rather than form a phantom
+///    group.
 ///
-/// The heuristic is intentionally aggressive (a `juan-ecg.png` + `juan-labs.pdf`
-/// pair will collapse to one patient even though their stems are different
-/// raw) — the review screen makes the auto-decision plainly editable.
+/// Output groups preserve drop-order for stable rendering.
 pub fn propose_grouping_from_files(
     paths: Vec<PathBuf>,
     default_question: &str,
@@ -270,6 +281,10 @@ pub fn propose_grouping_from_files(
         path: PathBuf,
         original_stem: String,
         key: String,
+        /// Display label derived from the same tokens as the key, with
+        /// the user's casing preserved (e.g. "CR-IA-001" rather than
+        /// "cr-ia-001").
+        display_label: String,
     }
     let mut entries: Vec<Entry> = paths
         .into_iter()
@@ -279,17 +294,18 @@ pub fn propose_grouping_from_files(
                 .and_then(|s| s.to_str())
                 .unwrap_or("")
                 .to_owned();
-            let key = normalize_stem(&original_stem);
+            let (key, display_label) = extract_patient_key_and_label(&original_stem);
             Entry {
                 path: p,
                 original_stem,
                 key,
+                display_label,
             }
         })
         .collect();
 
-    // Empty keys are merged together — they all look like generic
-    // "PDF", "scan", "report" style filenames with no identifier.
+    // Empty keys all the way down (every file is a generic modality
+    // name like `ecg.png`, `scan.pdf`) → fold into one case.
     let all_empty = entries.iter().all(|e| e.key.is_empty());
     if all_empty {
         let label = entries
@@ -313,11 +329,8 @@ pub fn propose_grouping_from_files(
         }];
     }
 
-    // Files whose normalized stem is empty inherit the key of the
-    // **first non-empty key** seen so they don't form a phantom group by
-    // themselves. Practically this means a lone `scan.pdf` dropped
-    // alongside `juan-ecg.png` joins "juan", which is usually what the
-    // clinician meant.
+    // Lone generic files (empty key) inherit the first identified key
+    // so they join that patient rather than form their own group.
     let first_real_key = entries
         .iter()
         .find(|e| !e.key.is_empty())
@@ -329,8 +342,6 @@ pub fn propose_grouping_from_files(
         }
     }
 
-    // Group preserving first-seen order so the resulting cases follow the
-    // user's drag order.
     let mut order: Vec<String> = Vec::new();
     let mut by_key: std::collections::HashMap<String, Vec<usize>> =
         std::collections::HashMap::new();
@@ -344,11 +355,12 @@ pub fn propose_grouping_from_files(
     let mut out: Vec<BatchCaseInput> = Vec::with_capacity(order.len());
     for key in order {
         let idxs = by_key.remove(&key).unwrap_or_default();
-        // Pick the most representative original stem for the label: the
-        // longest one wins (it's the least stripped).
+        // Prefer a non-empty display_label from one of the contributing
+        // files; longer wins (preserves the fully-cased patient id).
         let label = idxs
             .iter()
-            .map(|&i| entries[i].original_stem.clone())
+            .map(|&i| entries[i].display_label.clone())
+            .filter(|s| !s.is_empty())
             .max_by_key(|s| s.len())
             .unwrap_or_else(|| key.clone());
         let attached_file_paths: Vec<String> = idxs
@@ -369,31 +381,53 @@ pub fn propose_grouping_from_files(
     out
 }
 
-/// Lowercase, unify separators, strip modality tokens + bare digit runs,
-/// and trim leading/trailing separators so two files with the same
-/// patient identifier collapse to the same key.
-fn normalize_stem(stem: &str) -> String {
-    let lower = stem.to_ascii_lowercase();
-    // Unify common separators to `-`.
-    let unified: String = lower
-        .chars()
-        .map(|c| match c {
-            ' ' | '_' | '.' => '-',
-            _ => c,
-        })
+/// Extract a `(key, display_label)` pair from a filename stem.
+///
+/// `key` is lowercase + `-`-joined for HashMap grouping. `display_label`
+/// is the same tokens with the user's original casing — used as the
+/// initial patient label in the review dialog.
+fn extract_patient_key_and_label(stem: &str) -> (String, String) {
+    let raw_tokens: Vec<&str> = stem
+        .split(['-', '_', ' ', '.'])
+        .filter(|t| !t.is_empty())
         .collect();
-    // Token-by-token strip.
-    let kept: Vec<&str> = unified
-        .split('-')
-        .filter(|tok| !tok.is_empty())
-        .filter(|tok| !MODALITY_TOKENS.contains(tok))
-        .filter(|tok| !is_bare_number(tok))
-        .collect();
-    kept.join("-")
-}
+    if raw_tokens.is_empty() {
+        return (String::new(), String::new());
+    }
 
-fn is_bare_number(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())
+    // Patient identifier with embedded numeric (CR-IA-001, MRN-204711, etc).
+    // We take everything from token 0 up to and including the first numeric
+    // token that's short enough to be a case index (≤ MAX_ID_NUMERIC_LEN
+    // digits). Longer pure-digit tokens (8-digit dates, etc.) are skipped.
+    let first_id_numeric = raw_tokens.iter().position(|t| {
+        let len = t.len();
+        (1..=MAX_ID_NUMERIC_LEN).contains(&len) && t.chars().all(|c| c.is_ascii_digit())
+    });
+    if let Some(idx) = first_id_numeric {
+        let id_tokens = &raw_tokens[..=idx];
+        let key = id_tokens
+            .iter()
+            .map(|t| t.to_ascii_lowercase())
+            .collect::<Vec<_>>()
+            .join("-");
+        let label = id_tokens.join("-");
+        return (key, label);
+    }
+
+    // No numeric ID token: fall back to the first non-modality,
+    // non-bare-digit alpha token (the `juan-ecg` pattern).
+    for t in &raw_tokens {
+        if t.chars().all(|c| c.is_ascii_digit()) {
+            continue; // longer-than-MAX_ID date-like number — skip
+        }
+        let lc = t.to_ascii_lowercase();
+        if MODALITY_TOKENS.contains(&lc.as_str()) {
+            continue;
+        }
+        return (lc, (*t).to_owned());
+    }
+
+    (String::new(), String::new())
 }
 
 #[cfg(test)]
@@ -564,6 +598,59 @@ mod tests {
             1,
             "underscores/spaces should unify with dashes"
         );
+        assert_eq!(cases[0].attached_file_paths.len(), 2);
+    }
+
+    #[test]
+    fn propose_groups_by_alphanumeric_id_prefix() {
+        // Reproduces the real-world MDT colorectal naming: most files
+        // are single-document (CR-IA-001 .. CR-IA-010) and CR-IA-011 has
+        // 8 documents with a numeric document index AFTER the patient
+        // id. The first numeric token (≤4 digits) is the patient id; the
+        // second numeric (e.g. `07` in `CR-IA-011_07_RM_pelvis`) is the
+        // document index and must NOT split the group.
+        let cases = propose_grouping_from_files(
+            vec![
+                p("CR-IA-001_recto_bajo_alto_riesgo.pdf"),
+                p("CR-IA-002_recto_cCR_post_TNT.pdf"),
+                p("CR-IA-003_polipo_maligno_T1_sigma.pdf"),
+                p("CR-IA-011_00_peticion_comite_colorrectal.pdf"),
+                p("CR-IA-011_01_consulta_inicial_digestivo.pdf"),
+                p("CR-IA-011_07_RM_pelvis_protocolo_recto.pdf"),
+            ],
+            "Q",
+        );
+        assert_eq!(cases.len(), 4, "001/002/003 each + a single 011 group");
+        let cr011 = cases
+            .iter()
+            .find(|c| c.patient_label.contains("011"))
+            .expect("CR-IA-011 group missing");
+        assert_eq!(
+            cr011.attached_file_paths.len(),
+            3,
+            "all three CR-IA-011 files should share a group",
+        );
+        // Label keeps the case sensitivity of the original filename.
+        assert_eq!(cr011.patient_label, "CR-IA-011");
+        let cr001 = cases
+            .iter()
+            .find(|c| c.patient_label.contains("001"))
+            .expect("CR-IA-001 group missing");
+        assert_eq!(cr001.attached_file_paths.len(), 1);
+        assert_eq!(cr001.patient_label, "CR-IA-001");
+    }
+
+    #[test]
+    fn propose_ignores_long_numeric_tokens_as_id() {
+        // 8-digit numeric tokens look like dates, not patient ids.
+        // The fallback path should still find a name-style key.
+        let cases = propose_grouping_from_files(
+            vec![p("juan-20240312-ecg.pdf"), p("juan-20240315-labs.pdf")],
+            "Q",
+        );
+        // Both files share the alpha prefix `juan`; the 8-digit date is
+        // skipped as a candidate patient identifier.
+        assert_eq!(cases.len(), 1, "both should collapse under `juan`");
         assert_eq!(cases[0].attached_file_paths.len(), 2);
     }
 }
