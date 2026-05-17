@@ -21,3 +21,7 @@ Cargo.lock.bak
 conclave.toml.local
 /data/
 /tmp/
+
+# FastEmbed downloaded ONNX models (~470 MB). Cached at OS-standard cache
+# dir at runtime; this catches the legacy CWD-relative location.
+.fastembed_cache/

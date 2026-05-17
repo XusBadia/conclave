@@ -102,8 +102,14 @@ export function App() {
           >
             <span className="h-1.5 w-1.5 rounded-full bg-ok" />
             <span className="truncate max-w-[200px]">{active.name}</span>
-            <span className="text-ink-faint">·</span>
-            <span className="font-mono text-ink-faint">{active.id}</span>
+            {active.specialty && (
+              <>
+                <span className="text-ink-faint">·</span>
+                <span className="truncate max-w-[160px] text-ink-faint">
+                  {active.specialty}
+                </span>
+              </>
+            )}
           </div>
         ) : (
           <span
@@ -124,7 +130,7 @@ export function App() {
         />
 
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
             {section === "workspaces" && (
               <WorkspacesPage
                 activeId={active?.id ?? null}

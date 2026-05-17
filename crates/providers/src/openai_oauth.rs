@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::ProviderError;
 use crate::types::{
-    CompletionRequest, CompletionResponse, MessageRole, ProviderCapabilities, Usage,
+    CompletionRequest, CompletionResponse, MessageRole, ProviderCapabilities, Usage, WebCitation,
 };
 use crate::LlmProvider;
 
@@ -203,27 +203,34 @@ impl LlmProvider for OpenAIOAuthProvider {
             req.model.clone()
         };
 
-        // The Codex Responses API splits the "system prompt" out of the
-        // turn-by-turn input and into a top-level `instructions` field
-        // (rejects the request with `{"detail":"Instructions are required"}`
-        // when it's missing or empty). Collapse any System messages into
-        // instructions; keep User/Assistant turns in `input`.
-        let mut instructions = String::new();
-        let mut input: Vec<ResponseInput> = Vec::new();
-        for m in req.messages {
-            if matches!(m.role, MessageRole::System) {
-                if !instructions.is_empty() {
-                    instructions.push_str("\n\n");
-                }
-                instructions.push_str(&m.content);
-                continue;
-            }
-            input.push(ResponseInput {
+        // The Codex Responses API requires a top-level `instructions` field
+        // separate from the `input` messages. Collect any System messages
+        // here; the remaining messages become the input array. If the caller
+        // didn't supply a system message, fall back to a minimal default so
+        // the API doesn't reject the request with "Instructions are required".
+        let (system_parts, other_messages): (Vec<_>, Vec<_>) = req
+            .messages
+            .into_iter()
+            .partition(|m| matches!(m.role, MessageRole::System));
+        let instructions = if system_parts.is_empty() {
+            "You are a helpful assistant. Follow the user's instructions.".to_owned()
+        } else {
+            system_parts
+                .into_iter()
+                .map(|m| m.content)
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        };
+
+        // Build the input array the Responses API expects.
+        let input: Vec<ResponseInput> = other_messages
+            .into_iter()
+            .map(|m| ResponseInput {
                 kind: "message",
                 role: match m.role {
+                    MessageRole::System => "system",
                     MessageRole::User => "user",
                     MessageRole::Assistant => "assistant",
-                    MessageRole::System => unreachable!("filtered above"),
                 },
                 content: vec![ResponseContent {
                     kind: match m.role {
@@ -231,27 +238,42 @@ impl LlmProvider for OpenAIOAuthProvider {
                         _ => "input_text".to_owned(),
                     },
                     text: m.content,
+                    annotations: Vec::new(),
                 }],
-            });
-        }
+            })
+            .collect();
         if input.is_empty() {
             return Err(ProviderError::BadRequest(
-                "openai-oauth requires at least one user/assistant message".into(),
+                "openai-oauth requires at least one non-system message".into(),
             ));
         }
-        // The API rejects an empty instructions field, so provide a
-        // neutral default when the caller didn't send a System message.
-        if instructions.trim().is_empty() {
-            instructions = "You are a helpful assistant.".to_owned();
-        }
+
+        // NOTE: We do NOT advertise `web_search_preview` here. The Codex
+        // endpoint at chatgpt.com/backend-api/codex/responses only supports
+        // Codex's own coding tools (`shell`, `apply_patch`, …) and rejects
+        // `web_search_preview` with `400 Unsupported tool type`. The Q&A
+        // pipeline runs its own DuckDuckGo search and injects results into
+        // the prompt before calling us — `req.allow_web_search` is therefore
+        // ignored by this provider.
+        let _ = req.allow_web_search;
+        let tools: Vec<ResponseTool> = Vec::new();
 
         let body = ResponseRequest {
             model,
             instructions,
             input,
             store: false,
-            max_output_tokens: req.max_output_tokens,
-            temperature: req.temperature,
+            // The Codex Responses API enforces streaming for OAuth callers
+            // — non-streaming requests return `400 "Stream must be set to true"`.
+            // We still surface a single final CompletionResponse to the caller;
+            // streaming is purely a wire-level concern handled below.
+            stream: true,
+            tools,
+            // NOTE: Codex's `/codex/responses` endpoint rejects both
+            // `max_output_tokens` and `temperature` with `400 Unsupported
+            // parameter`, even though the upstream OpenAI Responses API
+            // accepts them. We drop them for Codex callers; the API picks
+            // sensible defaults.
         };
 
         let session_id = uuid_v4();
@@ -261,6 +283,7 @@ impl LlmProvider for OpenAIOAuthProvider {
             .post(&url)
             .bearer_auth(&token)
             .header("content-type", "application/json")
+            .header("accept", "text/event-stream")
             .header("OpenAI-Beta", "responses=v1")
             .header("originator", ORIGINATOR)
             .header("session_id", session_id)
@@ -284,29 +307,150 @@ impl LlmProvider for OpenAIOAuthProvider {
             return Err(ProviderError::BadRequest(format!("{status}: {body_text}")));
         }
 
-        let parsed: ResponseEnvelope = resp
-            .json()
+        // Accumulate the SSE stream into a single CompletionResponse.
+        let body_text = resp
+            .text()
             .await
+            .map_err(|e| ProviderError::Other(format!("openai-oauth read: {e}")))?;
+        let aggregated = aggregate_sse(&body_text)
             .map_err(|e| ProviderError::Other(format!("openai-oauth parse: {e}")))?;
 
-        let text = parsed
-            .output
-            .iter()
-            .flat_map(|o| o.content.as_deref().unwrap_or(&[]))
-            .filter(|c| c.kind == "output_text" || c.kind == "text")
-            .map(|c| c.text.clone())
-            .collect::<Vec<_>>()
-            .join("");
-        let usage = parsed.usage.unwrap_or_default();
         Ok(CompletionResponse {
-            text,
+            text: aggregated.text,
             usage: Usage {
-                input_tokens: usage.input_tokens,
-                output_tokens: usage.output_tokens,
+                input_tokens: aggregated.input_tokens,
+                output_tokens: aggregated.output_tokens,
             },
-            model: parsed.model.unwrap_or_else(|| body.model.clone()),
+            model: aggregated.model.unwrap_or_else(|| body.model.clone()),
+            web_citations: aggregated.web_citations,
         })
     }
+}
+
+/// Walks the SSE event stream from the Codex Responses API and rolls every
+/// `response.output_text.delta` chunk into a single string. The
+/// `response.completed` event carries the authoritative usage counters
+/// and (optionally) the final assembled output, which we prefer over the
+/// delta concatenation if present.
+struct AggregatedResponse {
+    text: String,
+    input_tokens: u32,
+    output_tokens: u32,
+    model: Option<String>,
+    web_citations: Vec<WebCitation>,
+}
+
+fn aggregate_sse(body: &str) -> Result<AggregatedResponse, String> {
+    let mut deltas = String::new();
+    let mut final_text: Option<String> = None;
+    let mut usage = ResponseUsage::default();
+    let mut model: Option<String> = None;
+    let mut web_citations: Vec<WebCitation> = Vec::new();
+    let mut saw_any_event = false;
+
+    // SSE events are separated by blank lines. Within an event, "data:"
+    // lines carry the JSON payload — we ignore "event:" hints because the
+    // `type` field inside the payload is authoritative.
+    for block in body.split("\n\n") {
+        let mut payload = String::new();
+        for line in block.lines() {
+            if let Some(rest) = line.strip_prefix("data:") {
+                if !payload.is_empty() {
+                    payload.push('\n');
+                }
+                payload.push_str(rest.trim_start());
+            }
+        }
+        if payload.is_empty() || payload == "[DONE]" {
+            continue;
+        }
+        saw_any_event = true;
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload) else {
+            continue;
+        };
+        let ty = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        match ty {
+            "response.output_text.delta" => {
+                if let Some(d) = value.get("delta").and_then(|v| v.as_str()) {
+                    deltas.push_str(d);
+                }
+            }
+            "response.output_text.annotation.added" => {
+                if let Some(ann) = value.get("annotation") {
+                    if let Ok(parsed) = serde_json::from_value::<ResponseAnnotation>(ann.clone()) {
+                        push_web_citation(&mut web_citations, &parsed);
+                    }
+                }
+            }
+            "response.completed" | "response.done" => {
+                if let Some(response) = value.get("response") {
+                    if let Ok(env) = serde_json::from_value::<ResponseEnvelope>(response.clone()) {
+                        let text = env
+                            .output
+                            .iter()
+                            .flat_map(|o| o.content.as_deref().unwrap_or(&[]))
+                            .filter(|c| c.kind == "output_text" || c.kind == "text")
+                            .map(|c| c.text.clone())
+                            .collect::<Vec<_>>()
+                            .join("");
+                        if !text.is_empty() {
+                            final_text = Some(text);
+                        }
+                        for content in env
+                            .output
+                            .iter()
+                            .flat_map(|o| o.content.as_deref().unwrap_or(&[]))
+                        {
+                            for ann in &content.annotations {
+                                push_web_citation(&mut web_citations, ann);
+                            }
+                        }
+                        if let Some(u) = env.usage {
+                            usage = u;
+                        }
+                        if env.model.is_some() {
+                            model = env.model;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if !saw_any_event {
+        return Err("no SSE events received".into());
+    }
+
+    let text = final_text.unwrap_or(deltas);
+    Ok(AggregatedResponse {
+        text,
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        model,
+        web_citations,
+    })
+}
+
+/// Append a citation if it points to a URL and hasn't been recorded yet.
+/// Codex sometimes emits the same URL repeatedly (once per sentence the
+/// model attributes to it); dedupe by URL so the UI doesn't list seven
+/// copies of the same page.
+fn push_web_citation(out: &mut Vec<WebCitation>, ann: &ResponseAnnotation) {
+    if ann.kind != "url_citation" {
+        return;
+    }
+    let Some(url) = ann.url.as_deref().filter(|u| !u.is_empty()) else {
+        return;
+    };
+    if out.iter().any(|c| c.url == url) {
+        return;
+    }
+    out.push(WebCitation {
+        url: url.to_owned(),
+        title: ann.title.clone().unwrap_or_default(),
+        snippet: String::new(),
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -430,10 +574,15 @@ struct ResponseRequest {
     instructions: String,
     input: Vec<ResponseInput>,
     store: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_output_tokens: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    temperature: Option<f32>,
+    stream: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<ResponseTool>,
+}
+
+#[derive(Serialize)]
+struct ResponseTool {
+    #[serde(rename = "type")]
+    kind: &'static str,
 }
 
 #[derive(Serialize)]
@@ -448,7 +597,23 @@ struct ResponseInput {
 struct ResponseContent {
     #[serde(rename = "type")]
     kind: String,
+    #[serde(default)]
     text: String,
+    /// Inline citations attached to this text segment when the model
+    /// invoked a tool (e.g. `web_search_preview`). Only meaningful on
+    /// deserialization — never serialized back.
+    #[serde(default, skip_serializing)]
+    annotations: Vec<ResponseAnnotation>,
+}
+
+#[derive(Deserialize, Default, Clone)]
+struct ResponseAnnotation {
+    #[serde(rename = "type", default)]
+    kind: String,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -540,6 +705,49 @@ mod tests {
         // Three dot-separated segments but the middle isn't valid base64.
         let result = jwt_claim_email("aaa.???.zzz");
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn aggregate_sse_accumulates_deltas_and_completes_with_usage() {
+        // Simulates a minimal Codex SSE stream: two text deltas followed by
+        // a `response.completed` event with usage. The final text comes from
+        // the completed event when present.
+        let sse = "\
+event: response.output_text.delta\n\
+data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hello \"}\n\
+\n\
+event: response.output_text.delta\n\
+data: {\"type\":\"response.output_text.delta\",\"delta\":\"world\"}\n\
+\n\
+event: response.completed\n\
+data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"content\":[{\"type\":\"output_text\",\"text\":\"Hello world\"}]}],\"usage\":{\"input_tokens\":42,\"output_tokens\":7},\"model\":\"gpt-5.5\"}}\n\
+\n\
+data: [DONE]\n\
+\n";
+        let agg = aggregate_sse(sse).unwrap();
+        assert_eq!(agg.text, "Hello world");
+        assert_eq!(agg.input_tokens, 42);
+        assert_eq!(agg.output_tokens, 7);
+        assert_eq!(agg.model.as_deref(), Some("gpt-5.5"));
+    }
+
+    #[test]
+    fn aggregate_sse_falls_back_to_deltas_when_no_completed_event() {
+        // Some servers may close before emitting `response.completed`; the
+        // accumulated delta string should still be returned.
+        let sse = "\
+data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\
+\n";
+        let agg = aggregate_sse(sse).unwrap();
+        assert_eq!(agg.text, "partial");
+        assert_eq!(agg.input_tokens, 0);
+        assert!(agg.model.is_none());
+    }
+
+    #[test]
+    fn aggregate_sse_errors_when_stream_is_empty() {
+        let agg = aggregate_sse("");
+        assert!(agg.is_err());
     }
 
     #[test]

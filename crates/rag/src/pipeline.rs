@@ -79,6 +79,26 @@ pub enum IngestionEvent {
     Skipped { path: PathBuf, reason: SkipReason },
     /// Ingestion errored out for this document; the run continues.
     Failed { path: PathBuf, error: String },
+    /// Sub-document progress emitted between stages — extracting, chunking,
+    /// embedding, storing. UIs can render a determinate progress bar from
+    /// these, but consumers that don't care can ignore the variant entirely.
+    Progress {
+        path: PathBuf,
+        stage: ProgressStage,
+        /// Whole-document completion percentage in `[0, 100]`.
+        percent: u8,
+    },
+}
+
+/// Coarse stages within `ingest_one`. Kept intentionally small so the UI
+/// can map them to translation keys without per-extractor branching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProgressStage {
+    Extracting,
+    Chunking,
+    Embedding,
+    Storing,
 }
 
 impl IngestionPipeline {
@@ -138,7 +158,7 @@ impl IngestionPipeline {
                 report.skipped.push(skipped);
                 continue;
             }
-            match self.ingest_one(&file).await {
+            match self.ingest_one(&file, &mut on_event).await {
                 Ok(Outcome::Ingested(record)) => {
                     on_event(IngestionEvent::Ingested {
                         path: file,
@@ -170,15 +190,33 @@ impl IngestionPipeline {
         Ok(report)
     }
 
-    async fn ingest_one(&self, path: &Path) -> Result<Outcome> {
+    async fn ingest_one<F>(&self, path: &Path, on_event: &mut F) -> Result<Outcome>
+    where
+        F: FnMut(IngestionEvent),
+    {
+        on_event(IngestionEvent::Progress {
+            path: path.to_path_buf(),
+            stage: ProgressStage::Extracting,
+            percent: 10,
+        });
         let extracted = extract_from_path(path)?;
         if extracted.needs_ocr {
             return Ok(Outcome::Skipped(SkipReason::NeedsOcr));
         }
 
         let (id, sha) = DocumentRepository::prepare_document_id(path)?;
+        on_event(IngestionEvent::Progress {
+            path: path.to_path_buf(),
+            stage: ProgressStage::Chunking,
+            percent: 30,
+        });
         let chunks = chunk_text(&extracted.content, &id, self.chunk_params)?;
 
+        on_event(IngestionEvent::Progress {
+            path: path.to_path_buf(),
+            stage: ProgressStage::Embedding,
+            percent: 40,
+        });
         // Embed chunk texts. The embedder is sync; offload to spawn_blocking
         // so we don't block the tokio runtime if the FastEmbed backend is
         // doing real ONNX inference.
@@ -187,6 +225,11 @@ impl IngestionPipeline {
         let vectors = tokio::task::spawn_blocking(move || embedder.embed(&texts))
             .await
             .map_err(|e| Error::Rag(format!("embed task join: {e}")))??;
+        on_event(IngestionEvent::Progress {
+            path: path.to_path_buf(),
+            stage: ProgressStage::Storing,
+            percent: 85,
+        });
 
         let record = self
             .repository

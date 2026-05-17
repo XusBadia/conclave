@@ -93,6 +93,7 @@ impl LlmProvider for MockProvider {
                 output_tokens: 1,
             },
             model: "mock-model".into(),
+            web_citations: Vec::new(),
         })
     }
 }

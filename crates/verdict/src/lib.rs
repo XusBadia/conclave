@@ -52,6 +52,7 @@
 pub mod persistence;
 pub mod pipeline;
 pub mod prompt;
+pub mod qa;
 pub mod schema;
 pub mod validation;
 
@@ -61,5 +62,6 @@ pub use persistence::{
 };
 pub use pipeline::{VerdictOptions, VerdictPipeline, VerdictRun};
 pub use prompt::{PromptInputs, PromptTemplate, VERDICT_PROMPT_VERSION};
+pub use qa::{QaPipeline, QaResponse, QaSource};
 pub use schema::{Alternative, CertaintyLevel, EvidenceClaim, KeyValue, Recommendation, Verdict};
 pub use validation::{validate_verdict, ValidationError};

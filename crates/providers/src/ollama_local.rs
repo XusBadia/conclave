@@ -150,6 +150,7 @@ impl LlmProvider for OllamaProvider {
                 output_tokens: parsed.eval_count.unwrap_or(0),
             },
             model: parsed.model,
+            web_citations: Vec::new(),
         })
     }
 }
