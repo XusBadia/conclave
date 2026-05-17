@@ -270,11 +270,15 @@ impl DocumentRepository {
     fn copy_into_documents_dir(&self, id: &str, source: &Path, bytes: &[u8]) -> Result<PathBuf> {
         let dir = self.layout.documents_dir();
         std::fs::create_dir_all(&dir).map_err(|e| Error::io_at(&dir, e))?;
-        let original_name = source
-            .file_name()
+        // The on-disk filename is `<id>.<ext>` — `id` already encodes the
+        // sha prefix + a slug of the original stem, so we don't append the
+        // original name again. Doing so could overflow the 255-byte
+        // filename limit on macOS/Linux for documents with long titles.
+        let ext = source
+            .extension()
             .and_then(std::ffi::OsStr::to_str)
-            .unwrap_or("document");
-        let dest = dir.join(format!("{id}-{original_name}"));
+            .unwrap_or("bin");
+        let dest = dir.join(format!("{id}.{ext}"));
         std::fs::write(&dest, bytes).map_err(|e| Error::io_at(&dest, e))?;
         Ok(dest)
     }
@@ -300,13 +304,28 @@ fn sha256_hex(bytes: &[u8]) -> String {
     s
 }
 
+/// Cap on the slug portion of a document id. macOS and most Linux
+/// filesystems limit a single path component to 255 bytes; the id is
+/// later interpolated into `documents/<id>.<ext>` and shown in URLs, so
+/// keeping it short is also cosmetic. 60 chars is enough to keep a
+/// human-recognisable hint while leaving headroom for path joining.
+const SLUG_MAX_LEN: usize = 60;
+
 fn build_document_id(sha_hex: &str, source: &Path) -> String {
     let prefix: String = sha_hex.chars().take(8).collect();
     let stem = source
         .file_stem()
         .and_then(std::ffi::OsStr::to_str)
         .unwrap_or("document");
-    let slug = slug::slugify(stem);
+    let mut slug = slug::slugify(stem);
+    if slug.len() > SLUG_MAX_LEN {
+        slug.truncate(SLUG_MAX_LEN);
+        // Drop a trailing hyphen that the truncation may have left behind
+        // so the id never looks like `<sha>-…-` with a dangling dash.
+        while slug.ends_with('-') {
+            slug.pop();
+        }
+    }
     if slug.is_empty() {
         prefix
     } else {
