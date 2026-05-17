@@ -203,16 +203,27 @@ impl LlmProvider for OpenAIOAuthProvider {
             req.model.clone()
         };
 
-        // Build the input array the Responses API expects.
-        let input: Vec<ResponseInput> = req
-            .messages
-            .into_iter()
-            .map(|m| ResponseInput {
+        // The Codex Responses API splits the "system prompt" out of the
+        // turn-by-turn input and into a top-level `instructions` field
+        // (rejects the request with `{"detail":"Instructions are required"}`
+        // when it's missing or empty). Collapse any System messages into
+        // instructions; keep User/Assistant turns in `input`.
+        let mut instructions = String::new();
+        let mut input: Vec<ResponseInput> = Vec::new();
+        for m in req.messages {
+            if matches!(m.role, MessageRole::System) {
+                if !instructions.is_empty() {
+                    instructions.push_str("\n\n");
+                }
+                instructions.push_str(&m.content);
+                continue;
+            }
+            input.push(ResponseInput {
                 kind: "message",
                 role: match m.role {
-                    MessageRole::System => "system",
                     MessageRole::User => "user",
                     MessageRole::Assistant => "assistant",
+                    MessageRole::System => unreachable!("filtered above"),
                 },
                 content: vec![ResponseContent {
                     kind: match m.role {
@@ -221,16 +232,22 @@ impl LlmProvider for OpenAIOAuthProvider {
                     },
                     text: m.content,
                 }],
-            })
-            .collect();
+            });
+        }
         if input.is_empty() {
             return Err(ProviderError::BadRequest(
-                "openai-oauth requires at least one message".into(),
+                "openai-oauth requires at least one user/assistant message".into(),
             ));
+        }
+        // The API rejects an empty instructions field, so provide a
+        // neutral default when the caller didn't send a System message.
+        if instructions.trim().is_empty() {
+            instructions = "You are a helpful assistant.".to_owned();
         }
 
         let body = ResponseRequest {
             model,
+            instructions,
             input,
             store: false,
             max_output_tokens: req.max_output_tokens,
@@ -410,6 +427,7 @@ fn uuid_v4() -> String {
 #[derive(Serialize)]
 struct ResponseRequest {
     model: String,
+    instructions: String,
     input: Vec<ResponseInput>,
     store: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
