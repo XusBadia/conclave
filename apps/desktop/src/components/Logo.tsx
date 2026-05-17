@@ -23,12 +23,12 @@ export function Logo({ size = 28, className, title = "Conclave" }: LogoProps) {
       className={clsx("inline-block text-ink", className)}
     >
       <circle cx={32} cy={32} r={24} />
-      <circle cx={32} cy={8} r={4} fill="currentColor" stroke="none" />
-      <circle cx={9.17} cy={24.58} r={4} fill="currentColor" stroke="none" />
-      <circle cx={17.89} cy={51.42} r={4} fill="currentColor" stroke="none" />
-      <circle cx={46.11} cy={51.42} r={4} fill="currentColor" stroke="none" />
-      <circle cx={54.83} cy={24.58} r={4} fill="currentColor" stroke="none" />
-      <circle cx={32} cy={32} r={5} fill="currentColor" stroke="none" />
+      <circle cx={32} cy={8} r={5.5} fill="currentColor" stroke="none" />
+      <circle cx={9.17} cy={24.58} r={5.5} fill="currentColor" stroke="none" />
+      <circle cx={17.89} cy={51.42} r={5.5} fill="currentColor" stroke="none" />
+      <circle cx={46.11} cy={51.42} r={5.5} fill="currentColor" stroke="none" />
+      <circle cx={54.83} cy={24.58} r={5.5} fill="currentColor" stroke="none" />
+      <circle cx={32} cy={32} r={8} fill="currentColor" stroke="none" />
     </svg>
   );
 }
