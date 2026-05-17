@@ -25,3 +25,7 @@ conclave.toml.local
 # FastEmbed downloaded ONNX models (~470 MB). Cached at OS-standard cache
 # dir at runtime; this catches the legacy CWD-relative location.
 .fastembed_cache/
+
+# Mobile icon byproducts of `pnpm tauri icon` — Conclave is desktop-only.
+apps/desktop/src-tauri/icons/android/
+apps/desktop/src-tauri/icons/ios/
