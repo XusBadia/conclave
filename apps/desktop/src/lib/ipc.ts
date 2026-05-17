@@ -113,6 +113,8 @@ export interface Verdict {
 export interface CaseRecord {
   id: string;
   created_at: string;
+  /** RFC3339. User-facing clinical date. Defaults to created_at on insert. */
+  case_date: string;
   workspace_id: string;
   question: string;
   original_text: string;
@@ -327,6 +329,11 @@ export const ipc = {
     kind: "accept" | "modify" | "reject";
     reason?: string;
   }) => invoke<void>("submit_feedback", { request: req }),
+  updateCaseDate: (req: {
+    workspace_id: string;
+    case_ids: string[];
+    new_date: string;
+  }) => invoke<void>("update_case_date", { request: req }),
 
   // Batch
   parseBatchFolder: (folderPath: string, defaultQuestion: string) =>
