@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
+import { IconLock } from "@tabler/icons-react";
 
 import { Button } from "./Button";
 import { ipc } from "../lib/ipc";
@@ -68,19 +69,7 @@ export function Onboarding({
 
         <div className="mb-5 rounded-lg border border-ok/30 bg-ok/5 p-4 text-[12px] leading-relaxed text-ink-dim">
           <div className="mb-1 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ok">
-            <svg
-              aria-hidden="true"
-              viewBox="0 0 16 16"
-              className="h-3.5 w-3.5"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.6"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <rect x="3" y="7" width="10" height="6.5" rx="1.2" />
-              <path d="M5.2 7V4.8a2.8 2.8 0 0 1 5.6 0V7" />
-            </svg>
+            <IconLock aria-hidden="true" size={14} stroke={1.6} />
             {t("onboarding.privacy_title")}
           </div>
           {t("onboarding.privacy_body")}

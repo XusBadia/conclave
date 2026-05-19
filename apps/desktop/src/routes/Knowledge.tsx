@@ -5,6 +5,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { IconAlertTriangle } from "@tabler/icons-react";
 
 import { Button } from "../components/Button";
 import { Card, CardBody, CardHeader } from "../components/Card";
@@ -309,20 +310,12 @@ export function KnowledgePage({ workspace }: { workspace: Workspace }) {
 
       <div className="min-w-0 space-y-5">
         <div className="flex items-start gap-2.5 rounded-md border border-warn/30 bg-warn/5 px-3 py-2 text-[12.5px] leading-relaxed text-ink-dim">
-          <svg
+          <IconAlertTriangle
             aria-hidden="true"
-            viewBox="0 0 16 16"
-            className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warn"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.6"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M8 2.5 14 13H2L8 2.5Z" />
-            <path d="M8 6.8v3" />
-            <path d="M8 11.4h.01" />
-          </svg>
+            size={14}
+            stroke={1.6}
+            className="mt-0.5 shrink-0 text-warn"
+          />
           <p className="min-w-0">
             <Trans
               i18nKey="knowledge.privacy_warning"

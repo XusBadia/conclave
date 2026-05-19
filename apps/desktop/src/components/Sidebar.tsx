@@ -1,68 +1,24 @@
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import {
+  IconBook2,
+  IconBriefcase,
+  IconLayoutGrid,
+  IconSettings,
+} from "@tabler/icons-react";
 
 import { cn } from "../lib/cn";
 import { Logo } from "./Logo";
 
 export type Section = "workspaces" | "knowledge" | "cases" | "settings";
 
+const ICON_PROPS = { size: 16, stroke: 1.5 } as const;
+
 const items: { id: Section; icon: ReactNode }[] = [
-  {
-    id: "workspaces",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-        <path
-          d="M3 6.5 6 4l3 2.5M3 6.5v11l3 2.5m-3-13.5h6m-6 11h6m0-13.5 3-2.5 3 2.5m-6 0v11l3 2.5m-3-13.5h6m-6 11h6m0-13.5 3-2.5 3 2.5v11l-3 2.5m0-13.5v11m0 0h-6"
-          stroke="currentColor"
-          strokeWidth="1.4"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    ),
-  },
-  {
-    id: "knowledge",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-        <path
-          d="M4 5.5C4 4.67 4.67 4 5.5 4H12v16H5.5A1.5 1.5 0 0 1 4 18.5v-13Zm16 0c0-.83-.67-1.5-1.5-1.5H12v16h6.5a1.5 1.5 0 0 0 1.5-1.5v-13Z"
-          stroke="currentColor"
-          strokeWidth="1.4"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    ),
-  },
-  {
-    id: "cases",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-        <path
-          d="M9 4h6l1 3h3a1 1 0 0 1 1 1v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a1 1 0 0 1 1-1h3l1-3Zm3 5.5a3 3 0 0 0-3 3h6a3 3 0 0 0-3-3Zm-3 6h6"
-          stroke="currentColor"
-          strokeWidth="1.4"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    ),
-  },
-  {
-    id: "settings",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-        <path
-          d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Zm8.4 3.5c0-.4-.04-.79-.1-1.16l2.06-1.61-2-3.46-2.42.97a8 8 0 0 0-2-1.16L15.5 2h-4l-.44 2.58a8 8 0 0 0-2 1.16L6.64 4.77l-2 3.46 2.06 1.6c-.06.38-.1.77-.1 1.17 0 .4.04.79.1 1.16l-2.06 1.61 2 3.46 2.42-.97a8 8 0 0 0 2 1.16L11.5 22h4l.44-2.58a8 8 0 0 0 2-1.16l2.42.97 2-3.46-2.06-1.61c.06-.37.1-.76.1-1.16Z"
-          stroke="currentColor"
-          strokeWidth="1.4"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    ),
-  },
+  { id: "workspaces", icon: <IconLayoutGrid {...ICON_PROPS} /> },
+  { id: "knowledge", icon: <IconBook2 {...ICON_PROPS} /> },
+  { id: "cases", icon: <IconBriefcase {...ICON_PROPS} /> },
+  { id: "settings", icon: <IconSettings {...ICON_PROPS} /> },
 ];
 
 export function Sidebar({

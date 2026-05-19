@@ -6,6 +6,12 @@ import {
   type ReactNode,
 } from "react";
 import { useTranslation } from "react-i18next";
+import {
+  IconChevronLeft,
+  IconChevronRight,
+  IconDeviceDesktop,
+  IconInfoCircle,
+} from "@tabler/icons-react";
 
 import { Button } from "../components/Button";
 import { Card, CardBody, CardHeader } from "../components/Card";
@@ -580,7 +586,7 @@ function PickerTile({
         </div>
       </div>
       <div className="shrink-0 self-center text-ink-faint transition-transform group-hover:translate-x-0.5 group-hover:text-ink-subtle">
-        <Chevron />
+        <IconChevronRight size={16} stroke={1.5} />
       </div>
     </button>
   );
@@ -591,7 +597,7 @@ function OllamaNote({ available }: { available: boolean }) {
   return (
     <div className="flex items-start gap-3 rounded-lg border border-border-subtle bg-bg-subtle p-3.5 text-[12px] text-ink-subtle">
       <div className="mt-0.5 grid h-7 w-7 shrink-0 place-content-center rounded-md bg-slate-400/10 text-slate-300">
-        <LocalIcon />
+        <IconDeviceDesktop size={14} stroke={1.5} />
       </div>
       <div className="leading-relaxed">
         <span className="font-medium text-ink-dim">
@@ -636,7 +642,7 @@ function AppleIntelligenceNote({
   return (
     <div className="flex items-start gap-3 rounded-lg border border-border-subtle bg-bg-subtle p-3.5 text-[12px] text-ink-subtle">
       <div className="mt-0.5 grid h-7 w-7 shrink-0 place-content-center rounded-md bg-sky-400/10 text-sky-300">
-        <LocalIcon />
+        <IconDeviceDesktop size={14} stroke={1.5} />
       </div>
       <div className="min-w-0 flex-1 leading-relaxed">
         <span className="font-medium text-ink-dim">
@@ -808,7 +814,7 @@ function ConnectFlowView({
             "disabled:cursor-not-allowed disabled:opacity-50",
           )}
         >
-          <BackIcon />
+          <IconChevronLeft size={16} stroke={1.5} />
         </button>
         <Monogram meta={meta} size={36} />
         <div className="min-w-0 flex-1">
@@ -929,7 +935,7 @@ function AnthropicOAuthFlow({
     >
       <div className="flex items-start gap-2 border border-border bg-surface p-3 text-[12px] leading-relaxed text-ink-dim">
         <span className="mt-0.5 text-ink-subtle">
-          <InfoIcon />
+          <IconInfoCircle size={16} stroke={1.5} />
         </span>
         <span>
           {pasteInstructions ?? t("settings.oauth_anthropic_fallback")}
@@ -1171,72 +1177,3 @@ function Radio({ selected }: { selected: boolean }) {
   );
 }
 
-function Chevron(): ReactNode {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-      <path
-        d="m9 6 6 6-6 6"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function BackIcon(): ReactNode {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-      <path
-        d="m15 6-6 6 6 6"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function InfoIcon(): ReactNode {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-      <circle
-        cx="12"
-        cy="12"
-        r="9"
-        stroke="currentColor"
-        strokeWidth="1.4"
-      />
-      <path
-        d="M12 11v5m0-8h.01"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
-function LocalIcon(): ReactNode {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5">
-      <rect
-        x="3.5"
-        y="5"
-        width="17"
-        height="11"
-        rx="1.5"
-        stroke="currentColor"
-        strokeWidth="1.4"
-      />
-      <path
-        d="M8 20h8M12 16v4"
-        stroke="currentColor"
-        strokeWidth="1.4"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}

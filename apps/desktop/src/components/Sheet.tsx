@@ -5,6 +5,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
+import { IconX } from "@tabler/icons-react";
 
 import { cn } from "../lib/cn";
 
@@ -155,14 +156,7 @@ export function Sheet({
               "focus:outline-none focus-visible:ring-conclave",
             )}
           >
-            <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-              <path
-                d="m6 6 12 12M18 6 6 18"
-                stroke="currentColor"
-                strokeWidth="1.6"
-                strokeLinecap="round"
-              />
-            </svg>
+            <IconX size={16} stroke={1.6} />
           </button>
         </header>
 
