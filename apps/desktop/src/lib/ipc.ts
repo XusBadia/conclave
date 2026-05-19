@@ -182,10 +182,34 @@ export type DeliberationPhase =
   | "finalize";
 
 export type DeliberationEvent =
-  | { kind: "phase_started"; phase: DeliberationPhase }
-  | { kind: "phase_completed"; phase: DeliberationPhase; output: string }
-  | { kind: "phase_failed"; phase: DeliberationPhase; error: string }
-  | { kind: "done"; verdict_json: string };
+  | {
+      kind: "phase_started";
+      phase: DeliberationPhase;
+      case_id: string;
+      batch_index: number | null;
+    }
+  | {
+      kind: "phase_completed";
+      phase: DeliberationPhase;
+      output: string;
+      elapsed_ms: number;
+      case_id: string;
+      batch_index: number | null;
+    }
+  | {
+      kind: "phase_failed";
+      phase: DeliberationPhase;
+      error: string;
+      elapsed_ms: number;
+      case_id: string;
+      batch_index: number | null;
+    }
+  | {
+      kind: "done";
+      verdict_json: string;
+      case_id: string;
+      batch_index: number | null;
+    };
 
 export interface DeliberationTrace {
   id: string;
@@ -401,6 +425,16 @@ export const ipc = {
     text?: string;
     question?: string;
   }) => invoke<CaseRunResponse>("run_draft_case", { request: req }),
+
+  // Per-case cancel / retry
+  /** Signal the backend to short-circuit an in-flight case run at the
+   *  next phase boundary. Safe to call for unknown ids (no-op). */
+  cancelCase: (caseId: string) =>
+    invoke<void>("cancel_case", { caseId }),
+  /** Reset a Failed case back to Draft so it can be retried without
+   *  re-uploading its attachments. Returns the updated CaseRecord. */
+  resetCaseToDraft: (workspaceId: string, caseId: string) =>
+    invoke<CaseRecord>("reset_case_to_draft", { workspaceId, caseId }),
 };
 
 // ---------------------------------------------------------------------------

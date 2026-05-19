@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TFunction } from "i18next";
 import { Trans, useTranslation } from "react-i18next";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -6,7 +6,14 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { IconLock, IconTrash } from "@tabler/icons-react";
+import {
+  IconCheck,
+  IconCopy,
+  IconLock,
+  IconRefresh,
+  IconTrash,
+  IconX,
+} from "@tabler/icons-react";
 
 import { Button } from "../components/Button";
 import { Card, CardBody, CardHeader } from "../components/Card";
@@ -315,6 +322,36 @@ function localInputToIso(local: string): string {
   return new Date(local).toISOString();
 }
 
+/** Format an elapsed millisecond duration as `0:42` / `12:07` for
+ *  short runs, and `1h 03m` once we cross the hour boundary. Tuned for
+ *  the batch banner / per-row chip — they want compactness over
+ *  precision. */
+function formatElapsed(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "0:00";
+  const totalSec = Math.floor(ms / 1000);
+  if (totalSec < 3600) {
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    return `${m}:${String(s).padStart(2, "0")}`;
+  }
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  return `${h}h ${String(m).padStart(2, "0")}m`;
+}
+
+/** Per-case live status driven by `deliberation:progress` events. The
+ *  cases list rolls this up into a chip on the row + (optionally) a
+ *  detailed entry in the batch banner. Quick-mode runs never set this
+ *  — they just toggle the `running` overlay. */
+type LiveCasePhase = {
+  phase: DeliberationPhase;
+  /** ms-since-page-load when this phase started; used to render the
+   *  ticking elapsed chip without a per-second re-render of the whole
+   *  list (the LiveTicker child reads it via state). */
+  startedAtMs: number;
+  status: "active" | "done" | "failed";
+};
+
 export function CasesPage({
   workspace,
   onGoToSettings,
@@ -370,6 +407,29 @@ export function CasesPage({
    */
   const [batchTotal, setBatchTotal] = useState<number | null>(null);
   const [batchDone, setBatchDone] = useState(0);
+  /** Wall-clock ms when the current batch began — used to render an
+   *  elapsed chip in the banner. Set by the first CaseQueued/CaseStarted
+   *  event, cleared on BatchDone. */
+  const [batchStartedAtMs, setBatchStartedAtMs] = useState<number | null>(null);
+  /** ms it took the first batch case to finish. We use this single
+   *  sample as a (rough but useful) per-case duration estimate, then
+   *  project an ETA = avg × remaining cases. */
+  const [batchFirstCaseMs, setBatchFirstCaseMs] = useState<number | null>(null);
+  /** Per-case phase tracker driven by `deliberation:progress`. The
+   *  backend stamps every event with the case id so we can render the
+   *  current phase next to each running row in real time. */
+  const [casePhases, setCasePhases] = useState<Map<string, LiveCasePhase>>(
+    () => new Map(),
+  );
+  /** Per-case "retry / cancel" busy flags so we don't double-fire the
+   *  same IPC. Keyed by case id; cleared once the IPC resolves. */
+  const [rowBusy, setRowBusy] = useState<Map<string, "retry" | "cancel">>(
+    () => new Map(),
+  );
+  /** Lightweight tick counter so the per-row elapsed chip refreshes
+   *  every second WITHOUT re-running the full list memo. Components
+   *  that don't need it ignore the value. */
+  const [tickMs, setTickMs] = useState(() => Date.now());
 
   // Sorting / grouping / selection. All client-side over the 50 rows that
   // listCases returns; the backend already sorts by case_date DESC so a
@@ -394,6 +454,32 @@ export function CasesPage({
     try {
       const list = await ipc.listCases(workspace.id, 50);
       setCases(list);
+      // Clear `rowBusy` for any case that has settled to a terminal
+      // status — keeps the "Cancelling…" / "Retrying…" chips honest
+      // even when the batch event for that specific id never reaches
+      // us (case_failed/case_cancelled don't carry case_id today).
+      setRowBusy((prev) => {
+        if (prev.size === 0) return prev;
+        let changed = false;
+        const next = new Map(prev);
+        for (const c of list) {
+          if (
+            (c.status === "completed" ||
+              c.status === "failed" ||
+              c.status === "draft") &&
+            next.has(c.id)
+          ) {
+            // If the case is back to Draft, the retry is being
+            // dispatched — keep the "Retrying…" chip until a deliberation
+            // event flips the row to running, OR a follow-up refresh
+            // moves it to completed/failed.
+            if (c.status === "draft" && next.get(c.id) === "retry") continue;
+            next.delete(c.id);
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
       // Best-effort: re-run Apple Intelligence for cases whose label is
       // still the filename-stem fallback. The first attempt may have
       // failed (timeout, model not ready) or never run (CLI-imported
@@ -425,7 +511,19 @@ export function CasesPage({
     setRunningCaseIds(new Set());
     setBatchTotal(null);
     setBatchDone(0);
+    setBatchStartedAtMs(null);
+    setBatchFirstCaseMs(null);
+    setCasePhases(new Map());
+    setRowBusy(new Map());
   }, [workspace.id]);
+
+  // Tick every second while a batch is running so the elapsed chips
+  // update. Stops when nothing is in flight to keep React idle.
+  useEffect(() => {
+    if (batchStartedAtMs === null && casePhases.size === 0) return;
+    const id = window.setInterval(() => setTickMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [batchStartedAtMs, casePhases.size]);
 
   // Page-level Tauri drag-drop listener. Bound once for the whole Cases
   // route so a clinician can drop PDFs / images anywhere on the cases
@@ -510,6 +608,7 @@ export function CasesPage({
     let cancelled = false;
     let unlistenDrafted: UnlistenFn | undefined;
     let unlistenBatch: UnlistenFn | undefined;
+    let unlistenDelib: UnlistenFn | undefined;
     (async () => {
       unlistenDrafted = await listen<CaseDraftedEvent>(
         "case:drafted",
@@ -525,6 +624,8 @@ export function CasesPage({
         const ev = msg.payload;
         if (ev.kind === "case_queued") {
           setBatchTotal((prev) => (prev === null ? 1 : prev + 1));
+          // Stamp the batch start the first time we see a queued event.
+          setBatchStartedAtMs((prev) => prev ?? Date.now());
         } else if (ev.kind === "case_started") {
           // We don't know the case_id from this event (the batch event
           // carries patient_label, not the id). Refresh so the row is
@@ -539,24 +640,109 @@ export function CasesPage({
             next.delete(ev.case_id);
             return next;
           });
-          setBatchDone((d) => d + 1);
+          setCasePhases((prev) => {
+            // Wipe phase state for this case — it's settled.
+            if (!prev.has(ev.case_id)) return prev;
+            const next = new Map(prev);
+            next.delete(ev.case_id);
+            return next;
+          });
+          setRowBusy((prev) => {
+            if (!prev.has(ev.case_id)) return prev;
+            const next = new Map(prev);
+            next.delete(ev.case_id);
+            return next;
+          });
+          setBatchDone((d) => {
+            const next = d + 1;
+            // Capture the FIRST completion's duration as the per-case
+            // estimate. Cheap heuristic: works whether the run is
+            // quick mode (≈ one LLM call) or deliberative (≈ 4 calls).
+            setBatchFirstCaseMs((prev) => {
+              if (prev !== null) return prev;
+              const startedAt = batchStartedAtMs;
+              if (startedAt === null) return prev;
+              return Date.now() - startedAt;
+            });
+            return next;
+          });
           void refresh();
         } else if (ev.kind === "case_failed") {
           setBatchDone((d) => d + 1);
+          // Drop phase tracking so the failed row doesn't display a
+          // stale "active" chip on top of the new error banner.
+          setCasePhases((prev) => {
+            if (prev.size === 0) return prev;
+            return new Map();
+          });
           void refresh();
         } else if (ev.kind === "case_cancelled") {
           setBatchDone((d) => d + 1);
+          setCasePhases((prev) => {
+            if (prev.size === 0) return prev;
+            return new Map();
+          });
         } else if (ev.kind === "batch_done") {
           setBatchTotal(null);
           setBatchDone(0);
+          setBatchStartedAtMs(null);
+          setBatchFirstCaseMs(null);
+          setCasePhases(new Map());
           void refresh();
         }
       });
+      // Page-level deliberation listener that tracks the CURRENT phase
+      // per case id so we can render a chip on each row. The
+      // DeliberationOverlay still listens to the same event for the
+      // single-case flow; both consumers stay in sync because the
+      // backend stamps every event with the case id.
+      unlistenDelib = await listen<DeliberationEvent>(
+        "deliberation:progress",
+        (msg) => {
+          if (cancelled) return;
+          const ev = msg.payload;
+          if (ev.kind === "done") {
+            setCasePhases((prev) => {
+              if (!prev.has(ev.case_id)) return prev;
+              const next = new Map(prev);
+              next.delete(ev.case_id);
+              return next;
+            });
+            return;
+          }
+          setCasePhases((prev) => {
+            const next = new Map(prev);
+            if (ev.kind === "phase_started") {
+              next.set(ev.case_id, {
+                phase: ev.phase,
+                startedAtMs: Date.now(),
+                status: "active",
+              });
+            } else if (ev.kind === "phase_completed") {
+              next.set(ev.case_id, {
+                phase: ev.phase,
+                startedAtMs:
+                  prev.get(ev.case_id)?.startedAtMs ?? Date.now(),
+                status: "done",
+              });
+            } else if (ev.kind === "phase_failed") {
+              next.set(ev.case_id, {
+                phase: ev.phase,
+                startedAtMs:
+                  prev.get(ev.case_id)?.startedAtMs ?? Date.now(),
+                status: "failed",
+              });
+            }
+            return next;
+          });
+        },
+      );
     })();
     return () => {
       cancelled = true;
       unlistenDrafted?.();
       unlistenBatch?.();
+      unlistenDelib?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace.id]);
@@ -650,6 +836,114 @@ export function CasesPage({
     return found?.case_date ?? new Date().toISOString();
   }, [selectedIds, cases]);
 
+  /** Optimistic open-case: flip the view immediately with `selected =
+   *  null` so ShowCase renders its skeleton, then load the detail in
+   *  the background and patch state when it arrives. Replaces the
+   *  blank 1–2 s pause we had on completed-case clicks. */
+  const openCaseOptimistic = useCallback(
+    async (record: CaseRecord) => {
+      // Drafts route to NewCase pre-filled; everything else to ShowCase.
+      if (record.status === "draft") {
+        setSelected(null);
+        const det = await ipc.showCase(workspace.id, record.id);
+        setSelected(det);
+        setView("new");
+        return;
+      }
+      setSelected(null);
+      setView("show");
+      try {
+        const det = await ipc.showCase(workspace.id, record.id);
+        setSelected(det);
+      } catch {
+        // showCase returned an error — go back to the list rather than
+        // leaving the user on an infinite-skeleton screen.
+        setView("list");
+      }
+    },
+    [workspace.id],
+  );
+
+  /** Cancel the in-flight LLM call for a single case row. Backend
+   *  flips the per-case AtomicBool; the deliberation pipeline checks
+   *  it between phases and bails out. */
+  const onCancelRow = useCallback(async (caseId: string) => {
+    setRowBusy((prev) => {
+      const next = new Map(prev);
+      next.set(caseId, "cancel");
+      return next;
+    });
+    try {
+      await ipc.cancelCase(caseId);
+    } catch {
+      // Swallow: the backend returns Ok even for unknown ids, so any
+      // hard error here is exotic. We let the batch listener clear
+      // the row once the case settles to Failed/Cancelled.
+    } finally {
+      // Don't clear `rowBusy` immediately — the row stays in
+      // "cancelling…" until the batch event lands. We clear it from
+      // the listener via `clearRowBusy` (see below) on the next
+      // refresh.
+    }
+  }, []);
+
+  /** Reset a failed row to draft and re-run via the current provider. */
+  const onRetryRow = useCallback(
+    async (caseId: string) => {
+      // Need a provider — pick the first usable / clinical-eligible.
+      const ps = await ipc.listProviders();
+      const eligible = usableProviders(ps).filter((p) =>
+        isClinicalEligible(p.id),
+      );
+      const pick = preferredProvider(eligible) ?? eligible[0]?.id;
+      if (!pick) {
+        setError(t("cases.no_provider_configured"));
+        return;
+      }
+      setRowBusy((prev) => {
+        const next = new Map(prev);
+        next.set(caseId, "retry");
+        return next;
+      });
+      try {
+        await ipc.resetCaseToDraft(workspace.id, caseId);
+        // Reuse runDraftCase — it re-runs the (now Draft) case with the
+        // existing text/attachments. Fire-and-forget; case_drafted +
+        // batch events will refresh the row.
+        void ipc
+          .runDraftCase({
+            workspace_id: workspace.id,
+            case_id: caseId,
+            provider_id: pick,
+          })
+          .catch((e) => {
+            setError(String(e));
+          })
+          .finally(() => {
+            setRowBusy((prev) => {
+              if (!prev.has(caseId)) return prev;
+              const next = new Map(prev);
+              next.delete(caseId);
+              return next;
+            });
+            void refresh();
+          });
+      } catch (e) {
+        setError(String(e));
+        setRowBusy((prev) => {
+          if (!prev.has(caseId)) return prev;
+          const next = new Map(prev);
+          next.delete(caseId);
+          return next;
+        });
+      }
+    },
+    // refresh is captured from the outer scope and never changes
+    // identity in a way the list cares about.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [workspace.id, t],
+  );
+
   const onConfirmDelete = async () => {
     if (!deletingIds || deletingIds.length === 0) return;
     setDeleteBusy(true);
@@ -716,7 +1010,9 @@ export function CasesPage({
     );
   }
 
-  if (view === "show" && selected) {
+  if (view === "show") {
+    // `selected` may be null during the optimistic open — ShowCase
+    // renders its own skeleton until the detail lands.
     return (
       <ShowCase
         workspace={workspace}
@@ -765,15 +1061,14 @@ export function CasesPage({
         </div>
       )}
       {batchTotal !== null && batchTotal > 0 && (
-        <div className="flex items-center gap-2 rounded-md border border-accent/40 bg-accent/5 px-3 py-2 text-[13px] text-accent">
-          <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
-          <span>
-            {t("cases.batch_progress_banner", {
-              done: batchDone,
-              total: batchTotal,
-            })}
-          </span>
-        </div>
+        <BatchProgressBanner
+          done={batchDone}
+          total={batchTotal}
+          startedAtMs={batchStartedAtMs}
+          firstCaseMs={batchFirstCaseMs}
+          tickMs={tickMs}
+          onCancelAll={() => void ipc.batchCancel()}
+        />
       )}
       <Card>
         <CardHeader
@@ -909,17 +1204,15 @@ export function CasesPage({
               }
               const c = row.data;
               const isSelected = selectedIds.has(c.id);
-              const openCase = async () => {
+              const phase = casePhases.get(c.id);
+              const isRunning = runningCaseIds.has(c.id) || phase !== undefined;
+              const rowAction = rowBusy.get(c.id);
+              const openCase = () => {
                 if (selectionMode) {
                   toggleSelected(c.id);
                   return;
                 }
-                const det = await ipc.showCase(workspace.id, c.id);
-                setSelected(det);
-                // Drafts have no verdict yet — open NewCase pre-filled
-                // so the clinician can add clinical context and run
-                // them. Completed/Failed go to ShowCase as before.
-                setView(det && det.case.status === "draft" ? "new" : "show");
+                void openCaseOptimistic(c);
               };
               return (
                 // `group` on the <li> drives the per-row hover-only
@@ -935,7 +1228,7 @@ export function CasesPage({
                     onKeyDown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
-                        void openCase();
+                        openCase();
                       }
                     }}
                     className={cn(
@@ -958,18 +1251,81 @@ export function CasesPage({
                         <div className="truncate text-[14px] font-medium text-ink">
                           {c.patient_label || c.question || t("cases.no_question")}
                         </div>
-                        <div className="mt-0.5 truncate text-[12px] text-ink-faint">
-                          {c.patient_label && c.question
-                            ? `${c.question} · `
-                            : null}
-                          {new Date(c.case_date).toLocaleString()}
+                        <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[12px] text-ink-faint">
+                          {c.patient_label && c.question ? (
+                            <span className="truncate">{c.question}</span>
+                          ) : null}
+                          {c.patient_label && c.question ? <span>·</span> : null}
+                          <span>{new Date(c.case_date).toLocaleString()}</span>
+                          {phase && (
+                            <PhaseRunningChip phase={phase} tickMs={tickMs} />
+                          )}
                         </div>
                       </div>
                       <StatusBadge
                         status={c.status}
-                        running={runningCaseIds.has(c.id)}
+                        running={isRunning}
                       />
-                      {!selectionMode && (
+                      {!selectionMode && c.status === "failed" && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void onRetryRow(c.id);
+                          }}
+                          disabled={rowAction === "retry"}
+                          aria-label={t("cases.row_retry_failed")}
+                          title={t("cases.row_retry_failed")}
+                          className={cn(
+                            "shrink-0 inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11.5px]",
+                            "text-accent transition hover:bg-accent/10",
+                            "focus:outline-none focus-visible:ring-conclave",
+                            rowAction === "retry" && "opacity-60",
+                          )}
+                        >
+                          <IconRefresh
+                            aria-hidden="true"
+                            size={14}
+                            stroke={1.6}
+                            className={rowAction === "retry" ? "animate-spin" : ""}
+                          />
+                          <span>
+                            {rowAction === "retry"
+                              ? t("cases.row_retry_busy")
+                              : t("cases.row_retry_failed")}
+                          </span>
+                        </button>
+                      )}
+                      {!selectionMode && isRunning && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void onCancelRow(c.id);
+                          }}
+                          disabled={rowAction === "cancel"}
+                          aria-label={t("cases.row_cancel_running")}
+                          title={t("cases.row_cancel_running")}
+                          className={cn(
+                            "shrink-0 inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11.5px]",
+                            "text-ink-subtle transition hover:bg-danger/10 hover:text-danger",
+                            "focus:outline-none focus-visible:ring-conclave",
+                            rowAction === "cancel" && "opacity-60",
+                          )}
+                        >
+                          <IconX
+                            aria-hidden="true"
+                            size={14}
+                            stroke={1.6}
+                          />
+                          <span>
+                            {rowAction === "cancel"
+                              ? t("cases.row_cancel_busy")
+                              : t("cases.row_cancel_running")}
+                          </span>
+                        </button>
+                      )}
+                      {!selectionMode && !isRunning && c.status !== "failed" && (
                         <button
                           type="button"
                           onClick={(e) => {
@@ -1274,6 +1630,10 @@ function NewCase({
    * `onDone` or an error).
    */
   const [deliberationActive, setDeliberationActive] = useState(false);
+  /** Set when a deliberative run resolves successfully. The overlay
+   *  stays visible until the user clicks Close (which navigates away
+   *  via `onDone(pendingDone)`). */
+  const [pendingDone, setPendingDone] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -1309,6 +1669,23 @@ function NewCase({
     setAttachments((prev) => dedupeAttachments(prev, incomingAttachments));
     onIncomingConsumed?.();
   }, [incomingAttachments, onIncomingConsumed]);
+
+  // Cmd/Ctrl+Enter inside NewCase triggers `run`. We mount the listener
+  // on `window` so the shortcut works regardless of which sub-field has
+  // focus — clinicians often hit it while still typing in the textarea.
+  // We use a ref to `run` so the latest closure (with up-to-date state)
+  // fires even though we don't re-bind the listener on every keystroke.
+  const runRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+        e.preventDefault();
+        runRef.current();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // When the user opens a draft from the list, fetch its persisted
   // attachments so we can render them read-only above the dropzone.
@@ -1415,7 +1792,11 @@ function NewCase({
           provider_id: providerId,
           attached_file_paths: attachments.map((a) => a.path),
         });
-        onDone(resp.case.id);
+        // For deliberative runs we keep the overlay alive so the user
+        // can review per-phase output / explicitly Close. `onDone`
+        // navigates away — call it from the overlay's dismiss button
+        // instead. Stash the case id and let the user pick.
+        setPendingDone(resp.case.id);
       } else {
         const resp = await ipc.runCase({
           workspace_id: workspace.id,
@@ -1428,11 +1809,25 @@ function NewCase({
       }
     } catch (e) {
       setError(String(e));
+      // Failed deliberative runs: collapse the overlay since there's
+      // no successful verdict to stage.
+      if (deliberative && !draft) setDeliberationActive(false);
     } finally {
       setBusy(false);
-      setDeliberationActive(false);
+      // For quick mode the overlay was never opened, so this is a no-op
+      // there. For deliberative mode the overlay sticks until the user
+      // explicitly dismisses it via the footer.
+      if (!deliberative || draft) setDeliberationActive(false);
     }
   };
+
+  // Keep runRef pointing at the latest `run` so the Cmd+Enter listener
+  // dispatches with up-to-date state.
+  useEffect(() => {
+    runRef.current = () => {
+      void run();
+    };
+  });
 
   return (
     <div className="mx-auto w-full max-w-6xl space-y-4 p-6">
@@ -1604,7 +1999,20 @@ function NewCase({
         </CardBody>
       </Card>
       </div>
-      {deliberationActive && <DeliberationOverlay />}
+      {deliberationActive && (
+        <DeliberationOverlay
+          onDismiss={() => {
+            setDeliberationActive(false);
+            // If the run resolved successfully while the user was
+            // reviewing the trace, navigate to the verdict on close.
+            if (pendingDone) {
+              const id = pendingDone;
+              setPendingDone(null);
+              onDone(id);
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -1726,7 +2134,10 @@ function ShowCase({
   onBack,
 }: {
   workspace: Workspace;
-  detail: CaseDetail;
+  /** `null` during the optimistic transition while showCase is still
+   *  fetching — we render a skeleton placeholder so the user sees an
+   *  immediate response instead of a blank page. */
+  detail: CaseDetail | null;
   onBack: () => void;
 }) {
   const { t } = useTranslation();
@@ -1734,6 +2145,7 @@ function ShowCase({
   const [error, setError] = useState<string | null>(null);
 
   const feedback = async (kind: "accept" | "modify" | "reject") => {
+    if (!detail) return;
     setBusy(true);
     setError(null);
     try {
@@ -1749,6 +2161,10 @@ function ShowCase({
       setBusy(false);
     }
   };
+
+  if (!detail) {
+    return <ShowCaseSkeleton onBack={onBack} />;
+  }
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-5 p-6">
@@ -2053,16 +2469,26 @@ function VerdictRenderer({ verdict }: { verdict: Verdict }) {
         ? "text-accent"
         : "text-warn";
 
+  const primaryRecText = `${verdict.primary_recommendation.action}\n\n${verdict.primary_recommendation.rationale}`;
+
   return (
     <div className="space-y-6">
       <section>
-        <SectionTitle>{t("cases.verdict.case_summary")}</SectionTitle>
+        <SectionRow
+          title={t("cases.verdict.case_summary")}
+          copyText={verdict.case_summary}
+        />
         <p>{verdict.case_summary}</p>
       </section>
 
       {verdict.key_clinical_data.length > 0 && (
         <section>
-          <SectionTitle>{t("cases.verdict.key_clinical_data")}</SectionTitle>
+          <SectionRow
+            title={t("cases.verdict.key_clinical_data")}
+            copyText={verdict.key_clinical_data
+              .map((kv) => `${kv.label}: ${kv.value}`)
+              .join("\n")}
+          />
           <ul className="grid grid-cols-1 gap-2 md:grid-cols-2">
             {verdict.key_clinical_data.map((kv, i) => (
               <li
@@ -2080,7 +2506,10 @@ function VerdictRenderer({ verdict }: { verdict: Verdict }) {
       )}
 
       <section>
-        <SectionTitle>{t("cases.verdict.primary_recommendation")}</SectionTitle>
+        <SectionRow
+          title={t("cases.verdict.primary_recommendation")}
+          copyText={primaryRecText}
+        />
         <div className="border border-border-strong bg-surface px-4 py-3">
           <div className="text-[14px] font-semibold text-ink">
             {verdict.primary_recommendation.action}
@@ -2093,7 +2522,12 @@ function VerdictRenderer({ verdict }: { verdict: Verdict }) {
 
       {verdict.alternatives.length > 0 && (
         <section>
-          <SectionTitle>{t("cases.verdict.alternatives")}</SectionTitle>
+          <SectionRow
+            title={t("cases.verdict.alternatives")}
+            copyText={verdict.alternatives
+              .map((a) => `• ${a.action} — ${a.when_to_consider}`)
+              .join("\n")}
+          />
           <ul className="space-y-2">
             {verdict.alternatives.map((alt, i) => (
               <li
@@ -2113,7 +2547,10 @@ function VerdictRenderer({ verdict }: { verdict: Verdict }) {
       )}
 
       <section>
-        <SectionTitle>{t("cases.verdict.certainty")}</SectionTitle>
+        <SectionRow
+          title={t("cases.verdict.certainty")}
+          copyText={`${verdict.certainty_level.toUpperCase()} — ${verdict.certainty_justification}`}
+        />
         <div className={`text-[14px] font-semibold ${certaintyColor}`}>
           {verdict.certainty_level.toUpperCase()}
         </div>
@@ -2122,7 +2559,10 @@ function VerdictRenderer({ verdict }: { verdict: Verdict }) {
 
       {verdict.red_flags.length > 0 && (
         <section>
-          <SectionTitle>{t("cases.verdict.red_flags")}</SectionTitle>
+          <SectionRow
+            title={t("cases.verdict.red_flags")}
+            copyText={verdict.red_flags.map((rf) => `• ${rf}`).join("\n")}
+          />
           <ul className="space-y-1.5">
             {verdict.red_flags.map((rf, i) => (
               <li
@@ -2138,7 +2578,12 @@ function VerdictRenderer({ verdict }: { verdict: Verdict }) {
 
       {verdict.follow_up_triggers.length > 0 && (
         <section>
-          <SectionTitle>{t("cases.verdict.follow_up_triggers")}</SectionTitle>
+          <SectionRow
+            title={t("cases.verdict.follow_up_triggers")}
+            copyText={verdict.follow_up_triggers
+              .map((tr) => `• ${tr}`)
+              .join("\n")}
+          />
           <ul className="list-inside list-disc space-y-1 text-[13px] text-ink-dim">
             {verdict.follow_up_triggers.map((tr, i) => (
               <li key={i}>{tr}</li>
@@ -2149,7 +2594,12 @@ function VerdictRenderer({ verdict }: { verdict: Verdict }) {
 
       {verdict.applied_evidence.length > 0 && (
         <section>
-          <SectionTitle>{t("cases.verdict.applied_evidence")}</SectionTitle>
+          <SectionRow
+            title={t("cases.verdict.applied_evidence")}
+            copyText={verdict.applied_evidence
+              .map((ev) => `[${ev.ref}] ${ev.claim}`)
+              .join("\n")}
+          />
           <ul className="space-y-1.5">
             {verdict.applied_evidence.map((ev, i) => (
               <li
@@ -2181,6 +2631,18 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
     <h4 className="mb-1.5 text-[11px] uppercase tracking-[0.08em] text-ink-faint">
       {children}
     </h4>
+  );
+}
+
+/** Section title + a compact copy-to-clipboard affordance. Clinicians
+ *  routinely paste recommendations into EHR notes, so every major
+ *  verdict block gets one. */
+function SectionRow({ title, copyText }: { title: string; copyText: string }) {
+  return (
+    <div className="mb-1.5 flex items-center justify-between gap-2">
+      <SectionTitle>{title}</SectionTitle>
+      <CopyButton text={copyText} />
+    </div>
   );
 }
 
@@ -2480,6 +2942,21 @@ function ClassifyDropDialog({
       });
     onCommitted();
   };
+
+  // Esc closes the dialog (unless we're mid-IPC, in which case the
+  // user-visible "Cancel" footer button covers it). Mounted at the
+  // window level so the keystroke catches even when the focus is
+  // inside one of the patient cards' inputs.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !busy) {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, onClose]);
 
   // Reason text for the run button's disabled state. Surfaced in a
   // `title` attribute so hovering tells the user exactly why nothing
@@ -2988,6 +3465,9 @@ type PhaseState = {
   status: "pending" | "active" | "done" | "failed";
   output?: string;
   error?: string;
+  /** Wall-clock duration of this phase as reported by the backend.
+   *  Present only on `done` / `failed` — pending/active rows omit it. */
+  elapsedMs?: number;
 };
 
 function phaseIcon(phase: DeliberationPhase): string {
@@ -3007,10 +3487,20 @@ function phaseIcon(phase: DeliberationPhase): string {
  * In-flight overlay shown while a deliberative case is running. Listens
  * to the backend's `deliberation:progress` events and renders four
  * "committee seats" that pulse / fill in / mark ✓ as the LLM works
- * through each phase. Disappears when the parent flips
- * `deliberationActive` back to `false`.
+ * through each phase. Stays visible after the run finishes so the user
+ * can review per-phase output and explicitly Close or jump to the
+ * verdict — disappears only when the parent flips `deliberationActive`
+ * back to `false`.
  */
-function DeliberationOverlay() {
+function DeliberationOverlay({
+  onDismiss,
+}: {
+  /** Called when the user clicks Close or presses Esc on the overlay
+   *  AFTER the deliberation has finished. While the run is still in
+   *  flight the overlay swallows Esc to avoid dropping a half-formed
+   *  4-phase committee mid-call. */
+  onDismiss?: () => void;
+}) {
   const { t } = useTranslation();
   const [phases, setPhases] = useState<Record<DeliberationPhase, PhaseState>>(
     () => ({
@@ -3021,6 +3511,9 @@ function DeliberationOverlay() {
     }),
   );
   const [expanded, setExpanded] = useState<DeliberationPhase | null>(null);
+  /** Flipped on `done` so the overlay shifts from "running" copy to the
+   *  "deliberation complete — view verdict / close" CTA pair. */
+  const [done, setDone] = useState(false);
 
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
@@ -3031,15 +3524,27 @@ function DeliberationOverlay() {
         (msg) => {
           if (cancelled) return;
           const ev = msg.payload;
+          if (ev.kind === "done") {
+            setDone(true);
+            return;
+          }
           setPhases((prev) => {
             const next = { ...prev };
             if (ev.kind === "phase_started") {
               next[ev.phase] = { status: "active" };
               setExpanded(ev.phase);
             } else if (ev.kind === "phase_completed") {
-              next[ev.phase] = { status: "done", output: ev.output };
+              next[ev.phase] = {
+                status: "done",
+                output: ev.output,
+                elapsedMs: ev.elapsed_ms,
+              };
             } else if (ev.kind === "phase_failed") {
-              next[ev.phase] = { status: "failed", error: ev.error };
+              next[ev.phase] = {
+                status: "failed",
+                error: ev.error,
+                elapsedMs: ev.elapsed_ms,
+              };
             }
             return next;
           });
@@ -3052,6 +3557,20 @@ function DeliberationOverlay() {
     };
   }, []);
 
+  // Esc closes the overlay ONLY after the deliberation is done — we
+  // don't want a stray keypress to abandon a $0.30 / 4-phase run.
+  useEffect(() => {
+    if (!done) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onDismiss?.();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [done, onDismiss]);
+
   return (
     <div
       role="dialog"
@@ -3062,10 +3581,14 @@ function DeliberationOverlay() {
       <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-border bg-bg-elevated shadow-soft">
         <header className="border-b border-border-subtle px-5 py-4">
           <h2 className="text-[15px] font-semibold text-ink">
-            {t("cases.deliberation_overlay_title")}
+            {done
+              ? t("cases.deliberation_overlay_done_title")
+              : t("cases.deliberation_overlay_title")}
           </h2>
           <p className="mt-0.5 text-[12.5px] text-ink-subtle">
-            {t("cases.deliberation_overlay_subtitle")}
+            {done
+              ? t("cases.deliberation_overlay_done_subtitle")
+              : t("cases.deliberation_overlay_subtitle")}
           </p>
         </header>
         <div className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
@@ -3082,6 +3605,13 @@ function DeliberationOverlay() {
             />
           ))}
         </div>
+        {done && onDismiss && (
+          <footer className="flex justify-end gap-2 border-t border-border-subtle px-5 py-3">
+            <Button size="sm" variant="ghost" onClick={onDismiss}>
+              {t("cases.deliberation_overlay_close")}
+            </Button>
+          </footer>
+        )}
       </div>
     </div>
   );
@@ -3118,14 +3648,24 @@ function DeliberationPhaseRow({
         );
       case "done":
         return (
-          <span className="rounded bg-ok/15 px-2 py-0.5 text-[10.5px] font-medium uppercase tracking-wide text-ok">
-            ✓ {t("cases.phase_status_done")}
+          <span className="flex items-center gap-1.5 rounded bg-ok/15 px-2 py-0.5 text-[10.5px] font-medium uppercase tracking-wide text-ok">
+            <span>✓ {t("cases.phase_status_done")}</span>
+            {state.elapsedMs !== undefined && (
+              <span className="font-mono text-[9.5px] text-ok/80">
+                {formatElapsed(state.elapsedMs)}
+              </span>
+            )}
           </span>
         );
       case "failed":
         return (
-          <span className="rounded bg-danger/15 px-2 py-0.5 text-[10.5px] font-medium uppercase tracking-wide text-danger">
-            ✗ {t("cases.phase_status_failed")}
+          <span className="flex items-center gap-1.5 rounded bg-danger/15 px-2 py-0.5 text-[10.5px] font-medium uppercase tracking-wide text-danger">
+            <span>✗ {t("cases.phase_status_failed")}</span>
+            {state.elapsedMs !== undefined && (
+              <span className="font-mono text-[9.5px] text-danger/80">
+                {formatElapsed(state.elapsedMs)}
+              </span>
+            )}
           </span>
         );
     }
@@ -3286,5 +3826,181 @@ function DeliberationTraceAccordion({
         </CardBody>
       )}
     </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Helpers — banner, per-row phase chip, copy button, skeleton.
+// ---------------------------------------------------------------------------
+
+/** Batch banner: shows live elapsed time + an ETA derived from the
+ *  first completed case. The user gets a sense of pace AND a "how long
+ *  is left" estimate without us touching the deliberation pipeline. */
+function BatchProgressBanner({
+  done,
+  total,
+  startedAtMs,
+  firstCaseMs,
+  tickMs,
+  onCancelAll,
+}: {
+  done: number;
+  total: number;
+  startedAtMs: number | null;
+  firstCaseMs: number | null;
+  /** Time tick from CasesPage — we ignore the value (it just forces
+   *  a re-render). Without it the elapsed chip would stay frozen until
+   *  another React update arrived. */
+  tickMs: number;
+  onCancelAll: () => void;
+}) {
+  void tickMs;
+  const { t } = useTranslation();
+  const elapsedMs = startedAtMs === null ? 0 : Math.max(0, Date.now() - startedAtMs);
+  // ETA heuristic: each remaining case takes ~ firstCaseMs. The first
+  // case usually has cold-cache penalties (provider auth, embedder
+  // warmup) so this overestimates a bit — fine, better than nothing.
+  const remaining = Math.max(0, total - done);
+  const etaMs = firstCaseMs !== null ? remaining * firstCaseMs : null;
+
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-md border border-accent/40 bg-accent/5 px-3 py-2 text-[13px] text-accent">
+      <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+      <span>{t("cases.batch_progress_banner", { done, total })}</span>
+      {startedAtMs !== null && (
+        <span className="rounded bg-accent/10 px-2 py-0.5 font-mono text-[11.5px]">
+          {t("cases.batch_progress_elapsed", { elapsed: formatElapsed(elapsedMs) })}
+        </span>
+      )}
+      {etaMs !== null && remaining > 0 && (
+        <span className="rounded bg-accent/10 px-2 py-0.5 font-mono text-[11.5px]">
+          {t("cases.batch_progress_eta", { eta: formatElapsed(etaMs) })}
+        </span>
+      )}
+      <button
+        type="button"
+        onClick={onCancelAll}
+        className="ml-auto rounded-md border border-accent/30 px-2 py-0.5 text-[11.5px] text-accent transition hover:bg-accent/10 focus:outline-none focus-visible:ring-conclave"
+      >
+        {t("cases.batch_cancel_all")}
+      </button>
+    </div>
+  );
+}
+
+/** Compact chip rendered next to a running case row: shows the current
+ *  phase name + ticking elapsed time. Quick-mode runs never produce
+ *  these — they just animate the regular `running…` status badge. */
+function PhaseRunningChip({
+  phase,
+  tickMs,
+}: {
+  phase: LiveCasePhase;
+  tickMs: number;
+}) {
+  void tickMs;
+  const { t } = useTranslation();
+  const label = t(`cases.phase_short.${phase.phase}`);
+  const elapsedMs =
+    phase.status === "active" ? Math.max(0, Date.now() - phase.startedAtMs) : 0;
+  const colour =
+    phase.status === "active"
+      ? "bg-accent/10 text-accent"
+      : phase.status === "failed"
+        ? "bg-danger/10 text-danger"
+        : "bg-ok/10 text-ok";
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[10.5px]",
+        colour,
+      )}
+      title={t("cases.row_running_phase", { phase: label })}
+    >
+      <span>{label}</span>
+      {phase.status === "active" && elapsedMs > 0 && (
+        <span>· {formatElapsed(elapsedMs)}</span>
+      )}
+    </span>
+  );
+}
+
+/** Small button that copies `text` to the clipboard and flashes a
+ *  brief "copied" confirmation. Reused across every verdict section. */
+function CopyButton({ text }: { text: string }) {
+  const { t } = useTranslation();
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<number | null>(null);
+  useEffect(() => {
+    return () => {
+      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    };
+  }, []);
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+        } catch {
+          // Some Tauri contexts disallow clipboard access; the user
+          // can still select and copy manually. Surface silently.
+          return;
+        }
+        setCopied(true);
+        if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+        timerRef.current = window.setTimeout(() => setCopied(false), 1500);
+      }}
+      title={t("cases.copy_field")}
+      aria-label={t("cases.copy_field")}
+      className={cn(
+        "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px]",
+        "text-ink-faint transition hover:bg-surface hover:text-ink",
+        "focus:outline-none focus-visible:ring-conclave",
+        copied && "text-ok",
+      )}
+    >
+      {copied ? (
+        <>
+          <IconCheck aria-hidden="true" size={12} stroke={1.8} />
+          <span>{t("cases.copied_toast")}</span>
+        </>
+      ) : (
+        <>
+          <IconCopy aria-hidden="true" size={12} stroke={1.6} />
+          <span>{t("cases.copy_field")}</span>
+        </>
+      )}
+    </button>
+  );
+}
+
+/** Skeleton placeholder for the case-detail view. Shown during the
+ *  brief optimistic gap between clicking a row and the `showCase` IPC
+ *  resolving — keeps the user oriented instead of a flash of blank. */
+function ShowCaseSkeleton({ onBack }: { onBack: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <div className="mx-auto w-full max-w-5xl space-y-5 p-6">
+      <div className="flex items-center justify-between">
+        <Button size="sm" variant="ghost" onClick={onBack}>
+          {t("cases.back")}
+        </Button>
+      </div>
+      <Card>
+        <CardHeader
+          title={t("cases.show_case_loading")}
+          subtitle={" "}
+        />
+        <CardBody className="space-y-4">
+          <div className="h-3 w-2/3 animate-pulse rounded bg-surface" />
+          <div className="h-3 w-1/2 animate-pulse rounded bg-surface" />
+          <div className="h-24 w-full animate-pulse rounded bg-surface" />
+          <div className="h-3 w-3/4 animate-pulse rounded bg-surface" />
+          <div className="h-3 w-1/3 animate-pulse rounded bg-surface" />
+          <div className="h-16 w-full animate-pulse rounded bg-surface" />
+        </CardBody>
+      </Card>
+    </div>
   );
 }

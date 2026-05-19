@@ -113,6 +113,8 @@ pub fn run() {
             commands::run_batch_cases,
             commands::regenerate_case_label,
             commands::batch_cancel,
+            commands::cancel_case,
+            commands::reset_case_to_draft,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Conclave");

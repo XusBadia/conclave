@@ -1058,7 +1058,7 @@ pub async fn run_case(
     state: State<'_, AppState>,
     request: CaseRunRequest,
 ) -> CommandResult<CaseRunResponse> {
-    run_case_impl(&app, &state, request).await
+    run_case_impl(&app, &state, request, None).await
 }
 
 /// Drafted case ready for the LLM. The row is already persisted in
@@ -1438,11 +1438,18 @@ fn mark_case_failed_best_effort(store: &Arc<Mutex<CaseStore>>, case_id: &str, er
 
 /// Free-function body of [`run_case`] so the batch runner can reuse it
 /// without going through the Tauri IPC layer.
+///
+/// `batch_index` is `Some(idx)` when called from `run_batch_cases`.
+/// Quick mode doesn't emit per-phase progress today so the parameter
+/// is mostly reserved for future symmetry with
+/// `run_case_deliberated_impl`.
 pub(crate) async fn run_case_impl(
     app: &tauri::AppHandle,
     state: &AppState,
     request: CaseRunRequest,
+    batch_index: Option<usize>,
 ) -> CommandResult<CaseRunResponse> {
+    let _ = batch_index; // reserved for future use; silence unused warning
     let workspace = workspace_manager(state)
         .load(&request.workspace_id)
         .map_err(|e| e.to_string())?;
@@ -1471,6 +1478,21 @@ pub(crate) async fn run_case_impl(
     let StagedDraft { case, attachments } =
         stage_draft(app, state, &workspace, &store, &request).await?;
 
+    // Register a per-case cancel flag so `cancel_case` can short-
+    // circuit the run. Quick mode is a single LLM call so the check
+    // happens before we go to the network rather than between phases.
+    let case_cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let mut cancels = state.case_cancels.lock().await;
+        cancels.insert(case.id.clone(), Arc::clone(&case_cancel));
+    }
+    if case_cancel.load(std::sync::atomic::Ordering::SeqCst) {
+        let msg = conclave_verdict::deliberation::CANCELLED_MESSAGE.to_owned();
+        mark_case_failed_best_effort(&store, &case.id, &msg);
+        state.case_cancels.lock().await.remove(&case.id);
+        return Err(msg);
+    }
+
     let embedder = Arc::clone(&state.embedder);
     let repo = get_repo(state, &workspace.id).await?;
     let pipeline = VerdictPipeline::new(
@@ -1490,7 +1512,9 @@ pub(crate) async fn run_case_impl(
 
     // `run_for_case` runs the pipeline against the already-persisted
     // draft and promotes it to `Completed` on success.
-    match pipeline.run_for_case(&case, &attachments, &options).await {
+    let result = pipeline.run_for_case(&case, &attachments, &options).await;
+    state.case_cancels.lock().await.remove(&case.id);
+    match result {
         Ok(run) => Ok(CaseRunResponse {
             case: run.case,
             verdict_record: run.verdict_record,
@@ -1809,31 +1833,30 @@ async fn load_image_attachment(att: &CaseAttachment) -> Option<ImageInput> {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DeliberationEventDto {
-    PhaseStarted { phase: String },
-    PhaseCompleted { phase: String, output: String },
-    PhaseFailed { phase: String, error: String },
-    Done { verdict_json: String },
-}
-
-impl DeliberationEventDto {
-    fn from_event(ev: &DeliberationEvent) -> Self {
-        match ev {
-            DeliberationEvent::PhaseStarted { phase } => Self::PhaseStarted {
-                phase: phase.as_str().to_owned(),
-            },
-            DeliberationEvent::PhaseCompleted { phase, output } => Self::PhaseCompleted {
-                phase: phase.as_str().to_owned(),
-                output: output.clone(),
-            },
-            DeliberationEvent::PhaseFailed { phase, error } => Self::PhaseFailed {
-                phase: phase.as_str().to_owned(),
-                error: error.clone(),
-            },
-            DeliberationEvent::Done { verdict_json } => Self::Done {
-                verdict_json: verdict_json.clone(),
-            },
-        }
-    }
+    PhaseStarted {
+        phase: String,
+        case_id: String,
+        batch_index: Option<usize>,
+    },
+    PhaseCompleted {
+        phase: String,
+        output: String,
+        elapsed_ms: u64,
+        case_id: String,
+        batch_index: Option<usize>,
+    },
+    PhaseFailed {
+        phase: String,
+        error: String,
+        elapsed_ms: u64,
+        case_id: String,
+        batch_index: Option<usize>,
+    },
+    Done {
+        verdict_json: String,
+        case_id: String,
+        batch_index: Option<usize>,
+    },
 }
 
 #[tauri::command]
@@ -1842,14 +1865,20 @@ pub async fn run_case_deliberated(
     state: State<'_, AppState>,
     request: CaseRunRequest,
 ) -> CommandResult<CaseRunResponse> {
-    run_case_deliberated_impl(&app, &state, request).await
+    run_case_deliberated_impl(&app, &state, request, None).await
 }
 
 /// Free-function body of [`run_case_deliberated`] for batch reuse.
+///
+/// `batch_index` is `Some(idx)` when this call is part of a
+/// `run_batch_cases` run; the deliberation events are stamped with it
+/// so the UI can route per-phase progress to the correct row inside
+/// the batch table.
 pub(crate) async fn run_case_deliberated_impl(
     app: &tauri::AppHandle,
     state: &AppState,
     request: CaseRunRequest,
+    batch_index: Option<usize>,
 ) -> CommandResult<CaseRunResponse> {
     let workspace = workspace_manager(state)
         .load(&request.workspace_id)
@@ -1979,40 +2008,93 @@ pub(crate) async fn run_case_deliberated_impl(
     };
 
     // 5) Wire the streaming channel: spawn a task that forwards every
-    //    event to the frontend as a Tauri `deliberation:progress` event.
+    //    event to the frontend as a Tauri `deliberation:progress`
+    //    event. The forwarder stamps each event with the case id (so
+    //    the UI can route per-phase progress to the correct row in
+    //    batch mode) AND tracks phase start times so
+    //    PhaseCompleted/PhaseFailed carry the wall-clock `elapsed_ms`.
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<DeliberationEvent>();
     let app_for_forward = app.clone();
+    let case_id_for_forward = case.id.clone();
+    let batch_index_for_forward = batch_index;
     let forward_task = tokio::spawn(async move {
+        let mut phase_starts: std::collections::HashMap<String, std::time::Instant> =
+            std::collections::HashMap::new();
         while let Some(ev) = rx.recv().await {
-            let _ = app_for_forward.emit(
-                "deliberation:progress",
-                DeliberationEventDto::from_event(&ev),
-            );
+            let dto = match ev {
+                DeliberationEvent::PhaseStarted { phase } => {
+                    let p = phase.as_str().to_owned();
+                    phase_starts.insert(p.clone(), std::time::Instant::now());
+                    DeliberationEventDto::PhaseStarted {
+                        phase: p,
+                        case_id: case_id_for_forward.clone(),
+                        batch_index: batch_index_for_forward,
+                    }
+                }
+                DeliberationEvent::PhaseCompleted { phase, output } => {
+                    let p = phase.as_str().to_owned();
+                    let elapsed_ms = phase_starts
+                        .get(&p)
+                        .map_or(0, |t| t.elapsed().as_millis() as u64);
+                    DeliberationEventDto::PhaseCompleted {
+                        phase: p,
+                        output,
+                        elapsed_ms,
+                        case_id: case_id_for_forward.clone(),
+                        batch_index: batch_index_for_forward,
+                    }
+                }
+                DeliberationEvent::PhaseFailed { phase, error } => {
+                    let p = phase.as_str().to_owned();
+                    let elapsed_ms = phase_starts
+                        .get(&p)
+                        .map_or(0, |t| t.elapsed().as_millis() as u64);
+                    DeliberationEventDto::PhaseFailed {
+                        phase: p,
+                        error,
+                        elapsed_ms,
+                        case_id: case_id_for_forward.clone(),
+                        batch_index: batch_index_for_forward,
+                    }
+                }
+                DeliberationEvent::Done { verdict_json } => DeliberationEventDto::Done {
+                    verdict_json,
+                    case_id: case_id_for_forward.clone(),
+                    batch_index: batch_index_for_forward,
+                },
+            };
+            let _ = app_for_forward.emit("deliberation:progress", dto);
         }
     });
 
+    // Register a per-case cancel flag so the `cancel_case` command can
+    // stop this run at the next phase boundary. Removed in a
+    // best-effort cleanup block after the run resolves.
+    let case_cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let mut cancels = state.case_cancels.lock().await;
+        cancels.insert(case.id.clone(), Arc::clone(&case_cancel));
+    }
+    let mut delib_opts = DeliberationOptions::default();
+    delib_opts.cancel = Some(Arc::clone(&case_cancel));
+
     let deliberation_started = chrono::Utc::now();
     let deliberation_started_inst = std::time::Instant::now();
-    let outcome = match run_deliberation(
-        Arc::clone(&provider),
-        inputs,
-        allowed,
-        DeliberationOptions::default(),
-        tx,
-    )
-    .await
-    {
-        Ok(o) => o,
-        Err(e) => {
-            // Mark draft as failed so the UI stops showing "running…".
-            let msg = e.to_string();
-            mark_case_failed_best_effort(&store, &case.id, &msg);
-            let _ = forward_task.await;
-            return Err(msg);
-        }
-    };
+    let outcome =
+        match run_deliberation(Arc::clone(&provider), inputs, allowed, delib_opts, tx).await {
+            Ok(o) => o,
+            Err(e) => {
+                // Mark draft as failed so the UI stops showing "running…".
+                let msg = e.to_string();
+                mark_case_failed_best_effort(&store, &case.id, &msg);
+                let _ = forward_task.await;
+                state.case_cancels.lock().await.remove(&case.id);
+                return Err(msg);
+            }
+        };
     let elapsed_ms = deliberation_started_inst.elapsed().as_millis() as u64;
     let _ = forward_task.await;
+    state.case_cancels.lock().await.remove(&case.id);
 
     // The case row is already persisted as Draft. Build the verdict-side
     // records and promote to Completed in a single locked block below.
@@ -2272,9 +2354,9 @@ pub async fn run_batch_cases(
                     patient_label: case.patient_label.clone(),
                 };
                 let result = if deliberative {
-                    run_case_deliberated_impl(&app_in_task, state_ref, req).await
+                    run_case_deliberated_impl(&app_in_task, state_ref, req, Some(idx)).await
                 } else {
-                    run_case_impl(&app_in_task, state_ref, req).await
+                    run_case_impl(&app_in_task, state_ref, req, Some(idx)).await
                 };
                 match result {
                     Ok(resp) => {
@@ -2289,6 +2371,18 @@ pub async fn run_batch_cases(
                         BatchOutcome::Completed
                     }
                     Err(e) => {
+                        // Per-case cancel via `cancel_case`: surface as
+                        // Cancelled rather than a noisy Failed row.
+                        if e.contains(conclave_verdict::deliberation::CANCELLED_MESSAGE) {
+                            let _ = app_in_task.emit(
+                                "batch:progress",
+                                BatchEventDto::CaseCancelled {
+                                    index: idx,
+                                    patient_label: case.patient_label.clone(),
+                                },
+                            );
+                            return BatchOutcome::Cancelled;
+                        }
                         // Fail-fast: a transport-level failure (Ollama
                         // offline, DNS issue, cloud provider 5xx) will
                         // hit every case the same way. Flip the cancel
@@ -2344,6 +2438,47 @@ pub fn batch_cancel(state: State<'_, AppState>) -> CommandResult<()> {
         .batch_cancel
         .store(true, std::sync::atomic::Ordering::SeqCst);
     Ok(())
+}
+
+/// Cancel a single in-flight case. Looks up the per-case `AtomicBool`
+/// registered by `run_case_*_impl` and flips it to `true`. The
+/// deliberation pipeline checks the flag at every phase boundary and
+/// returns early with [`CANCELLED_MESSAGE`]; the batch worker then
+/// emits `BatchEventDto::CaseCancelled` for that index.
+///
+/// No-op (returns Ok) when the id isn't currently running — keeps the
+/// UI happy even if the user clicks cancel after the case completes.
+#[tauri::command]
+pub async fn cancel_case(state: State<'_, AppState>, case_id: String) -> CommandResult<()> {
+    let cancels = state.case_cancels.lock().await;
+    if let Some(flag) = cancels.get(&case_id) {
+        flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    Ok(())
+}
+
+/// Reset a previously-Failed case row back to Draft so the user can
+/// retry it without losing its attachments. Used by the inline Retry
+/// affordance on a failed row.
+#[tauri::command]
+pub fn reset_case_to_draft(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    case_id: String,
+) -> CommandResult<CaseRecord> {
+    let store = case_store_arc(&state, &workspace_id)?;
+    let store = store.lock().map_err(|_| "store poisoned")?;
+    store
+        .mark_case_status(&case_id, conclave_verdict::CaseStatus::Draft)
+        .map_err(|e| e.to_string())?;
+    store
+        .set_case_error(&case_id, None)
+        .map_err(|e| e.to_string())?;
+    let case = store
+        .get_case(&case_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("case `{case_id}` not found"))?;
+    Ok(case)
 }
 
 enum BatchOutcome {

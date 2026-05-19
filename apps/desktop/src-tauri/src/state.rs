@@ -35,6 +35,11 @@ pub struct AppState {
     /// case run after the case currently being processed. Cleared
     /// whenever a new batch begins.
     pub batch_cancel: Arc<AtomicBool>,
+    /// Per-case cancellation flags. The batch worker registers an
+    /// `AtomicBool` for every case it runs; `cancel_case(case_id)` flips
+    /// it so the deliberation (or quick) pipeline short-circuits at the
+    /// next phase boundary. Cleared after the case worker resolves.
+    pub case_cancels: tokio::sync::Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
 impl AppState {
@@ -54,6 +59,7 @@ impl AppState {
             repos: tokio::sync::Mutex::new(HashMap::new()),
             ingest_cancel: Arc::new(AtomicBool::new(false)),
             batch_cancel: Arc::new(AtomicBool::new(false)),
+            case_cancels: tokio::sync::Mutex::new(HashMap::new()),
         }
     }
 }

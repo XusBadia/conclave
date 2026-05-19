@@ -24,6 +24,7 @@
 //! one-shot).
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -132,6 +133,13 @@ pub struct DeliberationPastCase {
 pub struct DeliberationOptions {
     pub temperature: f32,
     pub include_images_in_vision: bool,
+    /// When set, the deliberation pipeline checks this flag at every
+    /// phase boundary. If it's `true`, the current phase short-circuits
+    /// with `Error::Provider("deliberation cancelled by user")` and the
+    /// caller persists the case as `Failed` (cancelled). Useful when
+    /// the UI offers a per-case cancel button while a long 4-phase run
+    /// is in flight.
+    pub cancel: Option<Arc<AtomicBool>>,
 }
 
 impl Default for DeliberationOptions {
@@ -139,8 +147,21 @@ impl Default for DeliberationOptions {
         Self {
             temperature: 0.2,
             include_images_in_vision: true,
+            cancel: None,
         }
     }
+}
+
+/// Sentinel emitted when [`DeliberationOptions::cancel`] fires between
+/// phases. Callers match this string to attribute the abort to user
+/// action rather than an LLM/transport error.
+pub const CANCELLED_MESSAGE: &str = "deliberation cancelled by user";
+
+fn cancelled(options: &DeliberationOptions) -> bool {
+    options
+        .cancel
+        .as_ref()
+        .is_some_and(|c| c.load(Ordering::SeqCst))
 }
 
 /// Full deliberation outcome. The caller wraps the `verdict` into the
@@ -173,6 +194,9 @@ pub async fn run_deliberation(
     let mut model: String;
 
     // ---------- Phase 1: Briefing (vision-aware) ----------
+    if cancelled(&options) {
+        return Err(Error::Provider(CANCELLED_MESSAGE.to_owned()));
+    }
     let briefing_prompt = render_briefing_prompt(&inputs);
     let _ = events.send(DeliberationEvent::PhaseStarted {
         phase: DeliberationPhase::Briefing,
@@ -206,6 +230,9 @@ pub async fn run_deliberation(
     });
 
     // ---------- Phase 2: Drafting (JSON) ----------
+    if cancelled(&options) {
+        return Err(Error::Provider(CANCELLED_MESSAGE.to_owned()));
+    }
     let drafting_prompt = render_drafting_prompt(&inputs, &briefing_text);
     let _ = events.send(DeliberationEvent::PhaseStarted {
         phase: DeliberationPhase::Drafting,
@@ -234,6 +261,9 @@ pub async fn run_deliberation(
     });
 
     // ---------- Phase 3: Red-team ----------
+    if cancelled(&options) {
+        return Err(Error::Provider(CANCELLED_MESSAGE.to_owned()));
+    }
     let redteam_prompt = render_redteam_prompt(&inputs, &briefing_text, &draft_text);
     let _ = events.send(DeliberationEvent::PhaseStarted {
         phase: DeliberationPhase::RedTeam,
@@ -264,6 +294,9 @@ pub async fn run_deliberation(
     });
 
     // ---------- Phase 4: Finalize ----------
+    if cancelled(&options) {
+        return Err(Error::Provider(CANCELLED_MESSAGE.to_owned()));
+    }
     let finalize_prompt =
         render_finalize_prompt(&inputs, &briefing_text, &draft_text, &redteam_text);
     let _ = events.send(DeliberationEvent::PhaseStarted {
