@@ -1074,7 +1074,7 @@ function MigrationDialog({
       role="dialog"
       aria-modal="true"
       aria-labelledby="migration-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-bg/85 backdrop-blur"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-bg/85 px-4 pb-4 pt-14 backdrop-blur"
     >
       <div className="animate-in mx-4 w-full max-w-md rounded-2xl border border-border bg-bg-elevated p-6 shadow-soft">
         <div className="mb-4">
