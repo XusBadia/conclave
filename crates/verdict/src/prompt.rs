@@ -115,6 +115,22 @@ impl PromptTemplate {
         } else {
             inputs.user_question
         };
+        // When the clinician attached files but typed no narrative, the
+        // prompt would otherwise render an empty CASE block. Some
+        // providers (notably the ChatGPT Codex endpoint) treat that as a
+        // malformed request. Surface an explicit placeholder so the LLM
+        // is told to rely on the attachments. We deliberately keep it
+        // bilingual-neutral; the model picks up the actual language from
+        // the `output_language` field.
+        let case_text = if inputs.de_identified_case_text.trim().is_empty() {
+            if inputs.case_attachments.is_empty() {
+                "(no clinical narrative provided)"
+            } else {
+                "(no clinical narrative provided — rely on the CASE ATTACHMENTS block above for patient information.)"
+            }
+        } else {
+            inputs.de_identified_case_text
+        };
 
         format!(
             "You are Conclave, a clinical decision support assistant operating as a \
@@ -165,7 +181,7 @@ taken verbatim:\n\n{disclaimer}\n",
             attachments = attachments,
             external = external,
             past_cases = past_cases,
-            case = inputs.de_identified_case_text,
+            case = case_text,
             question = question,
             disclaimer = inputs.disclaimer,
         )
@@ -309,6 +325,54 @@ mod tests {
         assert!(prompt.contains("[E1]"));
         assert!(prompt.contains("Furosemida IV"));
         assert!(prompt.contains("Manejo inicial?"));
+    }
+
+    #[test]
+    fn empty_case_text_with_attachments_renders_explicit_placeholder() {
+        let attachments = vec![CaseAttachmentInput {
+            index: 1,
+            filename: "labs.pdf",
+            doc_type: "pdf",
+            snippet: "Hb 9.4",
+            needs_ocr: false,
+        }];
+        let inputs = PromptInputs {
+            specialty: "colorrectal",
+            output_language: "es",
+            rules_block: "",
+            evidence_chunks: &[],
+            external_evidence: &[],
+            past_cases: &[],
+            case_attachments: &attachments,
+            de_identified_case_text: "   ",
+            user_question: "",
+            disclaimer: "x",
+        };
+        let prompt = PromptTemplate.render(&inputs);
+        assert!(
+            prompt.contains("rely on the CASE ATTACHMENTS block above"),
+            "expected attachment-only placeholder; got:\n{prompt}"
+        );
+        // Sanity: the attachment is still there.
+        assert!(prompt.contains("[A1] file: \"labs.pdf\""));
+    }
+
+    #[test]
+    fn empty_case_text_without_attachments_renders_minimal_placeholder() {
+        let inputs = PromptInputs {
+            specialty: "colorrectal",
+            output_language: "es",
+            rules_block: "",
+            evidence_chunks: &[],
+            external_evidence: &[],
+            past_cases: &[],
+            case_attachments: &[],
+            de_identified_case_text: "",
+            user_question: "",
+            disclaimer: "x",
+        };
+        let prompt = PromptTemplate.render(&inputs);
+        assert!(prompt.contains("(no clinical narrative provided)"));
     }
 
     #[test]

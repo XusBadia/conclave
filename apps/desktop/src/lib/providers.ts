@@ -125,6 +125,29 @@ export function isClinicalEligible(id: string): boolean {
   return (PROVIDER_META[id]?.scope ?? "general") !== "subtask";
 }
 
+// Pick the best default provider id from a candidate list. Callers
+// must filter for clinical-eligibility first when they need that.
+//
+// Preference order:
+//   1. `configured && available` — the user has actively connected this
+//      provider AND its backend is reachable right now. This is what
+//      makes a signed-in OpenAI OAuth account win over an offline
+//      Ollama instance.
+//   2. `available` — anything reachable (e.g. Ollama running without
+//      auth, the developer-mode local-only case).
+//   3. The first entry in the list — pure fallback so the form always
+//      has *some* selection; the user will hit a clean error from
+//      `ensure_provider_ready` when they try to run.
+export function preferredProvider(
+  providers: { id: string; configured?: boolean; available?: boolean }[],
+): string | null {
+  const ready = providers.find((p) => p.configured && p.available);
+  if (ready) return ready.id;
+  const avail = providers.find((p) => p.available);
+  if (avail) return avail.id;
+  return providers[0]?.id ?? null;
+}
+
 // Tailwind class fragments per brand. Inline (rather than computed) so the
 // JIT picks them up without a safelist.
 export const BRAND_TINT: Record<ProviderMeta["brand"], string> = {

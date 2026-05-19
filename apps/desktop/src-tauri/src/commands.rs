@@ -499,6 +499,7 @@ pub async fn ask_documents(
         state.paths.config_dir(),
     )?;
     ensure_general_scope(&provider)?;
+    ensure_provider_ready(&provider).await?;
     let embedder = Arc::clone(&state.embedder);
     let repo = get_repo(&state, &request.workspace_id).await?;
     let top_k = state
@@ -965,6 +966,49 @@ fn ensure_general_scope(provider: &Arc<dyn LlmProvider>) -> CommandResult<()> {
     Ok(())
 }
 
+/// Classify an error string returned from a per-case run. When `true`,
+/// the failure is structural (transport / unreachable provider) and
+/// will keep happening for every other case in the same batch, so the
+/// batch runner short-circuits remaining work to `Cancelled` instead
+/// of replaying the same timeout N times.
+///
+/// We match on substrings of the canonical Display messages from
+/// `ProviderError` plus the user-facing message from
+/// `ensure_provider_ready`. Substring matching is intentional — the
+/// errors flow through several `Display`/`format!` layers before
+/// landing here as a `String`, so the structured `enum` shape is gone.
+fn is_transport_failure(msg: &str) -> bool {
+    let lower = msg.to_ascii_lowercase();
+    lower.contains("network error:")
+        || lower.contains("is not responding")
+        || lower.contains("provider unavailable:")
+        || lower.contains("connection refused")
+}
+
+/// Pre-flight: verify a provider can actually serve a request before
+/// committing to a batch or staging drafts. Today only Ollama needs
+/// this — the on-device server may be down or unreachable. Cloud
+/// providers surface auth/network errors per-call with informative
+/// bodies, so a separate ping would only duplicate work for them.
+///
+/// Returns a single, actionable error string when the local server is
+/// unreachable, so the user sees one clear message instead of N
+/// identical connection-timeout failures across N cases.
+async fn ensure_provider_ready(provider: &Arc<dyn LlmProvider>) -> CommandResult<()> {
+    if provider.id() == "ollama" {
+        let probe = OllamaProvider::new();
+        let ok = tokio::time::timeout(std::time::Duration::from_secs(3), probe.ping())
+            .await
+            .unwrap_or(false);
+        if !ok {
+            return err("Ollama is not responding at http://localhost:11434. \
+                 Start the server with `ollama serve` or pick another \
+                 provider from the selector.");
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Verdict
 // ---------------------------------------------------------------------------
@@ -1000,6 +1044,12 @@ pub struct CaseRunRequest {
     /// available to the prompt as a `[A{n}]` evidence block.
     #[serde(default)]
     pub attached_file_paths: Vec<String>,
+    /// Optional human-friendly label for the case (e.g. "Juan Pérez" or
+    /// "CR-IA-011"). Persists on the case row and is used as the list
+    /// title so multi-case batches do not all look identical. Empty falls
+    /// back to the question or the case id at render time.
+    #[serde(default)]
+    pub patient_label: String,
 }
 
 #[tauri::command]
@@ -1019,12 +1069,245 @@ struct StagedDraft {
     attachments: Vec<CaseAttachment>,
 }
 
+/// Best-effort fallback when the frontend ships a case without an
+/// explicit `patient_label`: pick the first attachment's filename stem,
+/// or fall back to the first non-empty line of the clinical text trimmed
+/// to ~60 chars. Returns an empty string if nothing usable is found —
+/// the list renderer copes by falling back to the question or id.
+fn derive_patient_label_from_request(request: &CaseRunRequest) -> String {
+    if let Some(first) = request.attached_file_paths.first() {
+        if let Some(name) = std::path::Path::new(first)
+            .file_stem()
+            .and_then(|s| s.to_str())
+        {
+            let stem = name.trim();
+            if !stem.is_empty() {
+                return stem.to_owned();
+            }
+        }
+    }
+    if let Some(line) = request.text.lines().find(|l| !l.trim().is_empty()) {
+        let line = line.trim();
+        if line.len() <= 60 {
+            return line.to_owned();
+        }
+        return format!(
+            "{}…",
+            &line[..line.char_indices().nth(60).map_or(line.len(), |(i, _)| i)]
+        );
+    }
+    String::new()
+}
+
+/// Generate a short patient-summary title using Apple Intelligence
+/// (on-device, no network). Returns `None` when:
+/// - the on-device model isn't available (non-Apple Silicon, off, not
+///   downloaded, framework missing),
+/// - the call times out (8 s budget),
+/// - the model fails or returns something unusable.
+///
+/// On `None` the caller keeps whatever fallback label it already had
+/// (filename stem). This is a polish, not a correctness path — never let
+/// it block or fail the draft flow.
+async fn try_apple_intelligence_label(
+    masked_text: &str,
+    attachments: &[CaseAttachment],
+    language: &str,
+) -> Option<String> {
+    let provider = AppleIntelligenceProvider::new();
+    if !matches!(
+        provider.availability().await,
+        AppleIntelligenceAvailability::Available
+    ) {
+        return None;
+    }
+    let system = format!(
+        "You are a medical scribe assistant. Read the clinical material \
+         and return ONE short title line (max 12 words) summarising the \
+         patient, in {language}. Examples: \"Mujer 67, recto bajo T3N1 \
+         alto riesgo\", \"Hombre 48, CCR derecho dMMR\". Return only the \
+         title — no quotes, no prefix, no explanation."
+    );
+    let mut body = String::with_capacity(1024);
+    let masked = masked_text.trim();
+    if !masked.is_empty() {
+        body.push_str("CLINICAL NARRATIVE:\n");
+        body.push_str(&truncate_for_summary(masked, 800));
+        body.push_str("\n\n");
+    }
+    if !attachments.is_empty() {
+        body.push_str("ATTACHMENT EXCERPTS:\n");
+        for (i, a) in attachments.iter().take(4).enumerate() {
+            let snippet = a.extracted_text.trim();
+            if snippet.is_empty() {
+                continue;
+            }
+            body.push_str(&format!(
+                "[{}] {}: {}\n",
+                i + 1,
+                a.original_filename,
+                truncate_for_summary(snippet, 400)
+            ));
+        }
+    }
+    if body.trim().is_empty() {
+        return None;
+    }
+    let req = CompletionRequest {
+        model: String::new(),
+        messages: vec![Message::system(system), Message::user(body)],
+        max_output_tokens: Some(48),
+        temperature: Some(0.2),
+        json_schema: None,
+        allow_web_search: false,
+        images: Vec::new(),
+    };
+    let response =
+        match tokio::time::timeout(std::time::Duration::from_secs(8), provider.complete(req)).await
+        {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, "apple-intelligence label generation failed");
+                return None;
+            }
+            Err(_) => {
+                tracing::warn!("apple-intelligence label generation timed out");
+                return None;
+            }
+        };
+    let raw = response.text.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    // First non-empty line, stripped of common LLM decorations.
+    let line = raw.lines().find(|l| !l.trim().is_empty())?.trim();
+    let cleaned = line
+        .trim_start_matches(['"', '\'', '*', '-', '#', ' '])
+        .trim_end_matches(['"', '\'', '*', ' ', '.'])
+        .trim();
+    if cleaned.is_empty() {
+        return None;
+    }
+    // Cap at 80 chars to avoid the model running away into a paragraph.
+    let cap = cleaned
+        .char_indices()
+        .nth(80)
+        .map_or(cleaned.len(), |(i, _)| i);
+    Some(cleaned[..cap].to_owned())
+}
+
+fn truncate_for_summary(s: &str, max_chars: usize) -> String {
+    let count = s.chars().count();
+    if count <= max_chars {
+        return s.to_owned();
+    }
+    let cut = s.char_indices().nth(max_chars).map_or(s.len(), |(i, _)| i);
+    format!("{}…", &s[..cut])
+}
+
+/// Fire-and-forget background task: try to upgrade the draft's
+/// `patient_label` from the filename-stem fallback to a real
+/// Apple-Intelligence-generated summary. Silently does nothing on hosts
+/// where the on-device model isn't available — the existing label
+/// already covers that case. When it succeeds, the row is updated AND a
+/// `case:drafted` event is re-emitted so the existing frontend listener
+/// refreshes the list (no new event type required).
+fn spawn_label_upgrade(
+    app: tauri::AppHandle,
+    store: Arc<Mutex<CaseStore>>,
+    workspace_id: String,
+    case_id: String,
+    masked_text: String,
+    attachments: Vec<CaseAttachment>,
+    language: String,
+) {
+    tokio::spawn(async move {
+        let Some(label) = try_apple_intelligence_label(&masked_text, &attachments, &language).await
+        else {
+            return;
+        };
+        let updated = match store.lock() {
+            Ok(g) => g.set_case_patient_label(&case_id, &label).is_ok(),
+            Err(_) => false,
+        };
+        if !updated {
+            return;
+        }
+        let _ = app.emit(
+            "case:drafted",
+            CaseDraftedDto {
+                case_id,
+                workspace_id,
+            },
+        );
+    });
+}
+
 /// DTO emitted on `case:drafted` so the frontend can refresh the list
 /// the moment a case (or a batch of cases) becomes persistable.
 #[derive(Debug, Clone, Serialize)]
 pub struct CaseDraftedDto {
     pub case_id: String,
     pub workspace_id: String,
+}
+
+/// Re-run Apple Intelligence title generation on an existing case.
+///
+/// Used by the CasesPage list to retry titles that stayed at the
+/// filename-stem fallback because the first attempt timed out, failed,
+/// or never ran (CLI-created cases). Silently no-ops when Apple
+/// Intelligence isn't available or when no usable summary can be
+/// produced — the existing label is preserved either way.
+///
+/// Returns the new label on success (so the caller can patch its local
+/// state synchronously) and `None` when nothing was changed.
+#[tauri::command]
+pub async fn regenerate_case_label(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    workspace_id: String,
+    case_id: String,
+) -> CommandResult<Option<String>> {
+    let workspace = workspace_manager(&state)
+        .load(&workspace_id)
+        .map_err(|e| e.to_string())?;
+    let store = case_store_arc(&state, &workspace.id)?;
+    // Load the case + attachments in a single locked block so we
+    // release the mutex before the (slow) Apple Intelligence call.
+    let (masked_text, attachments) = {
+        let g = store.lock().map_err(|_| "store poisoned")?;
+        let case = g
+            .get_case(&case_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("case `{case_id}` not found"))?;
+        let atts = g
+            .list_attachments_for_case(&case_id)
+            .map_err(|e| e.to_string())?;
+        (case.masked_text, atts)
+    };
+    let language = workspace
+        .language
+        .clone()
+        .unwrap_or_else(|| "es".to_owned());
+    let Some(label) = try_apple_intelligence_label(&masked_text, &attachments, &language).await
+    else {
+        return Ok(None);
+    };
+    {
+        let g = store.lock().map_err(|_| "store poisoned")?;
+        g.set_case_patient_label(&case_id, &label)
+            .map_err(|e| e.to_string())?;
+    }
+    // Re-emit case:drafted so the page-level listener refreshes and
+    // picks up the new label without polling.
+    let _ = app.emit(
+        "case:drafted",
+        CaseDraftedDto {
+            case_id: case_id.clone(),
+            workspace_id: workspace.id,
+        },
+    );
+    Ok(Some(label))
 }
 
 /// Drafts-first staging shared by every case runner (quick, deliberative,
@@ -1078,6 +1361,11 @@ async fn stage_draft(
     };
 
     let now = chrono::Utc::now();
+    let patient_label = if request.patient_label.trim().is_empty() {
+        derive_patient_label_from_request(request)
+    } else {
+        request.patient_label.trim().to_owned()
+    };
     let case = CaseRecord {
         id: case_id,
         created_at: now,
@@ -1088,6 +1376,8 @@ async fn stage_draft(
         masked_text,
         deident_pipeline_id,
         status: conclave_verdict::CaseStatus::Draft,
+        patient_label,
+        latest_error: None,
     };
 
     {
@@ -1108,16 +1398,40 @@ async fn stage_draft(
         },
     );
 
+    // Best-effort: try to upgrade the filename-stem fallback label into
+    // a real patient summary using Apple Intelligence on capable hosts.
+    // Runs in the background — the draft is already persisted and the
+    // UI has already received it, so this is pure polish.
+    spawn_label_upgrade(
+        app.clone(),
+        Arc::clone(store),
+        workspace.id.clone(),
+        case.id.clone(),
+        case.masked_text.clone(),
+        attachments.clone(),
+        workspace
+            .language
+            .clone()
+            .unwrap_or_else(|| "es".to_owned()),
+    );
+
     Ok(StagedDraft { case, attachments })
 }
 
 /// Best-effort transition: when an LLM-side failure leaves a draft
 /// orphaned, flip its status to `Failed` so the list reflects reality
-/// instead of an eternally-loading row.
-fn mark_case_failed_best_effort(store: &Arc<Mutex<CaseStore>>, case_id: &str) {
+/// instead of an eternally-loading row. The error message is logged at
+/// ERROR level (so the dev server output surfaces what broke) AND
+/// persisted on the case row via `set_case_error` so the detail view
+/// can show it to the clinician.
+fn mark_case_failed_best_effort(store: &Arc<Mutex<CaseStore>>, case_id: &str, err: &str) {
+    tracing::error!(case_id, error = err, "case run failed — marking Failed");
     if let Ok(g) = store.lock() {
         if let Err(e) = g.mark_case_status(case_id, conclave_verdict::CaseStatus::Failed) {
             tracing::warn!(error = ?e, case_id, "could not mark draft as failed");
+        }
+        if let Err(e) = g.set_case_error(case_id, Some(err)) {
+            tracing::warn!(error = ?e, case_id, "could not persist case error");
         }
     }
 }
@@ -1132,16 +1446,17 @@ pub(crate) async fn run_case_impl(
     let workspace = workspace_manager(state)
         .load(&request.workspace_id)
         .map_err(|e| e.to_string())?;
-    let api_key = if matches!(
-        request.provider_id.as_str(),
-        "ollama" | "apple-intelligence"
-    ) {
-        String::new()
-    } else {
-        match secrets::load(&request.provider_id).map_err(|e| e.to_string())? {
-            Some(k) => k,
-            None => return err(format!("no API key for `{}`", request.provider_id)),
-        }
+    // OAuth providers store credentials in a JSON file on disk, NOT in
+    // the macOS keychain. Calling `secrets::load` on them returns None
+    // AND triggers a Security framework call that deadlocks when fired
+    // from N concurrent tokio tasks (the per-case workers in the batch
+    // runner). Skip the keychain for every provider that doesn't use
+    // it — mirrors the pattern at the Knowledge Q&A path above.
+    let api_key = match request.provider_id.as_str() {
+        "ollama" | "apple-intelligence" | "anthropic-oauth" | "openai-oauth" => String::new(),
+        other => secrets::load(other)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("no API key for `{other}`"))?,
     };
     let provider = build_provider(
         &request.provider_id,
@@ -1150,6 +1465,7 @@ pub(crate) async fn run_case_impl(
         state.paths.config_dir(),
     )?;
     ensure_general_scope(&provider)?;
+    ensure_provider_ready(&provider).await?;
 
     let store = case_store_arc(state, &workspace.id)?;
     let StagedDraft { case, attachments } =
@@ -1182,8 +1498,9 @@ pub(crate) async fn run_case_impl(
             attachments,
         }),
         Err(e) => {
-            mark_case_failed_best_effort(&store, &case.id);
-            Err(e.to_string())
+            let msg = e.to_string();
+            mark_case_failed_best_effort(&store, &case.id, &msg);
+            Err(msg)
         }
     }
 }
@@ -1228,6 +1545,7 @@ pub struct CreateDraftCasesRequest {
 
 #[tauri::command]
 pub async fn create_draft_cases(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     request: CreateDraftCasesRequest,
 ) -> CommandResult<Vec<CaseRecord>> {
@@ -1282,6 +1600,8 @@ pub async fn create_draft_cases(
             masked_text,
             deident_pipeline_id,
             status: conclave_verdict::CaseStatus::Draft,
+            patient_label: input.patient_label.trim().to_owned(),
+            latest_error: None,
         };
         staged.push(Staged {
             record,
@@ -1289,23 +1609,51 @@ pub async fn create_draft_cases(
         });
     }
 
-    let store_guard = store.lock().map_err(|_| "store poisoned")?;
+    let language = workspace
+        .language
+        .clone()
+        .unwrap_or_else(|| "es".to_owned());
+
     let mut out = Vec::with_capacity(staged.len());
-    for Staged {
-        record,
-        attachments,
-    } in staged
+    let mut to_upgrade: Vec<(String, String, Vec<CaseAttachment>)> = Vec::new();
     {
-        store_guard
-            .insert_case(&record)
-            .map_err(|e| e.to_string())?;
-        for att in &attachments {
-            if let Err(e) = store_guard.insert_attachment(att) {
-                tracing::warn!(error = ?e, "could not persist draft attachment row");
+        let store_guard = store.lock().map_err(|_| "store poisoned")?;
+        for Staged {
+            record,
+            attachments,
+        } in staged
+        {
+            store_guard
+                .insert_case(&record)
+                .map_err(|e| e.to_string())?;
+            for att in &attachments {
+                if let Err(e) = store_guard.insert_attachment(att) {
+                    tracing::warn!(error = ?e, "could not persist draft attachment row");
+                }
             }
+            to_upgrade.push((
+                record.id.clone(),
+                record.masked_text.clone(),
+                attachments.clone(),
+            ));
+            out.push(record);
         }
-        out.push(record);
     }
+
+    // Polish: try to upgrade each draft's filename-stem fallback into a
+    // patient summary using Apple Intelligence. Background, best-effort.
+    for (case_id, masked_text, attachments) in to_upgrade {
+        spawn_label_upgrade(
+            app.clone(),
+            Arc::clone(&store),
+            workspace.id.clone(),
+            case_id,
+            masked_text,
+            attachments,
+            language.clone(),
+        );
+    }
+
     Ok(out)
 }
 
@@ -1378,17 +1726,14 @@ pub async fn run_draft_case(
         .map_err(|e| e.to_string())?;
     }
 
-    // Provider + pipeline setup mirrors run_case_impl.
-    let api_key = if matches!(
-        request.provider_id.as_str(),
-        "ollama" | "apple-intelligence"
-    ) {
-        String::new()
-    } else {
-        match secrets::load(&request.provider_id).map_err(|e| e.to_string())? {
-            Some(k) => k,
-            None => return err(format!("no API key for `{}`", request.provider_id)),
-        }
+    // Provider + pipeline setup mirrors run_case_impl. OAuth providers
+    // use disk-stored tokens, not the macOS keychain — skip secrets::load
+    // for them.
+    let api_key = match request.provider_id.as_str() {
+        "ollama" | "apple-intelligence" | "anthropic-oauth" | "openai-oauth" => String::new(),
+        other => secrets::load(other)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("no API key for `{other}`"))?,
     };
     let provider = build_provider(
         &request.provider_id,
@@ -1397,6 +1742,7 @@ pub async fn run_draft_case(
         state.paths.config_dir(),
     )?;
     ensure_general_scope(&provider)?;
+    ensure_provider_ready(&provider).await?;
     let mut options = VerdictOptions::default();
     let cfg = state.config.lock().map_err(|_| "config poisoned")?.clone();
     options.top_k = cfg.rag.top_k;
@@ -1422,8 +1768,9 @@ pub async fn run_draft_case(
             attachments,
         }),
         Err(e) => {
-            mark_case_failed_best_effort(&store, &draft.id);
-            Err(e.to_string())
+            let msg = e.to_string();
+            mark_case_failed_best_effort(&store, &draft.id, &msg);
+            Err(msg)
         }
     }
 }
@@ -1507,16 +1854,13 @@ pub(crate) async fn run_case_deliberated_impl(
     let workspace = workspace_manager(state)
         .load(&request.workspace_id)
         .map_err(|e| e.to_string())?;
-    let api_key = if matches!(
-        request.provider_id.as_str(),
-        "ollama" | "apple-intelligence"
-    ) {
-        String::new()
-    } else {
-        match secrets::load(&request.provider_id).map_err(|e| e.to_string())? {
-            Some(k) => k,
-            None => return err(format!("no API key for `{}`", request.provider_id)),
-        }
+    // OAuth providers use disk-stored tokens, not the macOS keychain.
+    // See run_case_impl for the concurrent-deadlock rationale.
+    let api_key = match request.provider_id.as_str() {
+        "ollama" | "apple-intelligence" | "anthropic-oauth" | "openai-oauth" => String::new(),
+        other => secrets::load(other)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("no API key for `{other}`"))?,
     };
     let provider = build_provider(
         &request.provider_id,
@@ -1525,6 +1869,7 @@ pub(crate) async fn run_case_deliberated_impl(
         state.paths.config_dir(),
     )?;
     ensure_general_scope(&provider)?;
+    ensure_provider_ready(&provider).await?;
 
     let store = case_store_arc(state, &workspace.id)?;
 
@@ -1660,9 +2005,10 @@ pub(crate) async fn run_case_deliberated_impl(
         Ok(o) => o,
         Err(e) => {
             // Mark draft as failed so the UI stops showing "running…".
-            mark_case_failed_best_effort(&store, &case.id);
+            let msg = e.to_string();
+            mark_case_failed_best_effort(&store, &case.id, &msg);
             let _ = forward_task.await;
-            return Err(e.to_string());
+            return Err(msg);
         }
     };
     let elapsed_ms = deliberation_started_inst.elapsed().as_millis() as u64;
@@ -1838,15 +2184,14 @@ pub async fn run_batch_cases(
     // provider once and verify its scope. The per-case impls have the
     // same guard, but doing it up here turns a "all cases failed"
     // toast into a single clear error.
-    let probe_key = if matches!(
-        request.provider_id.as_str(),
-        "ollama" | "apple-intelligence"
-    ) {
-        String::new()
-    } else {
-        secrets::load(&request.provider_id)
+    // OAuth providers use disk-stored tokens, not the macOS keychain.
+    // Skip secrets::load for them — see run_case_impl for the
+    // concurrent-deadlock rationale.
+    let probe_key = match request.provider_id.as_str() {
+        "ollama" | "apple-intelligence" | "anthropic-oauth" | "openai-oauth" => String::new(),
+        other => secrets::load(other)
             .map_err(|e| e.to_string())?
-            .unwrap_or_default()
+            .unwrap_or_default(),
     };
     let probe_provider = build_provider(
         &request.provider_id,
@@ -1855,6 +2200,7 @@ pub async fn run_batch_cases(
         state.paths.config_dir(),
     )?;
     ensure_general_scope(&probe_provider)?;
+    ensure_provider_ready(&probe_provider).await?;
     drop(probe_provider);
 
     // Reset the cancellation flag for this batch.
@@ -1923,6 +2269,7 @@ pub async fn run_batch_cases(
                     provider_id,
                     model,
                     attached_file_paths: case.attached_file_paths,
+                    patient_label: case.patient_label.clone(),
                 };
                 let result = if deliberative {
                     run_case_deliberated_impl(&app_in_task, state_ref, req).await
@@ -1942,6 +2289,15 @@ pub async fn run_batch_cases(
                         BatchOutcome::Completed
                     }
                     Err(e) => {
+                        // Fail-fast: a transport-level failure (Ollama
+                        // offline, DNS issue, cloud provider 5xx) will
+                        // hit every case the same way. Flip the cancel
+                        // flag so the remaining queued cases short-
+                        // circuit to Cancelled instead of burning 30 s
+                        // of connect-timeout each.
+                        if is_transport_failure(&e) {
+                            cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+                        }
                         let _ = app_in_task.emit(
                             "batch:progress",
                             BatchEventDto::CaseFailed {
@@ -2090,4 +2446,139 @@ pub fn update_case_date(
     store
         .update_case_date(&request.case_ids, new_date)
         .map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteCasesRequest {
+    pub workspace_id: String,
+    pub case_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DeleteCasesResponse {
+    /// Number of `cases` rows actually removed. Ids that didn't exist
+    /// in the DB are silently skipped.
+    pub deleted: usize,
+}
+
+/// Delete one or many cases. SQLite cascades clean every child row
+/// (verdicts, retrieval traces, feedback, case_memory, attachments,
+/// deliberation traces). After the DB transaction commits we
+/// best-effort remove each case's on-disk attachments directory at
+/// `<workspace>/cases/<case_id>/` — failures there are logged but
+/// do NOT roll back the DB delete, since the user has already seen
+/// the row disappear.
+#[tauri::command]
+pub fn delete_cases(
+    state: State<'_, AppState>,
+    request: DeleteCasesRequest,
+) -> CommandResult<DeleteCasesResponse> {
+    if request.case_ids.is_empty() {
+        return Ok(DeleteCasesResponse { deleted: 0 });
+    }
+    let store = case_store_arc(&state, &request.workspace_id)?;
+    let cases_root = state
+        .paths
+        .workspace_dir(&request.workspace_id)
+        .join("cases");
+
+    let deleted = {
+        let mut store = store.lock().map_err(|_| "store poisoned")?;
+        store
+            .delete_cases(&request.case_ids)
+            .map_err(|e| e.to_string())?
+    };
+
+    // Best-effort cleanup of the on-disk case directories. Missing
+    // directories are not an error (Draft cases without attachments
+    // never create one).
+    for id in &request.case_ids {
+        let dir = cases_root.join(id);
+        if !dir.exists() {
+            continue;
+        }
+        if let Err(e) = std::fs::remove_dir_all(&dir) {
+            tracing::warn!(
+                error = %e,
+                path = %dir.display(),
+                "could not remove case attachments dir after delete",
+            );
+        }
+    }
+
+    Ok(DeleteCasesResponse { deleted })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_transport_failure_catches_ollama_offline_message() {
+        // Verbatim string we ship from `ensure_provider_ready` when the
+        // pre-flight ping fails.
+        let msg = "Ollama is not responding at http://localhost:11434. \
+                   Start the server with `ollama serve` or pick another \
+                   provider from the selector.";
+        assert!(is_transport_failure(msg));
+    }
+
+    #[test]
+    fn is_transport_failure_catches_provider_error_chain() {
+        // Real-world chain we observed before the fix:
+        //   ProviderError::Network → Error::Provider → CommandResult string.
+        let msg = "provider error: draft LLM call failed: network error: \
+                   error sending request for url (http://localhost:11434/api/chat)";
+        assert!(is_transport_failure(msg));
+    }
+
+    #[test]
+    fn is_transport_failure_catches_unavailable_variant() {
+        let msg = "provider error: provider unavailable: model not downloaded";
+        assert!(is_transport_failure(msg));
+    }
+
+    #[test]
+    fn is_transport_failure_ignores_validation_errors() {
+        // Validation / schema errors are NOT transport-level — they hit
+        // one case but the next case might be fine, so the batch must
+        // keep running. Guard against false positives here.
+        assert!(!is_transport_failure(
+            "provider error: verdict validation failed: invalid ref `Z9`"
+        ));
+        assert!(!is_transport_failure(
+            "provider error: bad request: model `gpt-9` not found"
+        ));
+        assert!(!is_transport_failure(
+            "rag error: case store mutex poisoned"
+        ));
+    }
+
+    /// `ensure_provider_ready` pings Ollama when the provider id matches.
+    /// Pointing at a closed port surfaces a clear, actionable error
+    /// instead of letting the per-case run discover it 11 times.
+    #[tokio::test]
+    async fn ensure_provider_ready_errors_when_ollama_unreachable() {
+        let p: Arc<dyn LlmProvider> =
+            Arc::new(OllamaProvider::new().with_base_url("http://127.0.0.1:65500"));
+        let r = ensure_provider_ready(&p).await;
+        assert!(r.is_err(), "expected Err for unreachable Ollama");
+        let msg = r.unwrap_err();
+        assert!(
+            msg.contains("Ollama is not responding"),
+            "unexpected error text: {msg}"
+        );
+    }
+
+    /// Cloud providers are not pinged — the trip into the network for a
+    /// pre-flight would be redundant with the first per-case call.
+    #[tokio::test]
+    async fn ensure_provider_ready_passes_for_cloud_providers() {
+        let p: Arc<dyn LlmProvider> = Arc::new(AnthropicProvider::new("sk-fake-key-not-used"));
+        let r = ensure_provider_ready(&p).await;
+        assert!(
+            r.is_ok(),
+            "cloud providers should not require ping; got {r:?}"
+        );
+    }
 }

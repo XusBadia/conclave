@@ -125,6 +125,13 @@ export interface CaseRecord {
   masked_text: string;
   deident_pipeline_id: string;
   status: "draft" | "completed" | "failed";
+  /** Human-friendly identifier shown as the row title in the list — e.g.
+   *  "Juan Pérez" or "CR-IA-011". Empty falls back to the question. */
+  patient_label: string;
+  /** When `status === "failed"`, the diagnostic message captured at run
+   *  time. Surfaced in the detail view so the clinician sees *why* the
+   *  committee aborted. Null otherwise. */
+  latest_error: string | null;
 }
 
 export interface VerdictRecord {
@@ -314,6 +321,7 @@ export const ipc = {
     provider_id: string;
     model?: string;
     attached_file_paths?: string[];
+    patient_label?: string;
   }) => invoke<CaseRunResponse>("run_case", { request: req }),
   runCaseDeliberated: (req: {
     workspace_id: string;
@@ -322,6 +330,7 @@ export const ipc = {
     provider_id: string;
     model?: string;
     attached_file_paths?: string[];
+    patient_label?: string;
   }) => invoke<CaseRunResponse>("run_case_deliberated", { request: req }),
   listCases: (workspaceId: string, limit: number) =>
     invoke<CaseRecord[]>("list_cases", { workspaceId, limit }),
@@ -348,6 +357,8 @@ export const ipc = {
     case_ids: string[];
     new_date: string;
   }) => invoke<void>("update_case_date", { request: req }),
+  deleteCases: (req: { workspace_id: string; case_ids: string[] }) =>
+    invoke<{ deleted: number }>("delete_cases", { request: req }),
 
   // Batch
   parseBatchFolder: (folderPath: string, defaultQuestion: string) =>
@@ -368,6 +379,14 @@ export const ipc = {
     cases: BatchCaseInput[];
   }) => invoke<BatchRunSummary>("run_batch_cases", { request: req }),
   batchCancel: () => invoke<void>("batch_cancel"),
+  /** Re-run Apple Intelligence title generation for an existing case.
+   *  Returns the new label on success or `null` when nothing changed
+   *  (Apple Intelligence unavailable, timeout, empty response, …). */
+  regenerateCaseLabel: (workspaceId: string, caseId: string) =>
+    invoke<string | null>("regenerate_case_label", {
+      workspaceId,
+      caseId,
+    }),
 
   // Drafts
   createDraftCases: (req: {

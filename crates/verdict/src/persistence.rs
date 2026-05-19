@@ -20,7 +20,9 @@ CREATE TABLE IF NOT EXISTS cases (
     masked_text TEXT NOT NULL,
     deident_pipeline_id TEXT NOT NULL,
     status TEXT NOT NULL,
-    case_date TEXT NOT NULL DEFAULT ''
+    case_date TEXT NOT NULL DEFAULT '',
+    patient_label TEXT NOT NULL DEFAULT '',
+    latest_error TEXT
 );
 
 CREATE INDEX IF NOT EXISTS cases_created_at_idx ON cases(created_at DESC);
@@ -146,6 +148,17 @@ pub struct CaseRecord {
     pub masked_text: String,
     pub deident_pipeline_id: String,
     pub status: CaseStatus,
+    /// Human-friendly identifier for the case (e.g. "Juan Pérez",
+    /// "CR-IA-011"). Used as the row title in the list so multi-case
+    /// batches do not all look identical. Free-text — empty falls back to
+    /// the question or the case id.
+    #[serde(default)]
+    pub patient_label: String,
+    /// Error message captured when `status == Failed`. Surfaced in the
+    /// detail view so the clinician sees *why* the committee aborted
+    /// instead of an opaque "failed" badge.
+    #[serde(default)]
+    pub latest_error: Option<String>,
 }
 
 /// Stored verdict row.
@@ -284,6 +297,7 @@ impl CaseStore {
         conn.execute_batch(SCHEMA_SQL).map_err(map_sql)?;
         Self::migrate_retrieval_traces_attachments(&conn)?;
         Self::migrate_cases_case_date(&conn)?;
+        Self::migrate_cases_patient_label_and_error(&conn)?;
         Ok(Self { conn, path })
     }
 
@@ -345,6 +359,30 @@ impl CaseStore {
         Ok(())
     }
 
+    /// Idempotent migration: add `patient_label` (non-null, default '') and
+    /// `latest_error` (nullable) to the `cases` table when missing. Both
+    /// are post-1.0 additions and existing rows would otherwise lack them.
+    fn migrate_cases_patient_label_and_error(conn: &Connection) -> Result<()> {
+        let mut stmt = conn.prepare("PRAGMA table_info(cases)").map_err(map_sql)?;
+        let cols: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .map_err(map_sql)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(map_sql)?;
+        if !cols.iter().any(|c| c == "patient_label") {
+            conn.execute(
+                "ALTER TABLE cases ADD COLUMN patient_label TEXT NOT NULL DEFAULT ''",
+                [],
+            )
+            .map_err(map_sql)?;
+        }
+        if !cols.iter().any(|c| c == "latest_error") {
+            conn.execute("ALTER TABLE cases ADD COLUMN latest_error TEXT", [])
+                .map_err(map_sql)?;
+        }
+        Ok(())
+    }
+
     /// Path the connection was opened against.
     pub fn path(&self) -> &Path {
         &self.path
@@ -356,8 +394,8 @@ impl CaseStore {
             .execute(
                 "INSERT INTO cases
                    (id, created_at, workspace_id, question, original_text, masked_text,
-                    deident_pipeline_id, status, case_date)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    deident_pipeline_id, status, case_date, patient_label, latest_error)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 params![
                     c.id,
                     c.created_at.to_rfc3339(),
@@ -368,6 +406,8 @@ impl CaseStore {
                     c.deident_pipeline_id,
                     c.status.as_db_str(),
                     c.case_date.to_rfc3339(),
+                    c.patient_label,
+                    c.latest_error.as_deref(),
                 ],
             )
             .map_err(map_sql)?;
@@ -407,12 +447,49 @@ impl CaseStore {
     }
 
     /// Transition a case to a new status — used to promote a `Draft` to
-    /// `Completed`/`Failed` once the pipeline has run against it.
+    /// `Completed`/`Failed` once the pipeline has run against it. A
+    /// successful transition (Completed) also clears any stale
+    /// `latest_error` left behind by a previous failed attempt; Failed
+    /// transitions leave it intact so `set_case_error` can populate it.
     pub fn mark_case_status(&self, case_id: &str, status: CaseStatus) -> Result<()> {
+        if matches!(status, CaseStatus::Completed) {
+            self.conn
+                .execute(
+                    "UPDATE cases SET status = ?1, latest_error = NULL WHERE id = ?2",
+                    params![status.as_db_str(), case_id],
+                )
+                .map_err(map_sql)?;
+        } else {
+            self.conn
+                .execute(
+                    "UPDATE cases SET status = ?1 WHERE id = ?2",
+                    params![status.as_db_str(), case_id],
+                )
+                .map_err(map_sql)?;
+        }
+        Ok(())
+    }
+
+    /// Persist (or clear) the latest error message for a case. Pass `None`
+    /// to clear. Surfaced in the detail view when `status == Failed`.
+    pub fn set_case_error(&self, case_id: &str, error: Option<&str>) -> Result<()> {
         self.conn
             .execute(
-                "UPDATE cases SET status = ?1 WHERE id = ?2",
-                params![status.as_db_str(), case_id],
+                "UPDATE cases SET latest_error = ?1 WHERE id = ?2",
+                params![error, case_id],
+            )
+            .map_err(map_sql)?;
+        Ok(())
+    }
+
+    /// Update the `patient_label` of an existing case. Used when the draft
+    /// is opened, edited, and the clinician adjusts the suggested label
+    /// before running the committee.
+    pub fn set_case_patient_label(&self, case_id: &str, label: &str) -> Result<()> {
+        self.conn
+            .execute(
+                "UPDATE cases SET patient_label = ?1 WHERE id = ?2",
+                params![label, case_id],
             )
             .map_err(map_sql)?;
         Ok(())
@@ -598,7 +675,7 @@ impl CaseStore {
             .conn
             .prepare(
                 "SELECT id, created_at, workspace_id, question, original_text, masked_text,
-                        deident_pipeline_id, status, case_date
+                        deident_pipeline_id, status, case_date, patient_label, latest_error
                  FROM cases
                  ORDER BY case_date DESC, created_at DESC
                  LIMIT ?1",
@@ -619,7 +696,7 @@ impl CaseStore {
         self.conn
             .query_row(
                 "SELECT id, created_at, workspace_id, question, original_text, masked_text,
-                        deident_pipeline_id, status, case_date
+                        deident_pipeline_id, status, case_date, patient_label, latest_error
                  FROM cases WHERE id = ?1",
                 params![id],
                 row_to_case,
@@ -647,6 +724,33 @@ impl CaseStore {
         }
         tx.commit().map_err(map_sql)?;
         Ok(())
+    }
+
+    /// Delete one or many cases by id. Relies on `ON DELETE CASCADE`
+    /// (foreign_keys=ON, set at connection open) to clean up
+    /// verdicts, retrieval_traces, feedback, case_memory,
+    /// case_attachments and deliberation_traces in the same
+    /// transaction. Returns the number of `cases` rows actually removed
+    /// (ids that no longer exist are silently skipped).
+    ///
+    /// On-disk files (the `cases/<id>/` directory with attachments) are
+    /// the caller's responsibility — this only touches SQLite.
+    pub fn delete_cases(&mut self, ids: &[String]) -> Result<usize> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let tx = self.conn.transaction().map_err(map_sql)?;
+        let mut deleted = 0usize;
+        {
+            let mut stmt = tx
+                .prepare("DELETE FROM cases WHERE id = ?1")
+                .map_err(map_sql)?;
+            for id in ids {
+                deleted += stmt.execute(params![id]).map_err(map_sql)?;
+            }
+        }
+        tx.commit().map_err(map_sql)?;
+        Ok(deleted)
     }
 
     /// Latest verdict for a given case.
@@ -969,6 +1073,8 @@ fn row_to_case(r: &rusqlite::Row<'_>) -> rusqlite::Result<CaseRecord> {
         masked_text: r.get(5)?,
         deident_pipeline_id: r.get(6)?,
         status: CaseStatus::from_db_str(&r.get::<_, String>(7)?).unwrap_or(CaseStatus::Failed),
+        patient_label: r.get::<_, Option<String>>(9)?.unwrap_or_default(),
+        latest_error: r.get::<_, Option<String>>(10)?,
     })
 }
 
@@ -1055,6 +1161,8 @@ mod tests {
             masked_text: "m".into(),
             deident_pipeline_id: "p".into(),
             status: CaseStatus::Completed,
+            patient_label: String::new(),
+            latest_error: None,
         }
     }
 
@@ -1110,6 +1218,88 @@ mod tests {
     }
 
     #[test]
+    fn set_case_error_round_trip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = CaseStore::open(tmp.path().join("cases.sqlite")).unwrap();
+        let mut c = sample_case("c-err");
+        c.status = CaseStatus::Draft;
+        store.insert_case(&c).unwrap();
+        // Initially the column is NULL.
+        let fetched = store.get_case("c-err").unwrap().unwrap();
+        assert_eq!(fetched.latest_error, None);
+
+        // Marking Failed leaves latest_error alone — caller fills it.
+        store.mark_case_status("c-err", CaseStatus::Failed).unwrap();
+        store
+            .set_case_error("c-err", Some("provider returned 400"))
+            .unwrap();
+        let fetched = store.get_case("c-err").unwrap().unwrap();
+        assert_eq!(fetched.status, CaseStatus::Failed);
+        assert_eq!(
+            fetched.latest_error.as_deref(),
+            Some("provider returned 400")
+        );
+
+        // Promoting to Completed clears the stale error.
+        store
+            .mark_case_status("c-err", CaseStatus::Completed)
+            .unwrap();
+        let fetched = store.get_case("c-err").unwrap().unwrap();
+        assert_eq!(fetched.status, CaseStatus::Completed);
+        assert_eq!(fetched.latest_error, None);
+    }
+
+    #[test]
+    fn patient_label_round_trip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = CaseStore::open(tmp.path().join("cases.sqlite")).unwrap();
+        let mut c = sample_case("c-pl");
+        c.patient_label = "Juan Pérez".into();
+        store.insert_case(&c).unwrap();
+        let fetched = store.get_case("c-pl").unwrap().unwrap();
+        assert_eq!(fetched.patient_label, "Juan Pérez");
+
+        store.set_case_patient_label("c-pl", "CR-IA-011").unwrap();
+        let fetched = store.get_case("c-pl").unwrap().unwrap();
+        assert_eq!(fetched.patient_label, "CR-IA-011");
+    }
+
+    #[test]
+    fn migration_adds_patient_label_and_latest_error_to_legacy_db() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("cases.sqlite");
+        // Hand-craft a legacy schema that's missing the new columns. Mirror
+        // the production schema's NOT NULL constraints so the migration has
+        // realistic work to do.
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE cases (
+                    id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL,
+                    question TEXT NOT NULL,
+                    original_text TEXT NOT NULL,
+                    masked_text TEXT NOT NULL,
+                    deident_pipeline_id TEXT NOT NULL,
+                    status TEXT NOT NULL
+                );
+                INSERT INTO cases VALUES ('old1','2026-01-01T00:00:00Z','ws','q','o','m','p','failed');",
+            )
+            .unwrap();
+        }
+        // Opening via CaseStore should add both columns idempotently.
+        let store = CaseStore::open(&db).unwrap();
+        let fetched = store.get_case("old1").unwrap().unwrap();
+        assert_eq!(fetched.patient_label, "");
+        assert_eq!(fetched.latest_error, None);
+        // And `set_case_error` should now work on the legacy row.
+        store.set_case_error("old1", Some("backfilled")).unwrap();
+        let fetched = store.get_case("old1").unwrap().unwrap();
+        assert_eq!(fetched.latest_error.as_deref(), Some("backfilled"));
+    }
+
+    #[test]
     fn attachments_round_trip() {
         let tmp = tempfile::tempdir().unwrap();
         let store = CaseStore::open(tmp.path().join("cases.sqlite")).unwrap();
@@ -1156,6 +1346,66 @@ mod tests {
         let removed = store.delete_attachments_for_case("cA").unwrap();
         assert_eq!(removed, 2);
         assert!(store.list_attachments_for_case("cA").unwrap().is_empty());
+    }
+
+    #[test]
+    fn delete_cases_cascades_to_children() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut store = CaseStore::open(tmp.path().join("cases.sqlite")).unwrap();
+
+        // Two cases, only c1 gets verdict/feedback/attachment baggage —
+        // we want to confirm cascade really fires and c2 is untouched.
+        store.insert_case(&sample_case("c1")).unwrap();
+        store.insert_case(&sample_case("c2")).unwrap();
+        store.insert_verdict(&sample_verdict("c1")).unwrap();
+        store
+            .insert_trace(&RetrievalTrace {
+                verdict_id: "c1-v1".into(),
+                evidence_refs: vec!["E1".into()],
+                past_cases_refs: vec![],
+                online_evidence_refs: vec![],
+                attachment_refs: vec![],
+            })
+            .unwrap();
+        store
+            .upsert_feedback(&FeedbackRecord {
+                case_id: "c1".into(),
+                kind: FeedbackKind::Accept,
+                reason: None,
+                modified_verdict_json: None,
+                created_at: Utc::now(),
+            })
+            .unwrap();
+        store
+            .insert_attachment(&CaseAttachment {
+                id: "att-x".into(),
+                case_id: "c1".into(),
+                position: 1,
+                original_filename: "labs.pdf".into(),
+                stored_path: "/tmp/labs.pdf".into(),
+                sha256: "abc".into(),
+                doc_type: "pdf".into(),
+                mime: "application/pdf".into(),
+                extracted_text: "x".into(),
+                needs_ocr: false,
+                byte_size: 1,
+                created_at: Utc::now(),
+            })
+            .unwrap();
+
+        let deleted = store.delete_cases(&["c1".into()]).unwrap();
+        assert_eq!(deleted, 1);
+        assert!(store.get_case("c1").unwrap().is_none());
+        // Cascade removed the verdict (and through it the retrieval trace).
+        assert!(store.latest_verdict("c1").unwrap().is_none());
+        assert!(store.get_feedback("c1").unwrap().is_none());
+        assert!(store.list_attachments_for_case("c1").unwrap().is_empty());
+        // c2 must survive.
+        assert!(store.get_case("c2").unwrap().is_some());
+
+        // Empty input is a no-op; missing ids return 0 instead of erroring.
+        assert_eq!(store.delete_cases(&[]).unwrap(), 0);
+        assert_eq!(store.delete_cases(&["ghost".into()]).unwrap(), 0);
     }
 
     #[test]

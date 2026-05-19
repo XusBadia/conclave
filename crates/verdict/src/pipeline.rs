@@ -31,7 +31,7 @@ use uuid::Uuid;
 
 use conclave_core::{Error, Result, Workspace, MEDICAL_DISCLAIMER};
 use conclave_deident::Deidentifier;
-use conclave_providers::{CompletionRequest, LlmProvider, Message};
+use conclave_providers::{CompletionRequest, LlmProvider, Message, ProviderError};
 use conclave_rag::{DocumentRepository, Embedder};
 
 use crate::persistence::{
@@ -265,6 +265,8 @@ Return the JSON object only, citing only the supplied evidence ids."
             masked_text,
             deident_pipeline_id,
             status: CaseStatus::Completed,
+            patient_label: String::new(),
+            latest_error: None,
         };
         let verdict_record = VerdictRecord {
             id: format!("verdict-{}", Uuid::new_v4()),
@@ -562,7 +564,7 @@ Return the JSON object only, citing only the supplied evidence ids."
         &self,
         prompt: &str,
         options: &VerdictOptions,
-    ) -> std::result::Result<(conclave_providers::CompletionResponse, String), Error> {
+    ) -> std::result::Result<(conclave_providers::CompletionResponse, String), ProviderError> {
         let req = CompletionRequest {
             model: String::new(),
             messages: vec![Message::user(prompt.to_owned())],
@@ -572,11 +574,7 @@ Return the JSON object only, citing only the supplied evidence ids."
             allow_web_search: false,
             images: Vec::new(),
         };
-        let resp = self
-            .provider
-            .complete(req)
-            .await
-            .map_err(|e| Error::Provider(e.to_string()))?;
+        let resp = self.provider.complete(req).await?;
         let model = resp.model.clone();
         Ok((resp, model))
     }

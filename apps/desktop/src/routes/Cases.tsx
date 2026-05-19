@@ -6,6 +6,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { IconLock, IconTrash } from "@tabler/icons-react";
 
 import { Button } from "../components/Button";
 import { Card, CardBody, CardHeader } from "../components/Card";
@@ -28,7 +29,7 @@ import {
   type Verdict,
   type Workspace,
 } from "../lib/ipc";
-import { isClinicalEligible, metaFor } from "../lib/providers";
+import { isClinicalEligible, metaFor, preferredProvider } from "../lib/providers";
 
 // Extensions we accept when the user drops or picks files for a case.
 // Mirrors `apps/desktop/src-tauri/src/batch.rs::ATTACHMENT_EXTS` so the
@@ -134,6 +135,53 @@ function attachmentBadgeColor(extOrType: string): string {
  * completes. We render `running` last so it wins over any underlying
  * draft state during the brief overlap.
  */
+/** Detect labels that are still the filename-stem fallback (e.g.
+ *  "CR-IA-007", "case_recto_bajo_alto_riesgo") rather than a proper
+ *  patient summary from Apple Intelligence ("Mujer 67, recto bajo T3N1"
+ *  — sentence-shaped, has spaces and commas).
+ *
+ *  Heuristic: empty, or zero spaces, or contains underscores. AI
+ *  summaries always have at least one space and never use underscores
+ *  in our prompt template. */
+function isFallbackLabel(label: string | null | undefined): boolean {
+  if (!label) return true;
+  const trimmed = label.trim();
+  if (trimmed.length === 0) return true;
+  // Filename stems and "CR-IA-XXX" codes have no spaces.
+  if (!/\s/.test(trimmed)) return true;
+  // Any underscore means it survived from a file name.
+  if (trimmed.includes("_")) return true;
+  return false;
+}
+
+/** Ids the page is currently retrying so we don't fire duplicate calls
+ *  on every refresh. Lives at module scope (not per-CasesPage) so the
+ *  set survives unmounts while still scoped to the lifetime of the
+ *  module (i.e., the app session). */
+const labelRetryInflight = new Set<string>();
+
+/** Best-effort retry of stale labels. Throttled to 2 concurrent IPCs
+ *  because Apple Intelligence serialises calls on-device anyway and we
+ *  don't want to block the user's clicks. Each retry that succeeds
+ *  triggers a `case:drafted` event, which the page-level listener
+ *  consumes to refresh the list. */
+function retryStaleLabels(workspaceId: string, cases: CaseRecord[]): void {
+  const candidates = cases.filter(
+    (c) => isFallbackLabel(c.patient_label) && !labelRetryInflight.has(c.id),
+  );
+  // Cap concurrent retries — fire the first N, the rest will be picked
+  // up by the NEXT refresh (which fires when the first ones complete
+  // and emit `case:drafted`).
+  const MAX_IN_FLIGHT = 2;
+  const available = MAX_IN_FLIGHT - labelRetryInflight.size;
+  for (const c of candidates.slice(0, Math.max(available, 0))) {
+    labelRetryInflight.add(c.id);
+    void ipc
+      .regenerateCaseLabel(workspaceId, c.id)
+      .finally(() => labelRetryInflight.delete(c.id));
+  }
+}
+
 function StatusBadge({
   status,
   running,
@@ -299,6 +347,13 @@ export function CasesPage({
   const [unsupportedDropError, setUnsupportedDropError] = useState<string | null>(
     null,
   );
+  /**
+   * Surface errors raised by the classify-drop dialog AFTER it closes —
+   * `runAll` is fire-and-forget, so any IPC failure (provider offline,
+   * missing config, …) can't be shown inside the modal. The page-level
+   * banner lets the user see them without poking DevTools.
+   */
+  const [dialogError, setDialogError] = useState<string | null>(null);
 
   /**
    * Per-row "running" state, populated by the batch:progress listener.
@@ -326,12 +381,25 @@ export function CasesPage({
   const [editingDate, setEditingDate] = useState(false);
   const [editDateError, setEditDateError] = useState<string | null>(null);
   const [editDateBusy, setEditDateBusy] = useState(false);
+  // When non-null, the delete-confirmation dialog is open for this
+  // set of ids. Used both by the per-row hover trash button (length 1)
+  // and by the batch toolbar (length N).
+  const [deletingIds, setDeletingIds] = useState<string[] | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const refresh = async () => {
     setLoading(true);
     setError(null);
     try {
-      setCases(await ipc.listCases(workspace.id, 50));
+      const list = await ipc.listCases(workspace.id, 50);
+      setCases(list);
+      // Best-effort: re-run Apple Intelligence for cases whose label is
+      // still the filename-stem fallback. The first attempt may have
+      // failed (timeout, model not ready) or never run (CLI-imported
+      // cases). The retry is fire-and-forget; the page refreshes via
+      // the `case:drafted` listener whenever a label lands.
+      retryStaleLabels(workspace.id, list);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -349,6 +417,8 @@ export function CasesPage({
     setSelectedIds(new Set());
     setEditingDate(false);
     setEditDateError(null);
+    setDeletingIds(null);
+    setDeleteError(null);
     setPendingDrop([]);
     setUnsupportedDropError(null);
     setClassifyDialog(null);
@@ -580,6 +650,42 @@ export function CasesPage({
     return found?.case_date ?? new Date().toISOString();
   }, [selectedIds, cases]);
 
+  const onConfirmDelete = async () => {
+    if (!deletingIds || deletingIds.length === 0) return;
+    setDeleteBusy(true);
+    setDeleteError(null);
+    try {
+      await ipc.deleteCases({
+        workspace_id: workspace.id,
+        case_ids: deletingIds,
+      });
+      // If the case currently being shown was deleted, drop the
+      // viewer state so the user doesn't see a stale verdict.
+      if (selected && deletingIds.includes(selected.case.id)) {
+        setSelected(null);
+        setView("list");
+      }
+      // Drop the deleted ids from the multi-select set so the batch
+      // toolbar collapses naturally.
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const id of deletingIds) next.delete(id);
+        return next;
+      });
+      setDeletingIds(null);
+      // If selection mode is on but nothing is selected anymore,
+      // exit it so the row UI returns to its normal state.
+      if (selectionMode && selectedIds.size <= deletingIds.length) {
+        setSelectionMode(false);
+      }
+      await refresh();
+    } catch (e) {
+      setDeleteError(String(e));
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
+
   if (view === "new") {
     // When `selected` is a draft (clicked from the list), we hand it to
     // NewCase so it pre-fills text / question / attachments and runs via
@@ -643,6 +749,19 @@ export function CasesPage({
       {unsupportedDropError && (
         <div className="rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-[13px] text-warn">
           {unsupportedDropError}
+        </div>
+      )}
+      {dialogError && (
+        <div className="flex items-start justify-between gap-3 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-[13px] text-danger">
+          <span className="break-words">{dialogError}</span>
+          <button
+            type="button"
+            onClick={() => setDialogError(null)}
+            aria-label={t("common.dismiss")}
+            className="shrink-0 rounded p-0.5 text-danger/70 transition hover:bg-danger/10 hover:text-danger"
+          >
+            ✕
+          </button>
         </div>
       )}
       {batchTotal !== null && batchTotal > 0 && (
@@ -790,27 +909,37 @@ export function CasesPage({
               }
               const c = row.data;
               const isSelected = selectedIds.has(c.id);
+              const openCase = async () => {
+                if (selectionMode) {
+                  toggleSelected(c.id);
+                  return;
+                }
+                const det = await ipc.showCase(workspace.id, c.id);
+                setSelected(det);
+                // Drafts have no verdict yet — open NewCase pre-filled
+                // so the clinician can add clinical context and run
+                // them. Completed/Failed go to ShowCase as before.
+                setView(det && det.case.status === "draft" ? "new" : "show");
+              };
               return (
-                <li key={row.key}>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      if (selectionMode) {
-                        toggleSelected(c.id);
-                        return;
+                // `group` on the <li> drives the per-row hover-only
+                // delete button (opacity-0 → opacity-100 on group-hover).
+                // The row is a div role="button" rather than a real
+                // <button>, so we can nest a real <button> for delete
+                // without producing invalid nested-button markup.
+                <li key={row.key} className="group relative">
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={openCase}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        void openCase();
                       }
-                      const det = await ipc.showCase(workspace.id, c.id);
-                      setSelected(det);
-                      // Drafts have no verdict yet — open NewCase
-                      // pre-filled so the clinician can add clinical
-                      // context and run them. Completed/Failed go to
-                      // ShowCase as before.
-                      setView(
-                        det && det.case.status === "draft" ? "new" : "show",
-                      );
                     }}
                     className={cn(
-                      "block w-full px-5 py-4 text-left transition focus:outline-none focus-visible:bg-surface",
+                      "block w-full cursor-pointer px-5 py-4 text-left transition focus:outline-none focus-visible:bg-surface",
                       isSelected ? "bg-accent/5 hover:bg-accent/10" : "hover:bg-surface",
                     )}
                   >
@@ -820,17 +949,19 @@ export function CasesPage({
                           type="checkbox"
                           checked={isSelected}
                           readOnly
-                          aria-label={c.question || c.id}
+                          aria-label={c.patient_label || c.question || c.id}
                           className="h-4 w-4 shrink-0 accent-accent"
                           tabIndex={-1}
                         />
                       )}
                       <div className="min-w-0 flex-1">
                         <div className="truncate text-[14px] font-medium text-ink">
-                          {c.question || t("cases.no_question")}
+                          {c.patient_label || c.question || t("cases.no_question")}
                         </div>
                         <div className="mt-0.5 truncate text-[12px] text-ink-faint">
-                          <span className="font-mono">{c.id}</span> ·{" "}
+                          {c.patient_label && c.question
+                            ? `${c.question} · `
+                            : null}
                           {new Date(c.case_date).toLocaleString()}
                         </div>
                       </div>
@@ -838,8 +969,40 @@ export function CasesPage({
                         status={c.status}
                         running={runningCaseIds.has(c.id)}
                       />
+                      {!selectionMode && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDeleteError(null);
+                            setDeletingIds([c.id]);
+                          }}
+                          aria-label={t("cases.delete_row")}
+                          title={t("cases.delete_row")}
+                          // Collapsed by default (w-0 + -ml-3 cancels the
+                          // parent gap-3 so the row content sits flush
+                          // right). On row hover (or keyboard focus) the
+                          // button grows to its natural size and the
+                          // status badge slides left to make room — the
+                          // shift is the affordance.
+                          className={cn(
+                            "grid h-7 w-0 shrink-0 place-content-center overflow-hidden rounded-md",
+                            "-ml-3 text-ink-faint opacity-0",
+                            "transition-[width,margin,opacity,background-color,color] duration-200 ease-out",
+                            "hover:bg-danger/10 hover:text-danger",
+                            "group-hover:ml-0 group-hover:w-7 group-hover:opacity-100",
+                            "focus:ml-0 focus:w-7 focus:opacity-100 focus:outline-none focus-visible:ring-conclave",
+                          )}
+                        >
+                          <IconTrash
+                            aria-hidden="true"
+                            size={16}
+                            stroke={1.6}
+                          />
+                        </button>
+                      )}
                     </div>
-                  </button>
+                  </div>
                 </li>
               );
             })}
@@ -856,6 +1019,16 @@ export function CasesPage({
             <div className="flex gap-2">
               <Button size="sm" variant="ghost" onClick={exitSelection}>
                 {t("common.cancel")}
+              </Button>
+              <Button
+                size="sm"
+                variant="danger"
+                onClick={() => {
+                  setDeleteError(null);
+                  setDeletingIds(Array.from(selectedIds));
+                }}
+              >
+                {t("cases.delete_action")}
               </Button>
               <Button
                 size="sm"
@@ -885,6 +1058,20 @@ export function CasesPage({
         onApply={onApplyDate}
       />
 
+      <ConfirmDeleteSheet
+        open={deletingIds !== null}
+        onOpenChange={(next) => {
+          if (!next) {
+            setDeletingIds(null);
+            setDeleteError(null);
+          }
+        }}
+        count={deletingIds?.length ?? 0}
+        busy={deleteBusy}
+        error={deleteError}
+        onConfirm={onConfirmDelete}
+      />
+
       {classifyDialog && (
         <ClassifyDropDialog
           workspace={workspace}
@@ -893,6 +1080,7 @@ export function CasesPage({
           onClose={() => setClassifyDialog(null)}
           onCommitted={async () => {
             setClassifyDialog(null);
+            setDialogError(null);
             await refresh();
           }}
           onOpenCase={async (caseId) => {
@@ -901,6 +1089,7 @@ export function CasesPage({
             setSelected(det);
             setView(det && det.case.status === "draft" ? "new" : "show");
           }}
+          onError={(msg) => setDialogError(msg)}
           onGoToSettings={onGoToSettings}
         />
       )}
@@ -975,6 +1164,58 @@ function EditDateSheet({
   );
 }
 
+function ConfirmDeleteSheet({
+  open,
+  onOpenChange,
+  count,
+  busy,
+  error,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (next: boolean) => void;
+  count: number;
+  busy: boolean;
+  error: string | null;
+  onConfirm: () => void;
+}) {
+  const { t } = useTranslation();
+  const title =
+    count > 1
+      ? t("cases.delete_confirm_title_plural", { count })
+      : t("cases.delete_confirm_title");
+  const body =
+    count > 1
+      ? t("cases.delete_confirm_body_plural", { count })
+      : t("cases.delete_confirm_body");
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange} title={title}>
+      <div className="space-y-4 px-5 py-4">
+        {error && (
+          <div className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-[13px] text-danger">
+            {t("cases.delete_error", { error })}
+          </div>
+        )}
+        <p className="text-[13px] leading-relaxed text-ink-dim">{body}</p>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button size="sm" variant="ghost" onClick={() => onOpenChange(false)}>
+            {t("common.cancel")}
+          </Button>
+          <Button
+            size="sm"
+            variant="danger"
+            loading={busy}
+            onClick={onConfirm}
+          >
+            {t("cases.delete_confirm_apply")}
+          </Button>
+        </div>
+      </div>
+    </Sheet>
+  );
+}
+
 function NewCase({
   workspace,
   onCancel,
@@ -1038,8 +1279,26 @@ function NewCase({
     (async () => {
       const ps = await ipc.listProviders();
       setProviders(ps);
-      const first = ps.find((p) => p.configured || p.id === "ollama");
-      if (first) setProviderId(first.id);
+      // Pick from the clinical-eligible subset only. Without the filter
+      // we could land on Apple Intelligence (Subtask scope) which the
+      // backend then rejects with an opaque error.
+      const eligible = usableProviders(ps).filter((p) => isClinicalEligible(p.id));
+      const pick = preferredProvider(eligible);
+      if (pick) {
+        setProviderId(pick);
+      } else if (eligible.length > 0) {
+        // Defensive: preferredProvider should never return null when
+        // eligible is non-empty, but if it does, fall back so the run
+        // button is never silently disabled with a non-empty list.
+        setProviderId(eligible[0].id);
+      } else if (ps.length > 0) {
+        // No eligible provider, but SOMETHING is configured. Use the
+        // first id; the backend ensure_general_scope / ensure_provider_ready
+        // will reject with a single clear error if the user tries to run.
+        setProviderId(ps[0].id);
+      }
+      // else: leave providerId as "" — the disabled-button tooltip
+      // explains the empty state.
     })();
   }, []);
 
@@ -1233,19 +1492,12 @@ function NewCase({
             </Field>
           )}
           <div className="flex items-start gap-2.5 rounded-md border border-ok/30 bg-ok/5 px-3 py-2 text-[12.5px] leading-relaxed text-ink-dim">
-            <svg
+            <IconLock
               aria-hidden="true"
-              viewBox="0 0 16 16"
-              className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ok"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.6"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <rect x="3" y="7" width="10" height="6.5" rx="1.2" />
-              <path d="M5.2 7V4.8a2.8 2.8 0 0 1 5.6 0V7" />
-            </svg>
+              size={14}
+              stroke={1.6}
+              className="mt-0.5 shrink-0 text-ok"
+            />
             <p className="min-w-0">
               <Trans
                 i18nKey="cases.privacy_banner"
@@ -1279,6 +1531,7 @@ function NewCase({
             onChange={setProviderId}
             onGoToSettings={onGoToSettings}
           />
+          <ProviderOfflineBanner providers={providers} providerId={providerId} />
           {!draft && (
             <DeliberativeToggle
               checked={deliberative}
@@ -1526,8 +1779,16 @@ function ShowCase({
 
       <Card>
         <CardHeader
-          title={detail.case.question || t("cases.no_question")}
-          subtitle={`${detail.case.id} · ${new Date(detail.case.created_at).toLocaleString()}`}
+          title={
+            detail.case.patient_label ||
+            detail.case.question ||
+            t("cases.no_question")
+          }
+          subtitle={
+            detail.case.patient_label && detail.case.question
+              ? `${detail.case.question} · ${new Date(detail.case.created_at).toLocaleString()}`
+              : `${detail.case.id} · ${new Date(detail.case.created_at).toLocaleString()}`
+          }
           right={
             detail.verdict_record && (
               <span className="text-[12px] text-ink-faint">
@@ -1539,11 +1800,23 @@ function ShowCase({
           }
         />
         <CardBody className="space-y-6 prose-conclave">
+          {detail.case.status === "failed" && detail.case.latest_error && (
+            <div className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-[13px] text-danger">
+              <div className="font-medium mb-1">
+                {t("cases.failed_title")}
+              </div>
+              <div className="whitespace-pre-wrap break-words font-mono text-[12px]">
+                {detail.case.latest_error}
+              </div>
+            </div>
+          )}
           {detail.verdict ? (
             <VerdictRenderer verdict={detail.verdict} />
           ) : (
             <p className="text-[13px] text-ink-subtle">
-              {t("cases.no_verdict")}
+              {detail.case.status === "failed"
+                ? t("cases.no_verdict_failed")
+                : t("cases.no_verdict")}
             </p>
           )}
         </CardBody>
@@ -1931,6 +2204,7 @@ function ClassifyDropDialog({
   onClose,
   onCommitted,
   onOpenCase,
+  onError,
   onGoToSettings,
 }: {
   workspace: Workspace;
@@ -1939,6 +2213,9 @@ function ClassifyDropDialog({
   onClose: () => void;
   onCommitted: () => void;
   onOpenCase: (caseId: string) => void;
+  /** Bubble errors up to CasesPage so they survive the modal closing
+   *  (the fire-and-forget `runAll` IPC may fail seconds after dismissal). */
+  onError?: (msg: string) => void;
   onGoToSettings?: () => void;
 }) {
   const { t } = useTranslation();
@@ -1963,8 +2240,20 @@ function ClassifyDropDialog({
     (async () => {
       const ps = await ipc.listProviders();
       setProviders(ps);
-      const first = ps.find((p) => p.configured || p.id === "ollama");
-      if (first) setProviderId(first.id);
+      const eligible = usableProviders(ps).filter((p) => isClinicalEligible(p.id));
+      const pick = preferredProvider(eligible);
+      if (pick) {
+        setProviderId(pick);
+      } else if (eligible.length > 0) {
+        // preferredProvider returned null on a non-empty list — fall back
+        // so the run button is never silently disabled.
+        setProviderId(eligible[0].id);
+      } else if (ps.length > 0) {
+        // No eligible provider but something is configured. Pick anyway;
+        // backend `ensure_general_scope`/`ensure_provider_ready` will
+        // give one clean error if the choice doesn't work clinically.
+        setProviderId(ps[0].id);
+      }
     })();
   }, []);
 
@@ -1987,26 +2276,51 @@ function ClassifyDropDialog({
   };
 
   const removeRow = (i: number) => {
-    setRows((prev) => prev.filter((_, idx) => idx !== i));
+    setRows((prev) => {
+      const row = prev[i];
+      // Defensive: ask before removing a card that still has files —
+      // those are about to be excluded from the batch.
+      if (row && row.attached_file_paths.length > 0) {
+        const ok = window.confirm(
+          t("cases.classify_dialog_remove_case_confirm", {
+            count: row.attached_file_paths.length,
+          }),
+        );
+        if (!ok) return prev;
+      }
+      return prev.filter((_, idx) => idx !== i);
+    });
+  };
+
+  /** Append an empty patient card so the user can create a case from
+   *  scratch (e.g. typed notes with no attachments) without arranging
+   *  a drag. Counterpart of `removeRow`. */
+  const addEmptyCase = () => {
+    setRows((prev) => [
+      ...prev,
+      {
+        patient_label: t("cases.classify_dialog_new_case_default_label", {
+          n: prev.length + 1,
+        }),
+        text: "",
+        question: prev[0]?.question ?? t("cases.default_question"),
+        attached_file_paths: [],
+      },
+    ]);
   };
 
   const removeFileFromRow = (rowIdx: number, fileIdx: number) => {
     setRows((prev) =>
-      prev
-        .map((r, idx) =>
-          idx === rowIdx
-            ? {
-                ...r,
-                attached_file_paths: r.attached_file_paths.filter(
-                  (_, i) => i !== fileIdx,
-                ),
-              }
-            : r,
-        )
-        .filter(
-          (r) =>
-            r.attached_file_paths.length > 0 || r.text.trim().length > 0,
-        ),
+      prev.map((r, idx) =>
+        idx === rowIdx
+          ? {
+              ...r,
+              attached_file_paths: r.attached_file_paths.filter(
+                (_, i) => i !== fileIdx,
+              ),
+            }
+          : r,
+      ),
     );
   };
 
@@ -2111,10 +2425,36 @@ function ClassifyDropDialog({
     }
   };
 
-  const runAll = () => {
-    if (rows.length === 0) return;
+  const runAll = async () => {
+    if (rows.length === 0) {
+      setError(t("cases.classify_dialog_disabled_no_cases"));
+      return;
+    }
     if (!providerId) {
-      setError(t("cases.no_provider_configured"));
+      // No provider available → don't leave the click without effect.
+      // Persist as drafts so the cases land in the list, and surface a
+      // banner explaining what happened. The user can then open each
+      // draft and run it once they connect a provider in Settings.
+      const diag = `providers=${providers.length}, usable=${usable.length}`;
+      const fallback = `${t("cases.classify_dialog_disabled_no_provider")} ${t(
+        "cases.classify_dialog_run_fallback_to_drafts",
+      )} (${diag})`;
+      onError?.(fallback);
+      try {
+        setBusy(true);
+        await ipc.createDraftCases({
+          workspace_id: workspace.id,
+          cases: rows,
+        });
+        onCommitted();
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error("fallback createDraftCases failed:", e);
+        setError(String(e));
+        onError?.(String(e));
+      } finally {
+        setBusy(false);
+      }
       return;
     }
     // Fire-and-forget. The IPC awaits the whole batch to complete (5+
@@ -2132,14 +2472,26 @@ function ClassifyDropDialog({
         cases: rows,
       })
       .catch((e) => {
-        // We won't see this directly (the dialog is gone) but log it
-        // so the failure isn't silent. The frontend listener will also
-        // surface per-case failures.
         // eslint-disable-next-line no-console
         console.error("batch run failed:", e);
+        // The dialog is gone by the time this resolves — surface the
+        // error at the page level so the clinician sees it.
+        onError?.(String(e));
       });
     onCommitted();
   };
+
+  // Reason text for the run button's disabled state. Surfaced in a
+  // `title` attribute so hovering tells the user exactly why nothing
+  // happens when they click. Returns null when the button is enabled.
+  const runDisabledReason = useMemo(() => {
+    if (busy) return t("cases.classify_dialog_disabled_busy");
+    if (rows.length === 0)
+      return t("cases.classify_dialog_disabled_no_cases");
+    if (!providerId)
+      return t("cases.classify_dialog_disabled_no_provider");
+    return null;
+  }, [busy, rows.length, providerId, t]);
 
   return (
     <div
@@ -2207,6 +2559,14 @@ function ClassifyDropDialog({
                 >
                   {t("cases.classify_dialog_split_all")}
                 </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={addEmptyCase}
+                  disabled={busy}
+                >
+                  {t("cases.classify_dialog_add_case")}
+                </Button>
               </div>
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                 {rows.map((row, i) => (
@@ -2215,6 +2575,9 @@ function ClassifyDropDialog({
                     row={row}
                     index={i}
                     isDragSource={draggingFrom === i}
+                    isDropEligible={
+                      draggingFrom !== null && draggingFrom !== i
+                    }
                     busy={busy}
                     noteOpen={openNoteIdx === i}
                     onToggleNote={() =>
@@ -2248,6 +2611,7 @@ function ClassifyDropDialog({
             onChange={setProviderId}
             onGoToSettings={onGoToSettings}
           />
+          <ProviderOfflineBanner providers={providers} providerId={providerId} />
           <DeliberativeToggle
             checked={deliberative}
             onChange={setDeliberative}
@@ -2270,15 +2634,18 @@ function ClassifyDropDialog({
             >
               {t("cases.classify_dialog_save_drafts")}
             </Button>
-            <Button
-              size="sm"
-              variant="primary"
-              onClick={runAll}
-              loading={busy}
-              disabled={busy || rows.length === 0 || !providerId}
-            >
-              {t("cases.classify_dialog_run_all", { count: rows.length })}
-            </Button>
+            <span title={runDisabledReason ?? ""} className="inline-block">
+              <Button
+                size="sm"
+                variant="primary"
+                onClick={runAll}
+                loading={busy}
+                disabled={busy}
+              >
+                {t("cases.classify_dialog_run_all", { count: rows.length })}
+                {runDisabledReason ? ` ⚠` : ""}
+              </Button>
+            </span>
           </div>
         </footer>
       </div>
@@ -2309,6 +2676,7 @@ function ClassifyCard({
   row,
   index,
   isDragSource,
+  isDropEligible,
   busy,
   noteOpen,
   onToggleNote,
@@ -2324,6 +2692,10 @@ function ClassifyCard({
   row: BatchCaseInput;
   index: number;
   isDragSource: boolean;
+  /** True while a sibling card is being dragged. Used to subtly
+   *  highlight this card as a valid drop target without forcing the
+   *  user to hover first. */
+  isDropEligible: boolean;
   busy: boolean;
   noteOpen: boolean;
   onToggleNote: () => void;
@@ -2364,7 +2736,9 @@ function ClassifyCard({
           ? "border-accent bg-accent/5 ring-1 ring-accent"
           : isDragSource
             ? "border-border-subtle opacity-70"
-            : "border-border-subtle",
+            : isDropEligible
+              ? "border-accent/30 bg-accent/[0.02]"
+              : "border-border-subtle",
       )}
     >
       <div className="flex items-center gap-2">
@@ -2382,10 +2756,12 @@ function ClassifyCard({
           <button
             type="button"
             onClick={onRemoveCase}
-            aria-label={t("classify_dialog_close")}
-            className="rounded p-1 text-ink-faint transition hover:bg-surface hover:text-ink"
+            aria-label={t("cases.classify_dialog_remove_case")}
+            title={t("cases.classify_dialog_remove_case")}
+            className="inline-flex shrink-0 items-center gap-1 rounded-md border border-transparent px-2 py-1 text-[11.5px] font-medium text-danger/80 transition hover:border-danger/30 hover:bg-danger/10 hover:text-danger"
           >
-            ✕
+            <span aria-hidden>✕</span>
+            <span>{t("cases.classify_dialog_remove_case")}</span>
           </button>
         )}
       </div>
@@ -2436,10 +2812,13 @@ function ClassifyCard({
               onDragStart();
             }}
             onDragEnd={onDragEnd}
-            className="flex max-w-full items-center gap-1.5 rounded-md border border-border-subtle bg-bg-subtle px-2 py-1 text-[11.5px] text-ink-dim transition hover:border-border"
-            title={path}
+            className={cn(
+              "group/chip flex max-w-full items-center gap-1.5 rounded-md border border-border-subtle bg-bg-subtle px-2 py-1 text-[11.5px] text-ink-dim transition",
+              !busy && "cursor-grab hover:border-accent/40 hover:bg-bg hover:shadow-sm active:cursor-grabbing",
+            )}
+            title={busy ? path : t("cases.classify_dialog_chip_drag_hint", { path })}
           >
-            <span aria-hidden className="cursor-grab select-none text-ink-faint">
+            <span aria-hidden className="select-none text-ink-faint group-hover/chip:text-accent">
               ⋮⋮
             </span>
             <ClassifyFileChip path={path} />
@@ -2574,6 +2953,27 @@ function DeliberativeToggle({
         </div>
       </div>
     </button>
+  );
+}
+
+// Warning banner shown when the currently-picked provider reports
+// `available === false`. It doesn't disable the run button — the user
+// might be reconnecting Ollama right this second — but it surfaces the
+// fact so they don't burn an LLM call (or 11) before discovering it.
+function ProviderOfflineBanner({
+  providers,
+  providerId,
+}: {
+  providers: ProviderInfo[];
+  providerId: string;
+}) {
+  const { t } = useTranslation();
+  const current = providers.find((p) => p.id === providerId);
+  if (!current || current.available) return null;
+  return (
+    <div className="rounded-md border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-[12px] text-amber-200">
+      {t("cases.provider_offline_warning", { name: metaFor(current.id).name })}
+    </div>
   );
 }
 

@@ -107,9 +107,11 @@ pub fn run() {
             commands::run_draft_case,
             commands::submit_feedback,
             commands::update_case_date,
+            commands::delete_cases,
             commands::parse_batch_folder,
             commands::propose_case_grouping,
             commands::run_batch_cases,
+            commands::regenerate_case_label,
             commands::batch_cancel,
         ])
         .run(tauri::generate_context!())
