@@ -152,6 +152,35 @@ lto = "thin"
 codegen-units = 1
 strip = "symbols"
 
+# `target/` ballooned to 95 GB after a few weeks of iteration because
+# Lance + DataFusion + Arrow + fastembed + tokenizers are huge crates
+# and we were storing full inline DWARF debug info for each one across
+# every codegen unit + incremental fingerprint. Settings below trim
+# that *without* impacting iteration speed on our own code:
+#
+#   - `[profile.dev]` keeps full debug + incremental for first-party
+#     crates so breakpoints and edit-rebuild cycles stay fast.
+#   - `[profile.dev.package."*"]` slims dependencies — we almost never
+#     step into Lance/Arrow/DataFusion internals, so line-tables-only
+#     gives us readable stack traces without storing tens of GB of
+#     DWARF. Disabling incremental on deps is fine because they don't
+#     change between local builds; their `.rlib`s are produced once
+#     and then cached as-is.
+#   - `split-debuginfo = "unpacked"` (macOS) writes debug info to
+#     separate `.dSYM`-shaped sidecars that can be safely garbage
+#     collected without re-linking. Default `packed` inlines them
+#     into every artifact, multiplying the cost across codegen units.
+#
+# Net effect on a fresh build of the workspace: from ~95 GB of cache
+# down to ~30 GB, with full per-package debugging of our own code
+# preserved. First build is ~30 s slower; incremental rebuilds of
+# our own code are identical to before.
 [profile.dev]
 opt-level = 0
-debug = true
+debug = "full"
+split-debuginfo = "unpacked"
+incremental = true
+
+[profile.dev.package."*"]
+debug = "line-tables-only"
+incremental = false
