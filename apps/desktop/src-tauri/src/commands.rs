@@ -11,10 +11,11 @@ use conclave_core::{Workspace, WorkspaceManager};
 use conclave_deident::{Deidentifier, PipelineDeidentifier};
 use conclave_providers::{
     open_in_browser, persist_tokens, secrets, AnthropicLoginFlow, AnthropicOAuthProvider,
-    AnthropicProvider, AppleIntelligenceAvailability, AppleIntelligenceProvider, CompletionRequest,
-    ImageInput, LlmProvider, Message, OllamaProvider, OpenAILoginFlow, OpenAIOAuthProvider,
-    OpenAiProvider, OpenRouterProvider, ProviderScope, APPLE_INTELLIGENCE_MODEL_LABEL,
-    KNOWN_PROVIDERS, OAUTH_PROVIDERS,
+    AnthropicProvider, AppleIntelligenceAvailability, AppleIntelligenceProvider, ClaudeCliProvider,
+    CodexCliProvider, CompletionRequest, ImageInput, LlmProvider, Message, OllamaProvider,
+    OpenAILoginFlow, OpenAIOAuthProvider, OpenAiProvider, OpenRouterProvider, ProviderScope,
+    APPLE_INTELLIGENCE_MODEL_LABEL, CLAUDE_CLI_DEFAULT_MODEL, CLI_PROVIDERS,
+    CODEX_CLI_DEFAULT_MODEL, KNOWN_PROVIDERS, OAUTH_PROVIDERS,
 };
 use conclave_rag::{
     ChunkParams, DocumentRecord, DocumentRepository, IngestionEvent, IngestionPipeline,
@@ -703,12 +704,74 @@ pub async fn list_providers(state: State<'_, AppState>) -> CommandResult<Vec<Pro
             hint,
         });
     }
+    // Local CLI providers. `configured` = binary present on `$PATH`;
+    // `available` = `configured` AND the user is signed in (verified
+    // via `claude auth status` for Claude, or the existence of
+    // `~/.codex/auth.json` for Codex, which lacks a documented
+    // status command). The `hint` carries a stable tag the frontend
+    // i18n maps to actionable copy (install command / login command
+    // for the right binary).
+    for id in CLI_PROVIDERS {
+        let (configured, available, default_model) = match *id {
+            "claude-cli" => {
+                let installed = ClaudeCliProvider::is_installed();
+                let logged_in = if installed {
+                    ClaudeCliProvider::is_logged_in().await
+                } else {
+                    false
+                };
+                (
+                    installed,
+                    installed && logged_in,
+                    CLAUDE_CLI_DEFAULT_MODEL.to_owned(),
+                )
+            }
+            "codex-cli" => {
+                let installed = CodexCliProvider::is_installed();
+                let logged_in = if installed {
+                    CodexCliProvider::is_logged_in().await
+                } else {
+                    false
+                };
+                (
+                    installed,
+                    installed && logged_in,
+                    CODEX_CLI_DEFAULT_MODEL.to_owned(),
+                )
+            }
+            _ => continue,
+        };
+        let hint = if !configured {
+            Some("not_installed".into())
+        } else if !available {
+            Some("login_required".into())
+        } else {
+            None
+        };
+        out.push(ProviderInfo {
+            id: (*id).to_owned(),
+            configured,
+            available,
+            default_model,
+            requires_network: true,
+            auth: "cli".into(),
+            kind: "cli".into(),
+            hint,
+        });
+    }
     Ok(out)
 }
 
 #[tauri::command]
 pub async fn set_provider_key(id: String, api_key: String) -> CommandResult<()> {
-    if matches!(id.as_str(), "ollama" | "apple-intelligence") {
+    if matches!(
+        id.as_str(),
+        "ollama" | "apple-intelligence" | "claude-cli" | "codex-cli"
+    ) {
+        // Local providers have no Conclave-side credential to store —
+        // either no auth at all (Ollama, Apple Intelligence) or auth
+        // is handled exclusively by the user's installed CLI in its
+        // own credential store.
         return ok(());
     }
     if api_key.trim().is_empty() {
@@ -724,7 +787,8 @@ pub async fn test_provider(
     prompt: Option<String>,
 ) -> CommandResult<String> {
     let api_key = match id.as_str() {
-        "ollama" | "apple-intelligence" | "anthropic-oauth" | "openai-oauth" => String::new(),
+        "ollama" | "apple-intelligence" | "anthropic-oauth" | "openai-oauth" | "claude-cli"
+        | "codex-cli" => String::new(),
         _ => match secrets::load(&id).map_err(|e| e.to_string())? {
             Some(k) => k,
             None => return err(format!("no API key for {id}")),
@@ -752,6 +816,12 @@ pub async fn test_provider(
 
 #[tauri::command]
 pub fn remove_provider_key(id: String) -> CommandResult<()> {
+    if matches!(id.as_str(), "claude-cli" | "codex-cli") {
+        // No Conclave-managed credential to delete — disconnecting a
+        // CLI provider is a no-op here. The user logs out via the
+        // CLI's own command (`claude auth logout` / `codex logout`).
+        return ok(());
+    }
     secrets::delete(&id).map_err(|e| e.to_string())
 }
 
@@ -927,6 +997,25 @@ fn build_provider(
         // On-device Apple Intelligence. No credentials, no model
         // selection — `FoundationModels` picks the model itself.
         "apple-intelligence" => Arc::new(AppleIntelligenceProvider::new()),
+        // Local CLI providers — shell out to the user's installed
+        // `claude` / `codex` binary. Authentication is whatever the
+        // user has set up in their own CLI; Conclave never touches
+        // those credentials.
+        "claude-cli" => {
+            let mut p = ClaudeCliProvider::new();
+            if let Some(m) = model {
+                p = p.with_model(m);
+            }
+            Arc::new(p)
+        }
+        "codex-cli" => {
+            // Codex `exec` does not document a `--model` flag, so the
+            // CLI's own `~/.codex/config.toml` selection wins. The
+            // `model` argument here is accepted for API symmetry but
+            // not threaded through.
+            let _ = model;
+            Arc::new(CodexCliProvider::new())
+        }
         // OAuth providers read only Conclave's own token file. We do NOT
         // fall back to `~/.codex/auth.json` / `~/.claude/.credentials.json`
         // — see `list_providers` for the rationale.

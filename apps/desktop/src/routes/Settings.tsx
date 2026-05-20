@@ -28,9 +28,11 @@ import {
 import {
   BRAND_HOVER,
   BRAND_TINT,
-  PICKER_GROUPS,
+  buildPickerGroups,
+  isLocalCli,
   isSubscriptionOAuth,
   metaFor,
+  shouldRecommendCli,
   type ProviderMeta,
 } from "../lib/providers";
 
@@ -193,6 +195,14 @@ export function SettingsPage() {
     const meta = metaFor(id);
     if (id === "anthropic-oauth") return startAnthropicOAuth();
     if (id === "openai-oauth") return startOpenAIOAuth();
+    if (isLocalCli(id)) {
+      // CLI providers self-configure when the binary is on $PATH and
+      // the user is signed in via the CLI's own flow. Conclave keeps
+      // no credential of its own — clicking the tile just refreshes
+      // the provider list, which surfaces the CLI as the active
+      // provider on the next render.
+      return refresh();
+    }
     if (meta.authLabel === "API key") {
       setFlow({ kind: "api-key", id, draft: "" });
     }
@@ -504,8 +514,10 @@ function ProviderPicker({
 
   return (
     <div className="space-y-5 animate-in">
-      {PICKER_GROUPS.map((group) => {
+      {buildPickerGroups(providers).map((group) => {
         const isOAuthGroup = group.titleKey === "settings.picker_group_oauth";
+        const isCliGroup = group.titleKey === "settings.picker_group_cli";
+        const cliRecommended = isCliGroup && shouldRecommendCli(providers);
         return (
           <div key={group.titleKey}>
             <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.08em] text-ink-faint">
@@ -516,22 +528,45 @@ function ProviderPicker({
               <p
                 className={cn(
                   "mb-2 mt-1 text-[11.5px] leading-relaxed",
-                  isOAuthGroup ? "text-warn/90" : "text-ink-faint",
+                  isOAuthGroup
+                    ? "text-warn/90"
+                    : isCliGroup && cliRecommended
+                      ? "text-ok/90"
+                      : "text-ink-faint",
                 )}
               >
                 {t(group.captionKey)}
               </p>
             )}
-            <div className={cn("grid grid-cols-1 gap-2 sm:grid-cols-2", !group.captionKey && "mt-2") }>
+            <div
+              className={cn(
+                "grid grid-cols-1 gap-2 sm:grid-cols-2",
+                !group.captionKey && "mt-2",
+              )}
+            >
               {group.ids.map((id) => {
                 const info = providers.find((p) => p.id === id);
                 if (!info) return null;
+                // When CLI is the recommended group, override the
+                // static meta.recommended flag so the chip pins to
+                // the first signed-in CLI tile instead of to the API
+                // key default.
+                const meta = metaFor(id);
+                const displayMeta: ProviderMeta =
+                  isCliGroup && cliRecommended && id === "claude-cli"
+                    ? { ...meta, recommended: true }
+                    : isCliGroup && cliRecommended
+                      ? { ...meta, recommended: false }
+                      : cliRecommended && meta.recommended
+                        ? { ...meta, recommended: false }
+                        : meta;
+                const cliDisabled = isLocalCli(id) && !info.available;
                 return (
                   <PickerTile
                     key={id}
                     provider={info}
-                    meta={metaFor(id)}
-                    disabled={busy}
+                    meta={displayMeta}
+                    disabled={busy || cliDisabled}
                     onPick={() => onPick(id)}
                   />
                 );
@@ -593,7 +628,9 @@ function PickerTile({
           {provider.hint && (
             <>
               {" · "}
-              <span className="text-ink-subtle">{provider.hint}</span>
+              <span className="text-ink-subtle">
+                {hintLabel(t, provider.id, provider.hint)}
+              </span>
             </>
           )}
         </div>
@@ -703,6 +740,7 @@ function ActiveProviderView({
   const { t } = useTranslation();
   const meta = metaFor(provider.id);
   const unofficial = isSubscriptionOAuth(provider.id);
+  const officialCli = isLocalCli(provider.id);
   return (
     <div className="space-y-4 animate-in">
       <div className="rounded-xl border border-border-strong bg-bg-elevated p-5 shadow-soft">
@@ -736,13 +774,23 @@ function ActiveProviderView({
                   {t("settings.oauth_unofficial_badge")}
                 </span>
               )}
+              {officialCli && (
+                <span
+                  className="rounded bg-ok/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-ok"
+                  title={t("settings.cli_active_caption")}
+                >
+                  {t("settings.cli_official_badge")}
+                </span>
+              )}
             </div>
             <div className="mt-1 text-[13px] text-ink-subtle">
               {meta.tagline}
               {provider.hint && (
                 <>
                   {" · "}
-                  <span className="text-ink-dim">{provider.hint}</span>
+                  <span className="text-ink-dim">
+                    {hintLabel(t, provider.id, provider.hint)}
+                  </span>
                 </>
               )}
             </div>
@@ -757,6 +805,11 @@ function ActiveProviderView({
             {unofficial && (
               <p className="mt-2 text-[11.5px] leading-relaxed text-warn/90">
                 {t("settings.oauth_active_caption")}
+              </p>
+            )}
+            {officialCli && (
+              <p className="mt-2 text-[11.5px] leading-relaxed text-ok/90">
+                {t("settings.cli_active_caption")}
               </p>
             )}
           </div>
@@ -1206,10 +1259,11 @@ function isAuthError(message: string): boolean {
   );
 }
 
-// Error banner shown in the AI card. When the active provider is the
-// unofficial subscription OAuth and the failure looks like an auth
-// revocation, we replace the raw error with a friendlier prompt that
-// nudges the user to reconnect or switch to an API key.
+// Error banner shown in the AI card. When the active provider is one
+// whose failure shape we recognise (CLI proxy that lost auth,
+// unofficial OAuth that was revoked, etc.) and the error looks like
+// an auth failure, we replace the raw error with a friendlier prompt
+// that points the user at the right next step.
 function ProviderErrorBanner({
   error,
   activeProviderId,
@@ -1220,17 +1274,39 @@ function ProviderErrorBanner({
   activeProviderName: string | null;
 }) {
   const { t } = useTranslation();
+  const isAuth = isAuthError(error);
   const showOAuthHint =
     activeProviderId !== null &&
     activeProviderName !== null &&
     isSubscriptionOAuth(activeProviderId) &&
-    isAuthError(error);
+    isAuth;
+  const showCliHint =
+    activeProviderId !== null &&
+    activeProviderName !== null &&
+    isLocalCli(activeProviderId) &&
+    isAuth;
+  const cliCommand =
+    activeProviderId === "claude-cli"
+      ? "claude auth login"
+      : activeProviderId === "codex-cli"
+        ? "codex login"
+        : "";
   return (
     <div
       role="alert"
       className="animate-in rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-[13px] text-danger"
     >
-      {showOAuthHint ? (
+      {showCliHint ? (
+        <div className="space-y-1">
+          <p>
+            {t("settings.cli_error_not_logged_in", {
+              name: activeProviderName,
+              command: cliCommand,
+            })}
+          </p>
+          <p className="font-mono text-[11px] text-danger/80">{error}</p>
+        </div>
+      ) : showOAuthHint ? (
         <div className="space-y-1">
           <p>{t("settings.oauth_error_revoked", { name: activeProviderName })}</p>
           <p className="font-mono text-[11px] text-danger/80">{error}</p>
@@ -1240,6 +1316,38 @@ function ProviderErrorBanner({
       )}
     </div>
   );
+}
+
+/**
+ * Resolve the human-readable label for a `ProviderInfo.hint` value.
+ *
+ * Most hints are passed through verbatim (subscription type for the
+ * OAuth tiles, vendor-side messages for API keys). CLI providers
+ * emit stable tags (`not_installed`, `login_required`) which we map
+ * to provider-specific i18n strings so the user sees an actionable
+ * instruction like "Run `claude auth login` in a terminal".
+ */
+function hintLabel(
+  t: (key: string) => string,
+  providerId: string,
+  hint: string,
+): string {
+  if (!isLocalCli(providerId)) return hint;
+  if (hint === "not_installed") {
+    return t(
+      providerId === "claude-cli"
+        ? "settings.cli_hint_not_installed_claude"
+        : "settings.cli_hint_not_installed_codex",
+    );
+  }
+  if (hint === "login_required") {
+    return t(
+      providerId === "claude-cli"
+        ? "settings.cli_hint_login_required_claude"
+        : "settings.cli_hint_login_required_codex",
+    );
+  }
+  return hint;
 }
 
 function Monogram({

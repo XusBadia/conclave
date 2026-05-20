@@ -9,7 +9,9 @@ export type ProviderId =
   | "ollama"
   | "anthropic-oauth"
   | "openai-oauth"
-  | "apple-intelligence";
+  | "apple-intelligence"
+  | "claude-cli"
+  | "codex-cli";
 
 // Where a provider can be plugged in. Mirrors the Rust-side
 // `ProviderScope` enum in `crates/providers/src/types.rs`.
@@ -25,7 +27,7 @@ export type ProviderMeta = {
   id: ProviderId;
   name: string;
   tagline: string;
-  authLabel: "OAuth" | "API key" | "Local";
+  authLabel: "OAuth" | "API key" | "Local" | "Local CLI";
   monogram: string;
   // Tailwind color stem (e.g. "amber") used for the monogram tint and hover ring.
   brand: "amber" | "emerald" | "sky" | "violet" | "slate";
@@ -39,6 +41,22 @@ export type ProviderMeta = {
 };
 
 export const PROVIDER_META: Record<string, ProviderMeta> = {
+  "claude-cli": {
+    id: "claude-cli",
+    name: "Claude Code (local)",
+    tagline: "Tu CLI oficial · tu suscripción",
+    authLabel: "Local CLI",
+    monogram: "C",
+    brand: "amber",
+  },
+  "codex-cli": {
+    id: "codex-cli",
+    name: "Codex (local)",
+    tagline: "Tu CLI oficial · tu suscripción",
+    authLabel: "Local CLI",
+    monogram: "G",
+    brand: "emerald",
+  },
   "anthropic-oauth": {
     id: "anthropic-oauth",
     name: "Claude Max",
@@ -166,38 +184,97 @@ export const BRAND_HOVER: Record<ProviderMeta["brand"], string> = {
   slate: "hover:border-slate-400/40",
 };
 
-// Display order in the picker grid. API keys first because that's the
-// contractually sanctioned path — stable, fully supported by the
-// vendors, and unaffected by enforcement actions against unofficial
-// CLI-OAuth reuse. Subscription OAuth is offered as a secondary
-// convenience with an explicit "may be revoked" disclaimer in the UI.
-// Group titles and captions are expressed as i18n keys so the UI
-// stays locale-aware.
+// Provider groups for the Settings picker, ordered by **compliance and
+// stability**:
 //
-// On-device providers (Ollama, Apple Intelligence) are *not* listed here:
-// they're surfaced through dedicated notes rendered alongside the picker and
-// active-provider views, because they don't have a "connect" step the user
-// has to walk through.
-export const PICKER_GROUPS: {
+//   1. **Local CLI** (`claude-cli`, `codex-cli`) when at least one of
+//      the binaries is detected on `$PATH` AND the user is signed in
+//      via the CLI's own login flow. This is the only vendor-sanctioned
+//      way to use a Pro/Max/Plus subscription with Conclave: the
+//      official CLI binary makes the request under the user's own
+//      account.
+//   2. **API key** (`anthropic`, `openai`, `openrouter`) — the
+//      contractually sanctioned developer path, paid per-use.
+//   3. **Subscriptions / OAuth** (`anthropic-oauth`, `openai-oauth`) —
+//      reuses the Claude Code / Codex CLI client_id from inside
+//      Conclave. Not vendor-supported; rendered last with an
+//      "unofficial" disclaimer.
+//
+// When neither CLI binary is detected, the Local CLI group still
+// appears (so the user knows the option exists and how to enable it),
+// but in second position with install hints instead of clickable
+// tiles, and the "Recommended" chip stays on the API key group.
+//
+// On-device providers (Ollama, Apple Intelligence) are *not* listed
+// here: they're surfaced through dedicated notes rendered alongside
+// the picker and active-provider views, because they don't have a
+// "connect" step the user has to walk through.
+
+export type PickerGroup = {
   titleKey: string;
   captionKey?: string;
   ids: ProviderId[];
-}[] = [
-  {
+};
+
+type GroupInputProvider = {
+  id: string;
+  configured?: boolean;
+  available?: boolean;
+};
+
+/**
+ * Resolve the order of the picker groups (and which copy variant to
+ * use for the Local CLI caption) given the current backend
+ * `ProviderInfo` list.
+ */
+export function buildPickerGroups(providers: GroupInputProvider[]): PickerGroup[] {
+  const cliAvailable = providers.some(
+    (p) => isLocalCli(p.id) && p.configured && p.available,
+  );
+  const cliGroup: PickerGroup = {
+    titleKey: "settings.picker_group_cli",
+    captionKey: cliAvailable
+      ? "settings.picker_group_cli_caption"
+      : "settings.picker_group_cli_caption_not_installed",
+    ids: ["claude-cli", "codex-cli"],
+  };
+  const apiGroup: PickerGroup = {
     titleKey: "settings.picker_group_api",
     captionKey: "settings.picker_group_api_caption",
     ids: ["anthropic", "openai", "openrouter"],
-  },
-  {
+  };
+  const oauthGroup: PickerGroup = {
     titleKey: "settings.picker_group_oauth",
     captionKey: "settings.picker_group_oauth_caption",
     ids: ["anthropic-oauth", "openai-oauth"],
-  },
-];
+  };
+  return cliAvailable
+    ? [cliGroup, apiGroup, oauthGroup]
+    : [apiGroup, cliGroup, oauthGroup];
+}
+
+/**
+ * `true` when the picker should pin the "Recomendado" chip to the
+ * first signed-in CLI provider rather than to the API key tile. We
+ * recompute this each render because the user can sign into the CLI
+ * (or sign out) outside of Conclave during the session.
+ */
+export function shouldRecommendCli(providers: GroupInputProvider[]): boolean {
+  return providers.some((p) => isLocalCli(p.id) && p.configured && p.available);
+}
 
 // Convenience: which provider ids use the (unofficial) subscription
 // OAuth path. The UI uses this to render disclaimer copy and route
 // auth-failure messaging.
 export function isSubscriptionOAuth(id: string): boolean {
   return id === "anthropic-oauth" || id === "openai-oauth";
+}
+
+/**
+ * `true` for the local-CLI proxy providers (vendor-sanctioned path:
+ * Conclave shells out to the user's own `claude` / `codex` binary
+ * with their own credentials).
+ */
+export function isLocalCli(id: string): boolean {
+  return id === "claude-cli" || id === "codex-cli";
 }

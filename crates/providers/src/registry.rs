@@ -8,8 +8,9 @@ use std::sync::Arc;
 
 use crate::error::ProviderError;
 use crate::{
-    secrets, AnthropicOAuthProvider, AnthropicProvider, AppleIntelligenceProvider, LlmProvider,
-    OllamaProvider, OpenAIOAuthProvider, OpenAiProvider, OpenRouterProvider,
+    secrets, AnthropicOAuthProvider, AnthropicProvider, AppleIntelligenceProvider,
+    ClaudeCliProvider, CodexCliProvider, LlmProvider, OllamaProvider, OpenAIOAuthProvider,
+    OpenAiProvider, OpenRouterProvider,
 };
 
 /// API-key + local providers. Listed in the order the UI groups them:
@@ -22,6 +23,14 @@ pub const KNOWN_PROVIDERS: &[&str] = &[
     "ollama",
     "apple-intelligence",
 ];
+
+/// Local-CLI providers — proxied through the user's own binaries.
+///
+/// Surfaced separately from [`KNOWN_PROVIDERS`] so the UI can render
+/// them with their own detection logic ("is the binary on `$PATH`?" /
+/// "is the user logged in?") and the build-provider switch can branch
+/// on them without an api-key lookup.
+pub const CLI_PROVIDERS: &[&str] = &["claude-cli", "codex-cli"];
 
 /// OAuth (subscription-based) providers. Experimental.
 pub const OAUTH_PROVIDERS: &[&str] = &["anthropic-oauth", "openai-oauth"];
@@ -81,6 +90,15 @@ impl ProviderRegistry {
         if let Ok(p) = OpenAIOAuthProvider::from_default_location() {
             me.inner.insert("openai-oauth", Arc::new(p));
         }
+        // Local CLI providers — register unconditionally; the
+        // provider itself reports availability at call time by
+        // checking `$PATH` for `claude` / `codex`. This matches the
+        // ollama / apple-intelligence pattern and lets the UI surface
+        // a "not installed" hint without a separate detection round.
+        me.inner
+            .insert("claude-cli", Arc::new(ClaudeCliProvider::new()));
+        me.inner
+            .insert("codex-cli", Arc::new(CodexCliProvider::new()));
         Ok(me)
     }
 

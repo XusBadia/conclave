@@ -37,7 +37,16 @@ rand = { workspace = true }
 sha2 = { workspace = true }
 chrono = { workspace = true }
 open = { workspace = true }
-tokio = { workspace = true }
+# `process` feature added on top of the workspace's tokio so the local
+# CLI providers (claude-cli, codex-cli) can shell out via
+# `tokio::process::Command`.
+tokio = { workspace = true, features = ["process"] }
+
+# Local CLI providers (claude-cli, codex-cli) — resolve `claude` and
+# `codex` binaries in `$PATH` and run them in a scratch working
+# directory to keep CLAUDE.md / AGENTS.md from leaking into prompts.
+which = "7"
+tempfile = { workspace = true }
 
 [dev-dependencies]
 toml = { workspace = true }

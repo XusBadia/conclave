@@ -57,6 +57,8 @@ use async_trait::async_trait;
 mod anthropic_api;
 mod anthropic_oauth;
 mod apple_intelligence;
+mod claude_cli;
+mod codex_cli;
 mod error;
 mod mock;
 mod oauth_flow;
@@ -74,6 +76,14 @@ pub use apple_intelligence::{
     AppleIntelligenceProvider, Availability as AppleIntelligenceAvailability,
     DEFAULT_MODEL_LABEL as APPLE_INTELLIGENCE_MODEL_LABEL,
 };
+pub use claude_cli::{
+    ClaudeCliProvider, DEFAULT_MODEL as CLAUDE_CLI_DEFAULT_MODEL,
+    PROVIDER_ID as CLAUDE_CLI_PROVIDER_ID,
+};
+pub use codex_cli::{
+    CodexCliProvider, DEFAULT_MODEL as CODEX_CLI_DEFAULT_MODEL,
+    PROVIDER_ID as CODEX_CLI_PROVIDER_ID,
+};
 pub use error::ProviderError;
 pub use mock::MockProvider;
 pub use oauth_flow::{
@@ -84,7 +94,7 @@ pub use ollama_local::OllamaProvider;
 pub use openai_api::OpenAiProvider;
 pub use openai_oauth::OpenAIOAuthProvider;
 pub use openrouter_api::OpenRouterProvider;
-pub use registry::{ProviderRegistry, KNOWN_PROVIDERS, OAUTH_PROVIDERS};
+pub use registry::{ProviderRegistry, CLI_PROVIDERS, KNOWN_PROVIDERS, OAUTH_PROVIDERS};
 pub use types::{
     CompletionRequest, CompletionResponse, ImageInput, Message, MessageRole, ProviderCapabilities,
     ProviderScope, Usage, WebCitation,
