@@ -29,6 +29,7 @@ import {
   BRAND_HOVER,
   BRAND_TINT,
   PICKER_GROUPS,
+  isSubscriptionOAuth,
   metaFor,
   type ProviderMeta,
 } from "../lib/providers";
@@ -298,12 +299,11 @@ export function SettingsPage() {
         />
         <CardBody className="space-y-4">
           {error && (
-            <div
-              role="alert"
-              className="animate-in rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-[13px] text-danger"
-            >
-              {error}
-            </div>
+            <ProviderErrorBanner
+              error={error}
+              activeProviderId={active?.id ?? null}
+              activeProviderName={active ? metaFor(active.id).name : null}
+            />
           )}
 
           {flow.kind !== "idle" ? (
@@ -504,29 +504,42 @@ function ProviderPicker({
 
   return (
     <div className="space-y-5 animate-in">
-      {PICKER_GROUPS.map((group) => (
-        <div key={group.titleKey}>
-          <div className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.08em] text-ink-faint">
-            <span>{t(group.titleKey)}</span>
-            <span className="h-px flex-1 bg-border-subtle" />
+      {PICKER_GROUPS.map((group) => {
+        const isOAuthGroup = group.titleKey === "settings.picker_group_oauth";
+        return (
+          <div key={group.titleKey}>
+            <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.08em] text-ink-faint">
+              <span>{t(group.titleKey)}</span>
+              <span className="h-px flex-1 bg-border-subtle" />
+            </div>
+            {group.captionKey && (
+              <p
+                className={cn(
+                  "mb-2 mt-1 text-[11.5px] leading-relaxed",
+                  isOAuthGroup ? "text-warn/90" : "text-ink-faint",
+                )}
+              >
+                {t(group.captionKey)}
+              </p>
+            )}
+            <div className={cn("grid grid-cols-1 gap-2 sm:grid-cols-2", !group.captionKey && "mt-2") }>
+              {group.ids.map((id) => {
+                const info = providers.find((p) => p.id === id);
+                if (!info) return null;
+                return (
+                  <PickerTile
+                    key={id}
+                    provider={info}
+                    meta={metaFor(id)}
+                    disabled={busy}
+                    onPick={() => onPick(id)}
+                  />
+                );
+              })}
+            </div>
           </div>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {group.ids.map((id) => {
-              const info = providers.find((p) => p.id === id);
-              if (!info) return null;
-              return (
-                <PickerTile
-                  key={id}
-                  provider={info}
-                  meta={metaFor(id)}
-                  disabled={busy}
-                  onPick={() => onPick(id)}
-                />
-              );
-            })}
-          </div>
-        </div>
-      ))}
+        );
+      })}
 
       <OllamaNote available={ollamaAvailable} />
       <AppleIntelligenceNote
@@ -689,6 +702,7 @@ function ActiveProviderView({
 }) {
   const { t } = useTranslation();
   const meta = metaFor(provider.id);
+  const unofficial = isSubscriptionOAuth(provider.id);
   return (
     <div className="space-y-4 animate-in">
       <div className="rounded-xl border border-border-strong bg-bg-elevated p-5 shadow-soft">
@@ -714,6 +728,14 @@ function ActiveProviderView({
                   ? t("settings.status_reachable")
                   : t("settings.status_unreachable")}
               </span>
+              {unofficial && (
+                <span
+                  className="rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-warn"
+                  title={t("settings.oauth_active_caption")}
+                >
+                  {t("settings.oauth_unofficial_badge")}
+                </span>
+              )}
             </div>
             <div className="mt-1 text-[13px] text-ink-subtle">
               {meta.tagline}
@@ -732,6 +754,11 @@ function ActiveProviderView({
               {" · "}
               <span>{meta.authLabel}</span>
             </div>
+            {unofficial && (
+              <p className="mt-2 text-[11.5px] leading-relaxed text-warn/90">
+                {t("settings.oauth_active_caption")}
+              </p>
+            )}
           </div>
         </div>
 
@@ -933,6 +960,7 @@ function AnthropicOAuthFlow({
       }}
       className="space-y-3"
     >
+      <OAuthDisclaimerBanner />
       <div className="flex items-start gap-2 border border-border bg-surface p-3 text-[12px] leading-relaxed text-ink-dim">
         <span className="mt-0.5 text-ink-subtle">
           <IconInfoCircle size={16} stroke={1.5} />
@@ -986,6 +1014,7 @@ function OpenAIOAuthFlow({ url }: { url: string }) {
 
   return (
     <div className="space-y-3">
+      <OAuthDisclaimerBanner />
       <div className="flex items-center gap-3">
         <span className="inline-flex items-center gap-1.5">
           <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulseDot" />
@@ -1142,6 +1171,77 @@ function MigrationDialog({
 // ===========================================================================
 // Small visual building blocks
 // ===========================================================================
+
+// Warning banner shown at the top of every OAuth flow (Anthropic /
+// OpenAI subscription sign-in). The OAuth path reuses the official CLI
+// client_id and is not a vendor-supported integration — access can be
+// revoked at any time. We surface that upfront so the user accepts the
+// trade-off knowingly.
+function OAuthDisclaimerBanner() {
+  const { t } = useTranslation();
+  return (
+    <div
+      role="note"
+      className="flex items-start gap-2 rounded-lg border border-warn/40 bg-warn/10 p-3 text-[12px] leading-relaxed text-warn"
+    >
+      <span className="mt-0.5 shrink-0">
+        <IconInfoCircle size={16} stroke={1.5} />
+      </span>
+      <span className="text-warn/90">{t("settings.oauth_flow_disclaimer")}</span>
+    </div>
+  );
+}
+
+// Heuristic match for auth-revoked errors coming back from the Rust
+// provider layer. `ProviderError::Auth` renders as "authentication
+// failed" on the wire today; we also tolerate vendor-side variants in
+// case the message is ever passed through unmodified.
+function isAuthError(message: string): boolean {
+  const m = message.toLowerCase();
+  return (
+    m.includes("authentication failed") ||
+    m.includes("unauthorized") ||
+    m.includes("401") ||
+    m.includes("403")
+  );
+}
+
+// Error banner shown in the AI card. When the active provider is the
+// unofficial subscription OAuth and the failure looks like an auth
+// revocation, we replace the raw error with a friendlier prompt that
+// nudges the user to reconnect or switch to an API key.
+function ProviderErrorBanner({
+  error,
+  activeProviderId,
+  activeProviderName,
+}: {
+  error: string;
+  activeProviderId: string | null;
+  activeProviderName: string | null;
+}) {
+  const { t } = useTranslation();
+  const showOAuthHint =
+    activeProviderId !== null &&
+    activeProviderName !== null &&
+    isSubscriptionOAuth(activeProviderId) &&
+    isAuthError(error);
+  return (
+    <div
+      role="alert"
+      className="animate-in rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-[13px] text-danger"
+    >
+      {showOAuthHint ? (
+        <div className="space-y-1">
+          <p>{t("settings.oauth_error_revoked", { name: activeProviderName })}</p>
+          <p className="font-mono text-[11px] text-danger/80">{error}</p>
+        </div>
+      ) : (
+        error
+      )}
+    </div>
+  );
+}
+
 function Monogram({
   meta,
   size,

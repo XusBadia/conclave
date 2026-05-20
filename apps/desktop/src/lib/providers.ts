@@ -46,7 +46,6 @@ export const PROVIDER_META: Record<string, ProviderMeta> = {
     authLabel: "OAuth",
     monogram: "C",
     brand: "amber",
-    recommended: true,
   },
   "openai-oauth": {
     id: "openai-oauth",
@@ -63,6 +62,7 @@ export const PROVIDER_META: Record<string, ProviderMeta> = {
     authLabel: "API key",
     monogram: "A",
     brand: "amber",
+    recommended: true,
   },
   openai: {
     id: "openai",
@@ -166,21 +166,38 @@ export const BRAND_HOVER: Record<ProviderMeta["brand"], string> = {
   slate: "hover:border-slate-400/40",
 };
 
-// Display order in the picker grid. OAuth (subscription) first because that's
-// the friendliest onboarding path — no API keys required. Group titles are
-// expressed as i18n keys so the UI stays locale-aware.
+// Display order in the picker grid. API keys first because that's the
+// contractually sanctioned path — stable, fully supported by the
+// vendors, and unaffected by enforcement actions against unofficial
+// CLI-OAuth reuse. Subscription OAuth is offered as a secondary
+// convenience with an explicit "may be revoked" disclaimer in the UI.
+// Group titles and captions are expressed as i18n keys so the UI
+// stays locale-aware.
 //
 // On-device providers (Ollama, Apple Intelligence) are *not* listed here:
 // they're surfaced through dedicated notes rendered alongside the picker and
 // active-provider views, because they don't have a "connect" step the user
 // has to walk through.
-export const PICKER_GROUPS: { titleKey: string; ids: ProviderId[] }[] = [
-  {
-    titleKey: "settings.picker_group_oauth",
-    ids: ["anthropic-oauth", "openai-oauth"],
-  },
+export const PICKER_GROUPS: {
+  titleKey: string;
+  captionKey?: string;
+  ids: ProviderId[];
+}[] = [
   {
     titleKey: "settings.picker_group_api",
+    captionKey: "settings.picker_group_api_caption",
     ids: ["anthropic", "openai", "openrouter"],
   },
+  {
+    titleKey: "settings.picker_group_oauth",
+    captionKey: "settings.picker_group_oauth_caption",
+    ids: ["anthropic-oauth", "openai-oauth"],
+  },
 ];
+
+// Convenience: which provider ids use the (unofficial) subscription
+// OAuth path. The UI uses this to render disclaimer copy and route
+// auth-failure messaging.
+export function isSubscriptionOAuth(id: string): boolean {
+  return id === "anthropic-oauth" || id === "openai-oauth";
+}
