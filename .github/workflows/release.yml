@@ -1,8 +1,18 @@
 name: release
 
-# Only fires when a `vX.Y.Z` tag is pushed (or manually from the GitHub UI).
-# Day-to-day verification (fmt/clippy/test/frontend build) runs locally via
-# the `.githooks/pre-commit` hook — see README → "Local verification".
+# Fires when a `vX.Y.Z` tag is pushed (or manually from the GitHub UI against
+# a tag). Day-to-day verification (fmt/clippy/test/frontend build) runs locally
+# via the `.githooks/pre-commit` hook — see README → "Local verification".
+#
+# What it produces:
+#   - A *draft* GitHub Release named after the tag with the Tauri installers
+#     attached:
+#       * macOS (Apple Silicon) — `.dmg`
+#       * Windows — `.msi`
+#       * Linux — `.deb` + `.AppImage`
+#     You publish manually from the Releases page after sanity-checking.
+#   - Workflow artifacts containing `conclave-cli` binaries per platform
+#     (not attached to the public Release; download from the workflow run).
 on:
   push:
     tags:
@@ -21,8 +31,130 @@ env:
   RUST_BACKTRACE: short
 
 jobs:
-  build:
-    name: build / ${{ matrix.os }}
+  create-release:
+    name: create draft release
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create.outputs.release_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: create draft release
+        id: create
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = context.ref.replace('refs/tags/', '');
+            const { data } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tag,
+              name: `Conclave ${tag}`,
+              body: [
+                '## Install',
+                '',
+                '- **macOS (Apple Silicon — M1/M2/M3/M4)**: download the `.dmg`, open it,',
+                '  drag `Conclave.app` to Applications. First launch is blocked by Gatekeeper',
+                '  because the app is not yet signed by Apple. Workaround: open System',
+                '  Settings → Privacy & Security and click "Open Anyway" for Conclave.',
+                '  Signing/notarisation lands when we enrol in the Apple Developer Program.',
+                '  Intel Macs are not supported in this release.',
+                '- **Windows**: download the `.msi` and run it.',
+                '- **Linux**: download the `.deb` (Debian/Ubuntu) or `.AppImage` (any distro).',
+                '',
+                '## Disclaimer',
+                '',
+                'Conclave is a decision-support tool, not a medical device. See',
+                '[DISCLAIMER.md](https://github.com/XusBadia/conclave/blob/main/DISCLAIMER.md).',
+              ].join('\n'),
+              draft: true,
+              prerelease: false,
+            });
+            core.setOutput('release_id', data.id);
+
+  build-tauri:
+    name: tauri / ${{ matrix.platform.name }}
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          # Apple Silicon only. ONNX Runtime (pulled in via fastembed) stopped
+          # shipping x86_64-apple-darwin prebuilt binaries with ort 2.x, so a
+          # universal build is not currently feasible without compiling ORT
+          # from source. Intel Macs (≤ 2020) are excluded from this release.
+          - name: macos-arm64
+            os: macos-latest
+            rust-targets: aarch64-apple-darwin
+            tauri-args: --target aarch64-apple-darwin
+          - name: linux-x64
+            os: ubuntu-22.04
+            rust-targets: ""
+            tauri-args: ""
+          - name: windows-x64
+            os: windows-latest
+            rust-targets: ""
+            tauri-args: ""
+    runs-on: ${{ matrix.platform.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # `protoc` is required by `lance-encoding`, a transitive dep of lancedb.
+      - name: install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform.rust-targets }}
+
+      - name: install pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 10
+
+      - name: setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+
+      # Tauri needs WebKitGTK + GTK headers + librsvg + patchelf to bundle on
+      # Linux. Pin Ubuntu 22.04 so the resulting AppImage's glibc requirement
+      # stays compatible with older distros.
+      - name: install Linux bundler deps
+        if: matrix.platform.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: install frontend deps
+        run: pnpm install --frozen-lockfile
+        working-directory: apps/desktop
+
+      - name: cache cargo (tauri build)
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: tauri-${{ matrix.platform.name }}
+
+      - name: build & upload Tauri bundles
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          projectPath: apps/desktop
+          args: ${{ matrix.platform.tauri-args }}
+
+  build-cli:
+    name: cli / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -31,19 +163,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # `protoc` is required by `lance-encoding`, a transitive dep of lancedb.
-      - name: Install protoc
+      - name: install protoc
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Cache cargo registry and target
+      - name: cache cargo (cli build)
         uses: Swatinem/rust-cache@v2
         with:
-          key: release-build-${{ matrix.os }}
+          key: cli-${{ matrix.os }}
 
-      - name: cargo build --release
-        run: cargo build --workspace --release --locked
+      - name: cargo build --release -p conclave-cli
+        run: cargo build --release --locked -p conclave-cli
 
       - name: conclave-cli --help (smoke test)
         shell: bash
@@ -55,7 +186,7 @@ jobs:
             ./target/release/conclave-cli --help
           fi
 
-      - name: Upload conclave-cli binary
+      - name: upload conclave-cli binary
         uses: actions/upload-artifact@v4
         with:
           name: conclave-cli-${{ matrix.os }}

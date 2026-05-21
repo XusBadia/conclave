@@ -8,7 +8,7 @@
     "devUrl": "http://localhost:1420",
     "beforeDevCommand": "pnpm dev",
     "beforeBuildCommand": "pnpm build",
-    "beforeBundleCommand": "if [ \"$(uname)\" = Darwin ]; then install_name_tool -change @rpath/libswift_Concurrency.dylib /usr/lib/swift/libswift_Concurrency.dylib ../../target/release/conclave-desktop 2>/dev/null || true; fi"
+    "beforeBundleCommand": "if [ \"$(uname)\" = Darwin ]; then for bin in ../../target/release/conclave-desktop ../../target/universal-apple-darwin/release/conclave-desktop ../../target/aarch64-apple-darwin/release/conclave-desktop ../../target/x86_64-apple-darwin/release/conclave-desktop; do [ -f \"$bin\" ] && install_name_tool -change @rpath/libswift_Concurrency.dylib /usr/lib/swift/libswift_Concurrency.dylib \"$bin\" 2>/dev/null || true; done; fi"
   },
   "app": {
     "windows": [
