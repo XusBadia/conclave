@@ -3576,7 +3576,7 @@ function DeliberationOverlay({
       role="dialog"
       aria-modal="true"
       aria-label={t("cases.deliberation_overlay_title")}
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/55 backdrop-blur-[2px] px-4 pb-4 pt-14"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/55 backdrop-blur-[2px] px-4 py-10"
     >
       <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-border bg-bg-elevated shadow-soft">
         <header className="border-b border-border-subtle px-5 py-4">
