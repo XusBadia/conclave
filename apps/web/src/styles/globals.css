@@ -65,14 +65,18 @@
   --radius-pill: 9999px;
   --radius-full: 9999px;
 
-  /* Reduced motion-friendly easings. */
-  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-in-out-quad: cubic-bezier(0.45, 0, 0.55, 1);
+  /* Easings — entries lean confident, hovers stay quick. */
+  --ease-out-expo: cubic-bezier(0.19, 1, 0.22, 1);
+  --ease-out-quart: cubic-bezier(0.165, 0.84, 0.44, 1);
+  --ease-out-cubic: cubic-bezier(0.215, 0.61, 0.355, 1);
+  --ease-in-out-quart: cubic-bezier(0.77, 0, 0.175, 1);
 
   /* Animations */
   --animate-fade-in: fade-in 0.6s var(--ease-out-expo) both;
   --animate-rise: rise 0.7s var(--ease-out-expo) both;
-  --animate-pulse-dot: pulse-dot 1.4s var(--ease-in-out-quad) infinite;
+  --animate-pulse-dot: pulse-dot 1.4s var(--ease-in-out-quart) infinite;
+  --animate-hero-rise: hero-rise 0.9s var(--ease-out-expo) both;
+  --animate-mockup-float: mockup-float 6s var(--ease-in-out-quart) infinite;
 }
 
 @keyframes fade-in {
@@ -102,6 +106,97 @@
   }
   50% {
     opacity: 1;
+  }
+}
+
+@keyframes hero-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes mockup-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Scroll reveal — opt-in via [data-reveal] on any element. The Reveal
+ * component (src/components/Reveal.tsx) flips data-revealed="true" when the
+ * element enters the viewport via IntersectionObserver. Delay is read from
+ * the inline --reveal-delay custom property so the same component can
+ * stagger lists by passing index * 80ms.
+ * ------------------------------------------------------------------------ */
+
+/* Only hide elements when JS is ready — no-JS visitors see content normally. */
+[data-js="ready"] [data-reveal] {
+  opacity: 0;
+  transform: translateY(18px);
+  transition:
+    opacity 0.7s var(--ease-out-expo) var(--reveal-delay, 0ms),
+    transform 0.7s var(--ease-out-expo) var(--reveal-delay, 0ms);
+  will-change: transform, opacity;
+}
+
+[data-js="ready"] [data-reveal][data-revealed="true"] {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Hero entrance — runs on mount, no observer needed (above the fold). */
+.hero-rise {
+  animation: var(--animate-hero-rise);
+}
+
+/* Floating mockup. Only animates if user has not opted out of motion. */
+.mockup-float {
+  animation: var(--animate-mockup-float);
+  will-change: transform;
+}
+
+/* ---------------------------------------------------------------------------
+ * Native <details> accordion animation — uses the grid-template-rows trick
+ * (0fr ↔ 1fr) so height interpolates smoothly without measuring layout in
+ * JS. Works in all current browsers, preserves all native a11y of <details>.
+ * ------------------------------------------------------------------------ */
+
+details > .accordion-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.38s var(--ease-out-quart);
+}
+
+details[open] > .accordion-body {
+  grid-template-rows: 1fr;
+}
+
+details > .accordion-body > .accordion-inner {
+  overflow: hidden;
+}
+
+/* Honor prefers-reduced-motion globally — once here, no per-component checks. */
+@media (prefers-reduced-motion: reduce) {
+  [data-reveal] {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+  .hero-rise,
+  .mockup-float {
+    animation: none;
+  }
+  details > .accordion-body {
+    transition: none;
   }
 }
 
@@ -136,10 +231,19 @@ html {
 
 html,
 body {
-  height: 100%;
   margin: 0;
   background: var(--color-paper);
   color: var(--color-ink);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
 }
 
 body {

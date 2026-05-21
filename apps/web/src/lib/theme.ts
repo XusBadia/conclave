@@ -18,6 +18,10 @@ export const themeScript = `(() => {
   } catch (_) {
     /* localStorage might be unavailable (private mode, embedded WebView, etc.) */
   }
+  /* Mark JS as ready so reveal styles can hide content until the
+   * IntersectionObserver brings it back. Without this flag, no-JS visitors
+   * would see a blank page. */
+  document.documentElement.dataset.js = 'ready';
 })();`;
 
 export type ThemeMode = "light" | "dark" | "auto";

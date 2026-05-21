@@ -10,30 +10,53 @@ export function Hero() {
     <section className="relative overflow-hidden">
       <div className="mx-auto grid max-w-[1200px] grid-cols-1 items-center gap-12 px-6 py-20 sm:px-8 sm:py-28 lg:grid-cols-[1.05fr_1fr] lg:gap-16 lg:py-36">
         <div className="relative z-10">
-          <p className="font-mono text-[11px] uppercase tracking-widest text-ink-subtle">
+          <p
+            className="hero-rise font-mono text-[11px] uppercase tracking-widest text-ink-subtle"
+            style={{ animationDelay: "0ms" }}
+          >
             {t("eyebrow")}
           </p>
-          <h1 className="mt-7 font-sans text-display font-medium leading-[0.95] tracking-tighter text-ink">
+          <h1
+            className="hero-rise mt-7 font-sans text-display font-medium leading-[0.95] tracking-tighter text-ink"
+            style={{ animationDelay: "100ms" }}
+          >
             <span className="block">{t("h1Line1")}</span>
             <span className="block text-ink-subtle">{t("h1Line2")}</span>
           </h1>
-          <p className="mt-7 max-w-[42ch] text-[17px] leading-[1.55] text-ink-dim">
+          <p
+            className="hero-rise mt-7 max-w-[42ch] text-[17px] leading-[1.55] text-ink-dim"
+            style={{ animationDelay: "220ms" }}
+          >
             {t("dek")}
           </p>
-          <div className="mt-10 flex flex-wrap items-center gap-3">
+          <div
+            className="hero-rise mt-10 flex flex-wrap items-center gap-3"
+            style={{ animationDelay: "340ms" }}
+          >
             <DownloadButton variant="primary" size="lg" />
             <a
               href={downloads.source}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex h-12 items-center px-5 font-mono text-[13px] tracking-tight text-ink hover:text-ink-dim transition-colors duration-200"
+              className="group inline-flex h-12 items-center gap-2 px-5 font-mono text-[13px] tracking-tight text-ink hover:text-ink-dim transition-colors duration-200"
             >
-              {t("ctaSecondary")} ↗
+              {t("ctaSecondary")}
+              <span
+                aria-hidden
+                className="inline-block transition-transform duration-200 ease-out group-hover:translate-x-0.5 group-hover:-translate-y-0.5"
+              >
+                ↗
+              </span>
             </a>
           </div>
         </div>
-        <div className="relative">
-          <HeroMockup />
+        <div
+          className="hero-rise relative"
+          style={{ animationDelay: "180ms" }}
+        >
+          <div className="mockup-float">
+            <HeroMockup />
+          </div>
           {/* Floating mark behind mockup */}
           <div
             aria-hidden

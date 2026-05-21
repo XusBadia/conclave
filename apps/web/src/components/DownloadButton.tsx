@@ -42,7 +42,7 @@ export function DownloadButton({
     : t("ctaPrimary");
 
   const base =
-    "inline-flex items-center justify-center gap-2 font-mono text-[13px] tracking-tight transition-colors duration-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
+    "group inline-flex items-center justify-center gap-2 font-mono text-[13px] tracking-tight transition-[background-color,color,border-color,transform] duration-200 ease-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent active:scale-[0.98]";
   const sizes: Record<string, string> = {
     sm: "h-9 px-4",
     md: "h-11 px-5",
@@ -65,7 +65,12 @@ export function DownloadButton({
       )}
     >
       <span>{label}</span>
-      <ArrowIcon />
+      <span
+        aria-hidden
+        className="inline-flex transition-transform duration-200 ease-out group-hover:translate-x-0.5"
+      >
+        <ArrowIcon />
+      </span>
     </a>
   );
 }

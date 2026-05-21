@@ -1,5 +1,6 @@
 import { useTranslations } from "next-intl";
 import { DownloadButton } from "./DownloadButton";
+import { Reveal } from "./Reveal";
 import { SectionEyebrow } from "./SectionEyebrow";
 import { downloads, RELEASES_AVAILABLE } from "~/lib/downloads";
 
@@ -12,36 +13,52 @@ export function DownloadSection() {
       className="relative overflow-hidden border-t border-hairline py-24 sm:py-32 scroll-mt-20"
     >
       <div className="mx-auto max-w-[1200px] px-6 sm:px-8">
-        <SectionEyebrow>{t("eyebrow")}</SectionEyebrow>
-        <h2 className="mt-4 max-w-[22ch] font-sans text-display-2 font-medium leading-[1] tracking-tighter text-ink">
-          {t("title")}
-        </h2>
-        <p className="mt-5 max-w-[58ch] text-[17px] leading-[1.55] text-ink-dim">
-          {t("subtitle")}
-        </p>
-
-        <div className="mt-12 flex flex-wrap items-center gap-3">
-          <DownloadButton variant="primary" size="lg" />
-          <a
-            href={downloads.source}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex h-12 items-center px-5 border border-ink/15 hover:border-ink/40 hover:bg-paper-subtle dark:border-ink/20 dark:hover:border-ink/50 font-mono text-[13px] tracking-tight text-ink transition-colors duration-200"
-          >
-            {t("ctaSecondary")} ↗
-          </a>
-        </div>
-
-        <div className="mt-10 max-w-[58ch]">
-          <p className="font-mono text-[11px] uppercase tracking-widest text-ink-subtle">
-            {t("requirements.title")}
+        <Reveal>
+          <SectionEyebrow>{t("eyebrow")}</SectionEyebrow>
+        </Reveal>
+        <Reveal delay={80}>
+          <h2 className="mt-4 max-w-[22ch] font-sans text-display-2 font-medium leading-[1] tracking-tighter text-ink">
+            {t("title")}
+          </h2>
+        </Reveal>
+        <Reveal delay={160}>
+          <p className="mt-5 max-w-[58ch] text-[17px] leading-[1.55] text-ink-dim">
+            {t("subtitle")}
           </p>
-          <ul className="mt-3 space-y-1.5 font-mono text-[12.5px] leading-[1.6] text-ink-dim">
-            <li>{t("requirements.macos")}</li>
-            <li>{t("requirements.ai")}</li>
-            <li>{t("requirements.other")}</li>
-          </ul>
-        </div>
+        </Reveal>
+
+        <Reveal delay={240}>
+          <div className="mt-12 flex flex-wrap items-center gap-3">
+            <DownloadButton variant="primary" size="lg" />
+            <a
+              href={downloads.source}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="group inline-flex h-12 items-center gap-2 px-5 border border-ink/15 hover:border-ink/40 hover:bg-paper-subtle dark:border-ink/20 dark:hover:border-ink/50 font-mono text-[13px] tracking-tight text-ink transition-colors duration-200"
+            >
+              {t("ctaSecondary")}
+              <span
+                aria-hidden
+                className="inline-block transition-transform duration-200 ease-out group-hover:translate-x-0.5 group-hover:-translate-y-0.5"
+              >
+                ↗
+              </span>
+            </a>
+          </div>
+        </Reveal>
+
+        <Reveal delay={320}>
+          <div className="mt-10 max-w-[58ch]">
+            <p className="font-mono text-[11px] uppercase tracking-widest text-ink-subtle">
+              {t("requirements.title")}
+            </p>
+            <ul className="mt-3 space-y-1.5 font-mono text-[12.5px] leading-[1.6] text-ink-dim">
+              <li>{t("requirements.macos")}</li>
+              <li>{t("requirements.ai")}</li>
+              <li>{t("requirements.other")}</li>
+            </ul>
+          </div>
+        </Reveal>
 
         {RELEASES_AVAILABLE && (
           <div className="mt-10 inline-flex flex-wrap gap-2 font-mono text-[12px] uppercase tracking-widest text-ink-subtle">
@@ -53,9 +70,11 @@ export function DownloadSection() {
           </div>
         )}
 
-        <p className="mt-10 max-w-[52ch] font-mono text-[12.5px] leading-[1.6] text-ink-subtle">
-          {t("footnote")}
-        </p>
+        <Reveal delay={400}>
+          <p className="mt-10 max-w-[52ch] font-mono text-[12.5px] leading-[1.6] text-ink-subtle">
+            {t("footnote")}
+          </p>
+        </Reveal>
       </div>
 
       {/* Background mark */}
