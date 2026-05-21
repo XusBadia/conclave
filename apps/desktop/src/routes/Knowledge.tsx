@@ -563,7 +563,12 @@ export function KnowledgePage({ workspace }: { workspace: Workspace }) {
             <div className="space-y-3">
               {askParts.disclaimer && (
                 <div className="flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 px-2.5 py-1.5 text-[11px] leading-snug text-warn">
-                  <span aria-hidden>⚠️</span>
+                  <IconAlertTriangle
+                    size={13}
+                    stroke={1.7}
+                    aria-hidden
+                    className="mt-0.5 shrink-0"
+                  />
                   <span>{askParts.disclaimer}</span>
                 </div>
               )}

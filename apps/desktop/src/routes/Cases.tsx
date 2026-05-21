@@ -7,10 +7,18 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  IconAlertTriangle,
   IconCheck,
+  IconChevronDown,
+  IconChevronRight,
+  IconClipboardCheck,
   IconCopy,
+  IconGripVertical,
   IconLock,
+  IconPencil,
   IconRefresh,
+  IconShield,
+  IconStethoscope,
   IconTrash,
   IconX,
 } from "@tabler/icons-react";
@@ -1056,7 +1064,7 @@ export function CasesPage({
             aria-label={t("common.dismiss")}
             className="shrink-0 rounded p-0.5 text-danger/70 transition hover:bg-danger/10 hover:text-danger"
           >
-            ✕
+            <IconX size={14} stroke={1.7} aria-hidden />
           </button>
         </div>
       )}
@@ -2329,7 +2337,7 @@ function NewCaseAttachments({
                   aria-label={t("cases.attachment_remove")}
                   title={t("cases.attachment_remove")}
                 >
-                  ✕
+                  <IconX size={14} stroke={1.7} aria-hidden />
                 </button>
               </li>
             ))}
@@ -2460,7 +2468,16 @@ function CaseAttachmentsSection({
   );
 }
 
-function VerdictRenderer({ verdict }: { verdict: Verdict }) {
+function VerdictRenderer({
+  verdict,
+  compact = false,
+}: {
+  verdict: Verdict;
+  /** When `true`, skip the final disclaimer block. Used when the renderer
+   *  is embedded inside a deliberation phase view where the same
+   *  disclaimer is already shown on the parent case page. */
+  compact?: boolean;
+}) {
   const { t } = useTranslation();
   const certaintyColor =
     verdict.certainty_level === "high"
@@ -2567,9 +2584,15 @@ function VerdictRenderer({ verdict }: { verdict: Verdict }) {
             {verdict.red_flags.map((rf, i) => (
               <li
                 key={i}
-                className="rounded-md border border-warn/40 bg-warn/5 px-3 py-2 text-[13px] text-ink-dim"
+                className="flex items-start gap-2 rounded-md border border-warn/40 bg-warn/5 px-3 py-2 text-[13px] text-ink-dim"
               >
-                ⚠ {rf}
+                <IconAlertTriangle
+                  size={14}
+                  stroke={1.7}
+                  aria-hidden
+                  className="mt-0.5 shrink-0 text-warn"
+                />
+                <span>{rf}</span>
               </li>
             ))}
           </ul>
@@ -2616,12 +2639,14 @@ function VerdictRenderer({ verdict }: { verdict: Verdict }) {
         </section>
       )}
 
-      <section>
-        <SectionTitle>{t("cases.verdict.disclaimer")}</SectionTitle>
-        <p className="text-[12px] leading-relaxed text-ink-subtle">
-          {verdict.disclaimer}
-        </p>
-      </section>
+      {!compact && (
+        <section>
+          <SectionTitle>{t("cases.verdict.disclaimer")}</SectionTitle>
+          <p className="text-[12px] leading-relaxed text-ink-subtle">
+            {verdict.disclaimer}
+          </p>
+        </section>
+      )}
     </div>
   );
 }
@@ -2994,7 +3019,7 @@ function ClassifyDropDialog({
             aria-label={t("cases.classify_dialog_close")}
             className="rounded p-1 text-ink-faint transition hover:bg-surface hover:text-ink"
           >
-            ✕
+            <IconX size={16} stroke={1.6} aria-hidden />
           </button>
         </header>
 
@@ -3119,8 +3144,12 @@ function ClassifyDropDialog({
                 loading={busy}
                 disabled={busy}
               >
-                {t("cases.classify_dialog_run_all", { count: rows.length })}
-                {runDisabledReason ? ` ⚠` : ""}
+                <span className="inline-flex items-center gap-1.5">
+                  {t("cases.classify_dialog_run_all", { count: rows.length })}
+                  {runDisabledReason && (
+                    <IconAlertTriangle size={13} stroke={1.7} aria-hidden />
+                  )}
+                </span>
               </Button>
             </span>
           </div>
@@ -3237,7 +3266,7 @@ function ClassifyCard({
             title={t("cases.classify_dialog_remove_case")}
             className="inline-flex shrink-0 items-center gap-1 rounded-md border border-transparent px-2 py-1 text-[11.5px] font-medium text-danger/80 transition hover:border-danger/30 hover:bg-danger/10 hover:text-danger"
           >
-            <span aria-hidden>✕</span>
+            <IconX size={12} stroke={1.8} aria-hidden />
             <span>{t("cases.classify_dialog_remove_case")}</span>
           </button>
         )}
@@ -3295,9 +3324,12 @@ function ClassifyCard({
             )}
             title={busy ? path : t("cases.classify_dialog_chip_drag_hint", { path })}
           >
-            <span aria-hidden className="select-none text-ink-faint group-hover/chip:text-accent">
-              ⋮⋮
-            </span>
+            <IconGripVertical
+              size={12}
+              stroke={1.6}
+              aria-hidden
+              className="select-none text-ink-faint group-hover/chip:text-accent"
+            />
             <ClassifyFileChip path={path} />
             {!busy && (
               <button
@@ -3306,7 +3338,7 @@ function ClassifyCard({
                 aria-label={t("cases.attachment_remove")}
                 className="rounded p-0.5 text-ink-faint transition hover:bg-surface hover:text-ink"
               >
-                ✕
+                <IconX size={12} stroke={1.7} aria-hidden />
               </button>
             )}
           </li>
@@ -3470,17 +3502,111 @@ type PhaseState = {
   elapsedMs?: number;
 };
 
-function phaseIcon(phase: DeliberationPhase): string {
+function PhaseIcon({
+  phase,
+  className,
+}: {
+  phase: DeliberationPhase;
+  className?: string;
+}) {
+  const props = {
+    size: 16,
+    stroke: 1.6,
+    "aria-hidden": true,
+    className,
+  } as const;
   switch (phase) {
     case "briefing":
-      return "🩺";
+      return <IconStethoscope {...props} />;
     case "drafting":
-      return "✍️";
+      return <IconPencil {...props} />;
     case "redteam":
-      return "🛡️";
+      return <IconShield {...props} />;
     case "finalize":
-      return "📋";
+      return <IconClipboardCheck {...props} />;
   }
+}
+
+/** Strip optional ```json fences from an LLM response so it can be
+ *  fed straight to JSON.parse. Mirrors the Rust-side `strip_code_fences`
+ *  in `crates/verdict/src/validation.rs`. */
+function stripCodeFences(s: string): string {
+  const trimmed = s.trim();
+  if (trimmed.startsWith("```json")) {
+    return trimmed.slice("```json".length).trim().replace(/```$/, "").trim();
+  }
+  if (trimmed.startsWith("```")) {
+    return trimmed.slice(3).trim().replace(/```$/, "").trim();
+  }
+  return trimmed;
+}
+
+/** Best-effort parse of a phase output into a `Verdict`. Returns `null`
+ *  on any structural mismatch — caller falls back to a raw JSON block. */
+function tryParseVerdict(raw: string): Verdict | null {
+  try {
+    const parsed = JSON.parse(stripCodeFences(raw)) as Partial<Verdict>;
+    if (
+      parsed &&
+      typeof parsed.case_summary === "string" &&
+      parsed.primary_recommendation &&
+      typeof parsed.primary_recommendation.action === "string" &&
+      typeof parsed.primary_recommendation.rationale === "string" &&
+      (parsed.certainty_level === "high" ||
+        parsed.certainty_level === "medium" ||
+        parsed.certainty_level === "low") &&
+      Array.isArray(parsed.key_clinical_data) &&
+      Array.isArray(parsed.alternatives) &&
+      Array.isArray(parsed.red_flags) &&
+      Array.isArray(parsed.follow_up_triggers) &&
+      Array.isArray(parsed.applied_evidence)
+    ) {
+      return {
+        case_summary: parsed.case_summary,
+        key_clinical_data: parsed.key_clinical_data,
+        applied_evidence: parsed.applied_evidence,
+        primary_recommendation: parsed.primary_recommendation,
+        alternatives: parsed.alternatives,
+        certainty_level: parsed.certainty_level,
+        certainty_justification: parsed.certainty_justification ?? "",
+        red_flags: parsed.red_flags,
+        follow_up_triggers: parsed.follow_up_triggers,
+        disclaimer: parsed.disclaimer ?? "",
+      };
+    }
+  } catch {
+    /* fall through to null */
+  }
+  return null;
+}
+
+/** Render one phase's `output`. `drafting` and `finalize` produce JSON;
+ *  parse them and render through `VerdictRenderer` so the user sees the
+ *  structured verdict, not raw `{...}` text. `briefing` and `redteam` are
+ *  markdown — pass straight to `ReactMarkdown`. If a JSON phase fails to
+ *  parse (rare retry-then-fail path), show the raw payload in a `<pre>`
+ *  block so the underlying error is still inspectable. */
+function PhaseOutput({
+  phase,
+  output,
+}: {
+  phase: DeliberationPhase;
+  output: string;
+}) {
+  if (phase === "drafting" || phase === "finalize") {
+    const parsed = tryParseVerdict(output);
+    if (parsed) {
+      return <VerdictRenderer verdict={parsed} compact />;
+    }
+    return (
+      <pre className="max-h-[400px] overflow-auto whitespace-pre-wrap rounded-md border border-border-subtle bg-bg p-3 font-mono text-[11.5px] leading-relaxed text-ink-dim">
+        {output}
+      </pre>
+    );
+  }
+  return (
+    <ReactMarkdown remarkPlugins={[remarkGfm]}>{output}</ReactMarkdown>
+  );
 }
 
 /**
@@ -3649,7 +3775,10 @@ function DeliberationPhaseRow({
       case "done":
         return (
           <span className="flex items-center gap-1.5 rounded bg-ok/15 px-2 py-0.5 text-[10.5px] font-medium uppercase tracking-wide text-ok">
-            <span>✓ {t("cases.phase_status_done")}</span>
+            <span className="flex items-center gap-1">
+              <IconCheck size={12} stroke={2} aria-hidden />
+              {t("cases.phase_status_done")}
+            </span>
             {state.elapsedMs !== undefined && (
               <span className="font-mono text-[9.5px] text-ok/80">
                 {formatElapsed(state.elapsedMs)}
@@ -3660,7 +3789,10 @@ function DeliberationPhaseRow({
       case "failed":
         return (
           <span className="flex items-center gap-1.5 rounded bg-danger/15 px-2 py-0.5 text-[10.5px] font-medium uppercase tracking-wide text-danger">
-            <span>✗ {t("cases.phase_status_failed")}</span>
+            <span className="flex items-center gap-1">
+              <IconX size={12} stroke={2} aria-hidden />
+              {t("cases.phase_status_failed")}
+            </span>
             {state.elapsedMs !== undefined && (
               <span className="font-mono text-[9.5px] text-danger/80">
                 {formatElapsed(state.elapsedMs)}
@@ -3688,7 +3820,7 @@ function DeliberationPhaseRow({
         <span className="font-mono text-[11px] text-ink-faint">
           {index + 1}/4
         </span>
-        <span className="text-base">{phaseIcon(phase)}</span>
+        <PhaseIcon phase={phase} className="shrink-0 text-ink-subtle" />
         <div className="min-w-0 flex-1">
           <div className="text-[13.5px] font-medium text-ink">
             {t(`cases.deliberation_phase.${phase}_title`)}
@@ -3708,9 +3840,7 @@ function DeliberationPhaseRow({
           )}
           {state.output && (
             <div className="prose-conclave max-h-[360px] overflow-auto text-[12.5px]">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {state.output}
-              </ReactMarkdown>
+              <PhaseOutput phase={phase} output={state.output} />
             </div>
           )}
         </div>
@@ -3799,20 +3929,30 @@ function DeliberationTraceAccordion({
                 }
                 className="flex w-full items-center gap-3 px-3 py-2 text-left focus:outline-none focus-visible:ring-conclave"
               >
-                <span className="text-base">{phaseIcon(phase)}</span>
+                <PhaseIcon phase={phase} className="shrink-0 text-ink-subtle" />
                 <span className="flex-1 text-[13px] font-medium text-ink">
                   {t(`cases.deliberation_phase.${phase}_title`)}
                 </span>
-                <span className="text-[11px] text-ink-faint">
-                  {expanded === phase ? "▾" : "▸"}
-                </span>
+                {expanded === phase ? (
+                  <IconChevronDown
+                    size={14}
+                    stroke={1.6}
+                    aria-hidden
+                    className="text-ink-faint"
+                  />
+                ) : (
+                  <IconChevronRight
+                    size={14}
+                    stroke={1.6}
+                    aria-hidden
+                    className="text-ink-faint"
+                  />
+                )}
               </button>
               {expanded === phase && output && (
                 <div className="border-t border-border-subtle px-3 py-3">
                   <div className="prose-conclave max-h-[400px] overflow-auto text-[12.5px]">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {output}
-                    </ReactMarkdown>
+                    <PhaseOutput phase={phase} output={output} />
                   </div>
                 </div>
               )}
