@@ -1,0 +1,203 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+ * Conclave web — design tokens.
+ * Ported from apps/desktop/src/index.css so the marketing site and the
+ * product share the same monochromatic Bugatti-inspired palette.
+ *
+ * Tailwind 4 reads the @theme block at build time and generates utilities
+ * (bg-paper, text-ink, font-mono, etc.) directly from these custom
+ * properties. No tailwind.config.js needed.
+ * ------------------------------------------------------------------------ */
+
+/* Dark mode: opt-in via class on <html> (FOUC script in layout.tsx
+ * applies it before paint based on localStorage + prefers-color-scheme). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  /* Brand colors — light theme defaults (.dark overrides below). */
+  --color-paper: #faf9f8;
+  --color-paper-subtle: #f4f4f0;
+  --color-paper-elevated: #ffffff;
+  --color-surface: #ffffff;
+  --color-surface-hover: #f5f5f2;
+  --color-surface-active: #ebebe6;
+  --color-hairline: #e6e6e2;
+  --color-hairline-subtle: #f0f0eb;
+  --color-hairline-strong: #18181b;
+  --color-ink: #121214;
+  --color-ink-dim: #3c3c40;
+  --color-ink-subtle: #646469;
+  --color-ink-faint: #96969b;
+  --color-accent: #0e7490;
+  --color-accent-strong: #075971;
+  --color-accent-muted: #e0f2fe;
+  --color-ok: #16a34a;
+  --color-warn: #ca8a04;
+  --color-danger: #dc2626;
+
+  /* Typography */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
+    "Inter", system-ui, sans-serif;
+  --font-mono:
+    "JetBrains Mono", "SF Mono", Menlo, Monaco, Consolas, monospace;
+
+  /* Marketing display scales (larger than desktop app needs). */
+  --text-display: clamp(2.75rem, 6vw, 5.5rem);
+  --text-display--line-height: 0.95;
+  --text-display--letter-spacing: -0.03em;
+  --text-display-2: clamp(2rem, 4vw, 3.5rem);
+  --text-display-2--line-height: 1;
+  --text-display-2--letter-spacing: -0.025em;
+  --text-eyebrow: 0.75rem;
+  --text-eyebrow--line-height: 1.2;
+  --text-eyebrow--letter-spacing: 0.12em;
+
+  /* Tight typographic rhythm. */
+  --tracking-tighter: -0.04em;
+  --tracking-tight: -0.02em;
+  --tracking-wide: 0.06em;
+  --tracking-widest: 0.18em;
+
+  /* Bugatti: no rounded corners by default. */
+  --radius-*: initial;
+  --radius-pill: 9999px;
+  --radius-full: 9999px;
+
+  /* Reduced motion-friendly easings. */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out-quad: cubic-bezier(0.45, 0, 0.55, 1);
+
+  /* Animations */
+  --animate-fade-in: fade-in 0.6s var(--ease-out-expo) both;
+  --animate-rise: rise 0.7s var(--ease-out-expo) both;
+  --animate-pulse-dot: pulse-dot 1.4s var(--ease-in-out-quad) infinite;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Dark theme — carbon canvas, near-white ink. */
+.dark {
+  --color-paper: #080a0c;
+  --color-paper-subtle: #0c0e11;
+  --color-paper-elevated: #12151a;
+  --color-surface: #12151a;
+  --color-surface-hover: #1a1e24;
+  --color-surface-active: #242931;
+  --color-hairline: #242931;
+  --color-hairline-subtle: #181c22;
+  --color-hairline-strong: #f5f6f8;
+  --color-ink: #f5f6f8;
+  --color-ink-dim: #cbd5e1;
+  --color-ink-subtle: #94a3b8;
+  --color-ink-faint: #64748b;
+  --color-accent: #7dd3fc;
+  --color-accent-strong: #38bdf8;
+  --color-accent-muted: #0c4a6e;
+  --color-ok: #34d399;
+  --color-warn: #fbbf24;
+  --color-danger: #f87171;
+}
+
+/* Global resets and base typography. */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: var(--color-paper);
+  color: var(--color-ink);
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-feature-settings:
+    "ss01" on,
+    "cv01" on,
+    "cv09" on;
+}
+
+/* Hairline borders use ink at low alpha — crisper than gray on light, softer on dark. */
+.border-hairline {
+  border-color: color-mix(in oklab, var(--color-ink) 12%, transparent);
+}
+.dark .border-hairline {
+  border-color: color-mix(in oklab, var(--color-ink) 14%, transparent);
+}
+
+/* Focus ring — visible, accessible, monochrome. */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* Selection — branded but quiet. */
+::selection {
+  background: color-mix(in oklab, var(--color-accent) 30%, transparent);
+  color: var(--color-ink);
+}
+
+/* Honor prefers-reduced-motion globally. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Native scrollbar styling. */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: color-mix(in oklab, var(--color-ink-subtle) 30%, transparent);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--color-ink-subtle) 50%, transparent);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}

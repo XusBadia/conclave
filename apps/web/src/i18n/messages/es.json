@@ -1,0 +1,270 @@
+{
+  "meta": {
+    "title": "Conclave — Comité virtual para apoyo a la decisión clínica",
+    "description": "Un comité de IA que delibera contra sí mismo antes de responder. 100% local, sin telemetría. Tus documentos, tus claves, tu equipo.",
+    "ogAlt": "Conclave — Comité virtual para apoyo a la decisión clínica"
+  },
+  "nav": {
+    "howItWorks": "Cómo funciona",
+    "privacy": "Privacidad",
+    "features": "Capacidades",
+    "providers": "Proveedores",
+    "download": "Descargar",
+    "faq": "Preguntas",
+    "skipToContent": "Saltar al contenido"
+  },
+  "header": {
+    "download": "Descargar"
+  },
+  "hero": {
+    "eyebrow": "Local-first · Sin telemetría · No es un dispositivo médico",
+    "h1Line1": "Un comité virtual.",
+    "h1Line2": "En tu máquina.",
+    "dek": "Conclave delibera cada caso contra sí mismo —cuatro pasos, una crítica adversarial— antes de proponer un veredicto. Tú decides.",
+    "ctaPrimary": "Descargar para macOS",
+    "ctaSecondary": "Ver código fuente",
+    "mockupLabel": "Vista previa de la app"
+  },
+  "how": {
+    "title": "Cuatro pasos. Una sola respuesta.",
+    "subtitle": "La mayoría de las herramientas de IA te dan la primera idea que se les ocurre. Conclave la pone a debate.",
+    "steps": {
+      "briefing": {
+        "number": "01",
+        "title": "Briefing",
+        "desc": "Conclave de-identifica el caso y recupera evidencia de tus documentos antes de que ningún LLM lo vea.",
+        "label": "DE-IDENTIFICACIÓN + RAG"
+      },
+      "draft": {
+        "number": "02",
+        "title": "Borrador",
+        "desc": "Un primer agente redacta un borrador de veredicto citando los pasajes que lo respaldan.",
+        "label": "GENERACIÓN"
+      },
+      "critique": {
+        "number": "03",
+        "title": "Crítica adversarial",
+        "desc": "Un segundo agente busca grietas, sesgos y omisiones. Cuestiona el borrador como lo haría un colega exigente.",
+        "label": "REVISIÓN CRUZADA"
+      },
+      "verdict": {
+        "number": "04",
+        "title": "Veredicto final",
+        "desc": "El sistema reconcilia ambas posturas y produce una recomendación estructurada, con nivel de certeza y banderas rojas explícitas.",
+        "label": "RECONCILIACIÓN"
+      }
+    }
+  },
+  "privacy": {
+    "title": "Datos que nunca salen del equipo.",
+    "subtitle": "Conclave fue diseñado para que la pregunta más incómoda de cualquier herramienta clínica —¿dónde van mis datos de pacientes?— tenga una respuesta de una palabra: aquí.",
+    "cards": [
+      {
+        "title": "100% local",
+        "desc": "Documentos, embeddings y casos viven en SQLite + LanceDB en tu Mac. No hay base de datos en la nube. No hay servidor intermedio."
+      },
+      {
+        "title": "Sin telemetría",
+        "desc": "Cero analytics, cero pings, cero cookies. El código es open source y puedes auditarlo línea por línea."
+      },
+      {
+        "title": "Tus claves, tu cuenta",
+        "desc": "Eliges qué motor LLM usar y conectas tu propia clave de API. Conclave nunca proxea tu tráfico ni guarda tus prompts."
+      }
+    ],
+    "disclaimer": "Conclave no es un dispositivo médico. Es una herramienta de apoyo: el clínico mantiene siempre la autoridad final sobre cualquier decisión.",
+    "disclaimerLink": "Leer el disclaimer completo"
+  },
+  "features": {
+    "title": "Hecho para el trabajo clínico real.",
+    "subtitle": "Lo que hace falta cuando los protocolos importan tanto como la velocidad.",
+    "cards": [
+      {
+        "title": "Documentos como fuente de verdad",
+        "desc": "Sube PDFs, DOCX y notas. Conclave los segmenta, los embebe y los cita por número de página."
+      },
+      {
+        "title": "Workspaces por especialidad",
+        "desc": "Una base de conocimiento por especialidad o servicio. Reglas y guías que viven juntas y no se contaminan."
+      },
+      {
+        "title": "Bilingüe nativo (ES/EN)",
+        "desc": "Configura el idioma de salida por workspace. Útil en equipos mixtos o para publicaciones internacionales."
+      },
+      {
+        "title": "Críticas adversariales",
+        "desc": "Otra pasada de IA cuestiona la respuesta. Lo que te llega ya pasó por su propio referee interno."
+      },
+      {
+        "title": "Trazabilidad auditable",
+        "desc": "Cada veredicto guarda la pregunta, el contexto recuperado, los borradores y las críticas."
+      },
+      {
+        "title": "Open source",
+        "desc": "Dual-licensed AGPL/MIT. Audita el código, contribuye, haz fork de lo que necesites."
+      }
+    ]
+  },
+  "providers": {
+    "title": "Tu motor. Tus reglas.",
+    "subtitle": "Conclave es agnóstico al proveedor. Trae las claves que ya pagas o usa modelos locales completamente offline.",
+    "caption": "Conclave nunca proxea tu tráfico. Hablas directamente con el proveedor que elijas.",
+    "list": [
+      "Anthropic Claude",
+      "OpenAI",
+      "OpenRouter",
+      "Ollama",
+      "Apple Intelligence",
+      "Claude Code CLI",
+      "Codex CLI"
+    ]
+  },
+  "download": {
+    "eyebrow": "Próximamente",
+    "title": "Conclave 0.1 — próximamente",
+    "subtitle": "Estamos cerrando la primera release pública. Observa el repositorio para recibir el aviso cuando los binarios estén disponibles para macOS, Windows y Linux.",
+    "ctaPrimary": "Observar el repo en GitHub",
+    "ctaSecondary": "Ver código fuente",
+    "footnote": "Sin lista de espera. Sin email. El día que esté listo, lo verás en GitHub Releases.",
+    "macos": "macOS",
+    "windows": "Windows",
+    "linux": "Linux",
+    "primaryHint": "Universal · Apple Silicon e Intel"
+  },
+  "faq": {
+    "title": "Preguntas frecuentes",
+    "subtitle": "Las dudas más habituales antes de instalar Conclave.",
+    "items": [
+      {
+        "q": "¿Conclave es un dispositivo médico?",
+        "a": "No. Es una herramienta de apoyo a la decisión clínica. La autoridad final sobre cualquier decisión médica siempre es del profesional sanitario. Lee el disclaimer completo antes de usarlo en escenarios reales."
+      },
+      {
+        "q": "¿Mis datos de pacientes salen del equipo?",
+        "a": "Las consultas a un proveedor LLM remoto (Anthropic, OpenAI, etc.) sí van a sus servidores —después de pasar por una capa de de-identificación local. Si quieres cero salida de datos, usa Ollama o Apple Intelligence: ambos completamente locales."
+      },
+      {
+        "q": "¿Funciona sin conexión a internet?",
+        "a": "Sí, si usas Ollama o Apple Intelligence como motor LLM. El resto del sistema (RAG, embeddings, deliberación) ya corre offline."
+      },
+      {
+        "q": "¿Qué pasa si no tengo cuenta de Anthropic ni OpenAI?",
+        "a": "Puedes usar OpenRouter (pago por token sin compromiso), Ollama (modelos locales gratis) o el modo Apple Intelligence en Macs compatibles."
+      },
+      {
+        "q": "¿Es gratis?",
+        "a": "El software es open source y gratuito. Solo pagas lo que consumas del proveedor LLM que elijas, directamente a ellos."
+      },
+      {
+        "q": "¿Puedo usarlo con pacientes reales?",
+        "a": "Es tu responsabilidad profesional decidirlo. Lee el disclaimer y considera tu marco normativo local. Conclave está diseñado para asistir, no para reemplazar el juicio clínico."
+      },
+      {
+        "q": "¿Hay versión para Linux?",
+        "a": "Sí. La aplicación se distribuye como .dmg para macOS, .exe para Windows y AppImage para Linux."
+      },
+      {
+        "q": "¿Para qué especialidades funciona?",
+        "a": "Cualquiera que trabaje con protocolos escritos: medicina interna, oncología, urgencias, anestesia, farmacia clínica… Tú subes la base de conocimiento de tu especialidad."
+      }
+    ]
+  },
+  "footer": {
+    "tagline": "Comité virtual. En tu máquina.",
+    "columns": {
+      "product": "Producto",
+      "legal": "Legal",
+      "repo": "Código"
+    },
+    "links": {
+      "howItWorks": "Cómo funciona",
+      "privacy": "Privacidad",
+      "features": "Capacidades",
+      "providers": "Proveedores",
+      "download": "Descargar",
+      "disclaimer": "Disclaimer médico",
+      "privacyPolicy": "Privacidad",
+      "terms": "Términos",
+      "github": "GitHub",
+      "issues": "Issues",
+      "license": "Licencia"
+    },
+    "copyright": "Conclave es software de apoyo a la decisión clínica, no un dispositivo médico.",
+    "version": "Versión {version}",
+    "year": "© {year}"
+  },
+  "ui": {
+    "theme": {
+      "light": "Claro",
+      "dark": "Oscuro",
+      "auto": "Auto",
+      "toggleLabel": "Cambiar tema"
+    },
+    "language": {
+      "es": "ES",
+      "en": "EN",
+      "toggleLabel": "Cambiar idioma"
+    }
+  },
+  "disclaimerPage": {
+    "title": "Disclaimer médico",
+    "subtitle": "Lo que Conclave es —y lo que no es.",
+    "backHome": "Volver al inicio"
+  },
+  "privacyPage": {
+    "title": "Política de privacidad",
+    "subtitle": "Lo que recogemos, lo que no, y lo que hacemos con todo ello.",
+    "backHome": "Volver al inicio",
+    "lastUpdated": "Última actualización: mayo de 2026",
+    "sections": {
+      "intro": {
+        "title": "Resumen en una frase",
+        "body": "Conclave es una aplicación de escritorio. No recogemos absolutamente nada sobre ti ni sobre tus pacientes en nuestros servidores, porque no tenemos servidores."
+      },
+      "data": {
+        "title": "Datos que procesa la aplicación",
+        "body": "Conclave almacena en tu equipo los documentos que subes, los casos que analizas y los veredictos generados. Estos datos viven en SQLite y LanceDB locales. Nunca se envían a servidores controlados por nosotros."
+      },
+      "llm": {
+        "title": "Proveedores LLM externos",
+        "body": "Si configuras Conclave con Anthropic, OpenAI, OpenRouter o un proveedor remoto similar, las consultas pasan por una capa de de-identificación local y después se envían a ese proveedor bajo tu propia clave de API. La política de privacidad de ese proveedor aplica a esos datos. Si quieres cero salida de datos, usa Ollama o Apple Intelligence."
+      },
+      "telemetry": {
+        "title": "Telemetría y analítica",
+        "body": "Ninguna. Conclave no envía datos de uso, no incluye Google Analytics ni equivalente, no usa cookies, no registra qué documentos abres ni qué casos analizas."
+      },
+      "website": {
+        "title": "Esta web",
+        "body": "Este sitio es estático y no usa cookies. No tiene formularios de captura. Los enlaces salientes a GitHub se rigen por la política de privacidad de GitHub."
+      },
+      "contact": {
+        "title": "Contacto",
+        "body": "Para cualquier duda sobre privacidad, abre un issue en GitHub."
+      }
+    }
+  },
+  "termsPage": {
+    "title": "Términos de uso",
+    "subtitle": "Las condiciones de licencia y uso del software.",
+    "backHome": "Volver al inicio",
+    "lastUpdated": "Última actualización: mayo de 2026",
+    "sections": {
+      "license": {
+        "title": "Licencia",
+        "body": "Conclave se distribuye bajo licencia dual AGPL-3.0 y MIT. Puedes usar la versión open source bajo AGPL, o adquirir una licencia comercial para usos que no encajen con AGPL. Consulta el archivo LICENSE en el repositorio para detalles."
+      },
+      "warranty": {
+        "title": "Garantía",
+        "body": "Conclave se entrega \"tal cual\", sin garantía expresa ni implícita. No nos hacemos responsables del uso que se dé al software en contextos clínicos. El usuario asume todos los riesgos."
+      },
+      "medical": {
+        "title": "Uso médico",
+        "body": "Conclave no es un dispositivo médico ni un sustituto del juicio clínico profesional. Cualquier decisión clínica basada total o parcialmente en la salida de Conclave es responsabilidad exclusiva del profesional sanitario que la tome. Consulta el disclaimer médico completo."
+      },
+      "modifications": {
+        "title": "Modificaciones",
+        "body": "Estos términos pueden actualizarse. Los cambios se publican en el repositorio con su historial de commits."
+      }
+    }
+  }
+}
