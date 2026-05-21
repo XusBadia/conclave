@@ -13,10 +13,10 @@ export function Hero() {
        *  its column so the right portion gets clipped by section overflow. */}
       <div
         aria-hidden
-        className="pointer-events-none hidden lg:flex absolute inset-y-0 right-0 z-0 w-[58%] items-center pl-12"
+        className="pointer-events-none hidden lg:flex absolute inset-y-0 right-0 z-0 w-[52%] items-center pl-24"
       >
         <div className="hero-rise relative w-full" style={{ animationDelay: "180ms" }}>
-          <div className="mockup-float lg:w-[122%] lg:-translate-x-[2%]">
+          <div className="mockup-float lg:w-[108%]">
             <HeroMockup />
           </div>
           {/* Floating mark behind the mockup */}
