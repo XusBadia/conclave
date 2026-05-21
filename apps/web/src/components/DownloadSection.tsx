@@ -32,6 +32,17 @@ export function DownloadSection() {
           </a>
         </div>
 
+        <div className="mt-10 max-w-[58ch]">
+          <p className="font-mono text-[11px] uppercase tracking-widest text-ink-subtle">
+            {t("requirements.title")}
+          </p>
+          <ul className="mt-3 space-y-1.5 font-mono text-[12.5px] leading-[1.6] text-ink-dim">
+            <li>{t("requirements.macos")}</li>
+            <li>{t("requirements.ai")}</li>
+            <li>{t("requirements.other")}</li>
+          </ul>
+        </div>
+
         {RELEASES_AVAILABLE && (
           <div className="mt-10 inline-flex flex-wrap gap-2 font-mono text-[12px] uppercase tracking-widest text-ink-subtle">
             <span>{t("macos")}</span>

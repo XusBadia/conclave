@@ -129,7 +129,13 @@
     "macos": "macOS",
     "windows": "Windows",
     "linux": "Linux",
-    "primaryHint": "Universal · Apple Silicon e Intel"
+    "primaryHint": "Apple Silicon · macOS 11+",
+    "requirements": {
+      "title": "Requisitos del sistema",
+      "macos": "macOS 11 (Big Sur) o posterior con chip Apple (M1/M2/M3/M4).",
+      "ai": "Las funciones de Apple Intelligence requieren macOS 26 (Tahoe).",
+      "other": "El soporte para Windows y Linux llegará en una versión posterior."
+    }
   },
   "faq": {
     "title": "Preguntas frecuentes",
