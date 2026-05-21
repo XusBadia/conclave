@@ -80,12 +80,6 @@ export type IngestProgressEvent =
   | { kind: "skipped"; path: string; reason: string }
   | { kind: "failed"; path: string; error: string };
 
-export interface DeidentResponse {
-  masked_text: string;
-  span_count: number;
-  strict_clean: boolean;
-}
-
 export interface ProviderInfo {
   id: string;
   configured: boolean;
@@ -308,9 +302,6 @@ export const ipc = {
     model?: string;
     allow_general_knowledge?: boolean;
   }) => invoke<AskDocumentsResponse>("ask_documents", { request: req }),
-
-  // Deident
-  deidentText: (text: string) => invoke<DeidentResponse>("deident_text", { text }),
 
   // Providers
   listProviders: () => invoke<ProviderInfo[]>("list_providers"),

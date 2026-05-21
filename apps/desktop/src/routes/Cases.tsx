@@ -1612,11 +1612,6 @@ function NewCase({
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [maskedPreview, setMaskedPreview] = useState<string | null>(null);
-  const [preview, setPreview] = useState<{
-    spanCount: number;
-    strictClean: boolean;
-  } | null>(null);
   const [attachments, setAttachments] = useState<PendingAttachment[]>(() =>
     incomingAttachments ?? [],
   );
@@ -1629,9 +1624,10 @@ function NewCase({
    * When ON, the run button calls `run_case_deliberated` instead of
    * `run_case` — the LLM does briefing → drafting → red-team → finalize,
    * costs more tokens, and the user sees a live 4-seat overlay while
-   * the committee thinks. Defaults to OFF.
+   * the committee thinks. Defaults to ON; clinicians who want a quick
+   * single-pass triage flip to Fast via the mode selector.
    */
-  const [deliberative, setDeliberative] = useState(false);
+  const [deliberative, setDeliberative] = useState(true);
   /**
    * Set while a deliberative case is in flight. Owns the overlay and
    * its event subscription. Cleared when the run resolves (either via
@@ -1753,17 +1749,6 @@ function NewCase({
     [providers],
   );
 
-  const previewDeident = async () => {
-    if (!text.trim()) return;
-    try {
-      const r = await ipc.deidentText(text);
-      setMaskedPreview(r.masked_text);
-      setPreview({ spanCount: r.span_count, strictClean: r.strict_clean });
-    } catch (e) {
-      setError(String(e));
-    }
-  };
-
   const run = async () => {
     const hasDraftAttachments = draftAttachments.length > 0;
     if (!text.trim() && attachments.length === 0 && !hasDraftAttachments) {
@@ -1838,13 +1823,12 @@ function NewCase({
   });
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-4 p-6">
+    <div className="mx-auto w-full max-w-3xl space-y-4 p-6">
       <div className="flex items-center justify-between">
         <Button size="sm" variant="ghost" onClick={onCancel}>
           {t("cases.back")}
         </Button>
       </div>
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1fr,420px]">
       <Card>
         <CardHeader
           title={t("cases.new_title")}
@@ -1936,15 +1920,12 @@ function NewCase({
           />
           <ProviderOfflineBanner providers={providers} providerId={providerId} />
           {!draft && (
-            <DeliberativeToggle
+            <ModeSelector
               checked={deliberative}
               onChange={setDeliberative}
             />
           )}
-          <div className="flex gap-2 pt-1">
-            <Button onClick={previewDeident} disabled={!text.trim()}>
-              {t("cases.preview_button")}
-            </Button>
+          <div className="flex justify-end pt-1">
             <Button
               variant="primary"
               onClick={run}
@@ -1965,48 +1946,6 @@ function NewCase({
           </div>
         </CardBody>
       </Card>
-
-      <Card>
-        <CardHeader
-          title={t("cases.deid_title")}
-          subtitle={t("cases.deid_subtitle")}
-        />
-        <CardBody>
-          {preview ? (
-            <div className="space-y-3">
-              <div className="flex items-center gap-3 text-[12px]">
-                <span className="rounded bg-surface px-2 py-0.5 text-ink-subtle">
-                  {t("cases.deid_spans", { count: preview.spanCount })}
-                </span>
-                <span
-                  className={
-                    preview.strictClean
-                      ? "rounded bg-ok/15 px-2 py-0.5 text-ok"
-                      : "rounded bg-warn/15 px-2 py-0.5 text-warn"
-                  }
-                >
-                  {preview.strictClean
-                    ? t("cases.deid_strict_clean")
-                    : t("cases.deid_strict_dirty")}
-                </span>
-              </div>
-              <pre className="max-h-[460px] overflow-auto whitespace-pre-wrap rounded-md border border-border-subtle bg-bg p-3 font-mono text-[12px] leading-relaxed text-ink-dim">
-                {maskedPreview}
-              </pre>
-            </div>
-          ) : (
-            <p className="text-[13px] text-ink-subtle">
-              <Trans
-                i18nKey="cases.deid_hint"
-                components={[
-                  <span key="0" className="font-medium text-ink-dim" />,
-                ]}
-              />
-            </p>
-          )}
-        </CardBody>
-      </Card>
-      </div>
       {deliberationActive && (
         <DeliberationOverlay
           onDismiss={() => {
@@ -2716,7 +2655,9 @@ function ClassifyDropDialog({
   // Deliberative toggle for the batch path. When ON, every case in the
   // batch runs through the 4-pass committee. Drafts ignore the toggle
   // (they're persisted-only) — promoting a draft later uses quick mode.
-  const [deliberative, setDeliberative] = useState(false);
+  // Defaults to ON to match the single-case form; switch to Fast for a
+  // bulk-triage pass.
+  const [deliberative, setDeliberative] = useState(true);
 
   // Sync incoming proposal once it resolves from the loading state.
   useEffect(() => {
@@ -3114,7 +3055,7 @@ function ClassifyDropDialog({
             onGoToSettings={onGoToSettings}
           />
           <ProviderOfflineBanner providers={providers} providerId={providerId} />
-          <DeliberativeToggle
+          <ModeSelector
             checked={deliberative}
             onChange={setDeliberative}
           />
@@ -3415,10 +3356,15 @@ function deriveLabelFromFile(path: string, fallbackIndex: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// Deliberative mode — toggle, in-flight overlay, post-hoc trace accordion.
+// Deliberative mode — segmented Deliberate/Fast selector, in-flight overlay,
+// post-hoc trace accordion.
 // ---------------------------------------------------------------------------
 
-function DeliberativeToggle({
+// `checked` is the boolean carried through to the run command: true means
+// Deliberate (4-pass committee, `run_case_deliberated`), false means Fast
+// (single LLM call, `run_case`). Both options are first-class — the
+// segmented control replaces the old "Deliberative mode" on/off toggle.
+function ModeSelector({
   checked,
   onChange,
 }: {
@@ -3426,42 +3372,43 @@ function DeliberativeToggle({
   onChange: (v: boolean) => void;
 }) {
   const { t } = useTranslation();
+  const baseBtn =
+    "flex-1 rounded-md px-3 py-1.5 text-[12.5px] font-medium transition focus:outline-none focus-visible:ring-conclave";
   return (
-    <button
-      type="button"
-      onClick={() => onChange(!checked)}
-      aria-pressed={checked}
-      className={cn(
-        "group w-full rounded-lg border px-3 py-2.5 text-left transition focus:outline-none focus-visible:ring-conclave",
-        checked
-          ? "border-accent bg-accent/5"
-          : "border-border-subtle bg-bg-subtle hover:border-border",
-      )}
+    <div
+      role="radiogroup"
+      aria-label={t("cases.mode_selector_label")}
+      className="inline-flex w-full gap-1 rounded-lg border border-border-subtle bg-bg-subtle p-1"
     >
-      <div className="flex items-center gap-3">
-        <span
-          className={cn(
-            "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition",
-            checked ? "bg-accent" : "bg-border",
-          )}
-        >
-          <span
-            className={cn(
-              "inline-block h-4 w-4 transform rounded-full bg-white transition",
-              checked ? "translate-x-4" : "translate-x-0.5",
-            )}
-          />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-medium text-ink">
-            {t("cases.deliberative_toggle_title")}
-          </div>
-          <div className="mt-0.5 text-[11.5px] text-ink-subtle">
-            {t("cases.deliberative_toggle_subtitle")}
-          </div>
-        </div>
-      </div>
-    </button>
+      <button
+        type="button"
+        role="radio"
+        aria-checked={checked}
+        onClick={() => onChange(true)}
+        className={cn(
+          baseBtn,
+          checked
+            ? "bg-accent text-white"
+            : "text-ink-dim hover:text-ink",
+        )}
+      >
+        {t("cases.mode_deliberate")}
+      </button>
+      <button
+        type="button"
+        role="radio"
+        aria-checked={!checked}
+        onClick={() => onChange(false)}
+        className={cn(
+          baseBtn,
+          !checked
+            ? "bg-accent text-white"
+            : "text-ink-dim hover:text-ink",
+        )}
+      >
+        {t("cases.mode_fast")}
+      </button>
+    </div>
   );
 }
 
