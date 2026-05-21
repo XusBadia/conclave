@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+  <style>
+    .mark { stroke: #121214; fill: #121214; }
+    @media (prefers-color-scheme: dark) {
+      .mark { stroke: #f5f6f8; fill: #f5f6f8; }
+    }
+  </style>
+  <circle class="mark" cx="32" cy="32" r="24" fill="none" />
+  <circle class="mark" cx="32" cy="8" r="5.5" stroke="none" />
+  <circle class="mark" cx="9.17" cy="24.58" r="5.5" stroke="none" />
+  <circle class="mark" cx="17.89" cy="51.42" r="5.5" stroke="none" />
+  <circle class="mark" cx="46.11" cy="51.42" r="5.5" stroke="none" />
+  <circle class="mark" cx="54.83" cy="24.58" r="5.5" stroke="none" />
+  <circle class="mark" cx="32" cy="32" r="8" stroke="none" />
+</svg>

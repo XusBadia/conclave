@@ -32,6 +32,20 @@ export const metadata: Metadata = {
     email: false,
     telephone: false,
   },
+  icons: {
+    // Modern browsers prefer the SVG (adapts to light/dark browser themes via
+    // an embedded <style> with prefers-color-scheme). Older browsers fall back
+    // to the .ico, then the 32px PNG.
+    icon: [
+      { url: "/favicon.svg", type: "image/svg+xml" },
+      { url: "/favicon.ico", sizes: "32x32" },
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180" }],
+    shortcut: ["/favicon.ico"],
+  },
+  manifest: undefined,
 };
 
 export const viewport: Viewport = {
