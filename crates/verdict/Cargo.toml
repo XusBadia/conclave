@@ -18,10 +18,12 @@ conclave-core = { workspace = true }
 conclave-rag = { workspace = true }
 conclave-deident = { workspace = true }
 conclave-providers = { workspace = true }
+conclave-evidence = { workspace = true }
 
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+csv = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 

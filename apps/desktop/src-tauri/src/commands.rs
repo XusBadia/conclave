@@ -9,6 +9,9 @@ use tauri::{Emitter, State};
 
 use conclave_core::{Workspace, WorkspaceManager};
 use conclave_deident::{Deidentifier, PipelineDeidentifier};
+use conclave_evidence::{
+    EuropePmcSource, EvidenceCache, EvidenceItem, EvidenceSource, PubMedSource,
+};
 use conclave_providers::{
     open_in_browser, persist_tokens, secrets, AnthropicLoginFlow, AnthropicOAuthProvider,
     AnthropicProvider, AppleIntelligenceAvailability, AppleIntelligenceProvider, ClaudeCliProvider,
@@ -30,8 +33,9 @@ use conclave_verdict::{
     persistence::{
         DeliberationTrace, FeedbackKind, FeedbackRecord, RetrievalTrace as VerdictRetrievalTrace,
     },
-    CaseAttachment, CaseRecord, CaseStore, QaPipeline, Verdict, VerdictOptions, VerdictPipeline,
-    VerdictRecord,
+    sha256_hex, AuditPayloadMode, CaseAttachment, CaseRecord, CaseStore, DataBoundaryMode,
+    QaPipeline, RawTextRetention, ReviewDecision, ReviewMetadataRecord, Skill, Verdict,
+    VerdictOptions, VerdictPipeline, VerdictRecord,
 };
 
 use crate::state::AppState;
@@ -1119,6 +1123,7 @@ pub struct CaseRunResponse {
     /// Attachments persisted alongside this case (empty when none were
     /// provided). Order matches the `[A1..AN]` refs in the verdict.
     pub attachments: Vec<CaseAttachment>,
+    pub data_boundary: DataBoundaryPreview,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1139,6 +1144,320 @@ pub struct CaseRunRequest {
     /// back to the question or the case id at render time.
     #[serde(default)]
     pub patient_label: String,
+    /// `local_only`, `deid_cloud` (default), or `explicit_phi`.
+    #[serde(default)]
+    pub data_boundary_mode: Option<String>,
+    /// Required when raw PHI payloads (for example cloud vision images)
+    /// leave the device.
+    #[serde(default)]
+    pub allow_phi_payload: bool,
+    /// Keep raw narrative locally after a successful run.
+    #[serde(default)]
+    pub retain_raw_text: bool,
+    /// Optional versioned skill overlay.
+    #[serde(default)]
+    pub active_skill_id: Option<String>,
+    /// Opt-in external literature lookup. Sends only a generated
+    /// de-identified query, never raw case text.
+    #[serde(default)]
+    pub use_online_evidence: bool,
+}
+
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, Serialize)]
+pub struct DataBoundaryPreview {
+    pub mode: DataBoundaryMode,
+    pub provider_id: String,
+    pub provider_requires_network: bool,
+    pub sends_masked_text: bool,
+    pub sends_raw_text: bool,
+    pub sends_images: bool,
+    pub stores_raw_text: bool,
+    pub uses_online_evidence: bool,
+    pub blocked_reason: Option<String>,
+}
+
+fn parse_data_boundary_mode(raw: Option<&str>) -> DataBoundaryMode {
+    raw.map(DataBoundaryMode::from_db_str).unwrap_or_default()
+}
+
+fn is_image_path(path: &str) -> bool {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    matches!(
+        ext.as_str(),
+        "png" | "jpg" | "jpeg" | "webp" | "tif" | "tiff" | "heic" | "heif"
+    )
+}
+
+fn boundary_preview_for_request(
+    request: &CaseRunRequest,
+    provider: &Arc<dyn LlmProvider>,
+    skill_blocked_reason: Option<String>,
+) -> DataBoundaryPreview {
+    let mode = parse_data_boundary_mode(request.data_boundary_mode.as_deref());
+    let sends_images = request.attached_file_paths.iter().any(|p| is_image_path(p));
+    let provider_requires_network = provider.requires_network();
+    let boundary_blocked_reason =
+        if matches!(mode, DataBoundaryMode::LocalOnly) && provider_requires_network {
+            Some("local_only blocks network providers".to_owned())
+        } else if matches!(mode, DataBoundaryMode::LocalOnly) && request.use_online_evidence {
+            Some("local_only blocks online evidence lookup".to_owned())
+        } else if sends_images
+            && provider_requires_network
+            && !matches!(mode, DataBoundaryMode::ExplicitPhi)
+        {
+            Some("cloud vision requires explicit_phi mode".to_owned())
+        } else if sends_images
+            && provider_requires_network
+            && matches!(mode, DataBoundaryMode::ExplicitPhi)
+            && !request.allow_phi_payload
+        {
+            Some("explicit_phi mode requires allow_phi_payload consent".to_owned())
+        } else {
+            None
+        };
+    let blocked_reason = boundary_blocked_reason.or(skill_blocked_reason);
+    DataBoundaryPreview {
+        mode,
+        provider_id: provider.id().to_owned(),
+        provider_requires_network,
+        sends_masked_text: true,
+        sends_raw_text: false,
+        sends_images,
+        stores_raw_text: request.retain_raw_text,
+        uses_online_evidence: request.use_online_evidence,
+        blocked_reason,
+    }
+}
+
+fn enforce_data_boundary(preview: &DataBoundaryPreview) -> CommandResult<()> {
+    if let Some(reason) = &preview.blocked_reason {
+        return err(reason);
+    }
+    Ok(())
+}
+
+async fn fetch_external_evidence_for_case(
+    state: &AppState,
+    masked_text: &str,
+    question: &str,
+) -> CommandResult<Vec<EvidenceItem>> {
+    let query = build_external_evidence_query(masked_text, question);
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+    let cache = Arc::new(
+        EvidenceCache::open(state.paths.cache_dir().join("evidence.sqlite"))
+            .map_err(|e| e.to_string())?,
+    );
+    const LIMIT: usize = 5;
+    let mut first_error: Option<String> = None;
+    if let Ok(email) = std::env::var("CONCLAVE_NCBI_EMAIL") {
+        match PubMedSource::new(email).map(|s| s.with_cache(Arc::clone(&cache))) {
+            Ok(pubmed) => match pubmed.search(&query, LIMIT).await {
+                Ok(items) if !items.is_empty() => return Ok(items),
+                Ok(_) => {}
+                Err(e) => first_error = Some(e.to_string()),
+            },
+            Err(e) => first_error = Some(e.to_string()),
+        }
+    }
+    let europe = EuropePmcSource::new()
+        .map_err(|e| first_error.clone().unwrap_or_else(|| e.to_string()))?
+        .with_cache(cache);
+    match europe.search(&query, LIMIT).await {
+        Ok(items) => Ok(items),
+        Err(e) => Err(first_error.unwrap_or_else(|| e.to_string())),
+    }
+}
+
+fn build_external_evidence_query(masked_text: &str, question: &str) -> String {
+    const STOPWORDS: &[&str] = &[
+        "paciente",
+        "patient",
+        "manejo",
+        "management",
+        "recomendado",
+        "recommended",
+        "cuál",
+        "cual",
+        "what",
+        "with",
+        "para",
+        "por",
+        "the",
+        "and",
+        "los",
+        "las",
+        "una",
+        "uno",
+        "del",
+        "con",
+        "sin",
+        "que",
+        "está",
+        "esta",
+        "this",
+        "case",
+        "años",
+        "year",
+        "old",
+    ];
+    let mut terms = Vec::new();
+    let combined = format!("{question} {masked_text}");
+    let mut current = String::new();
+    let mut in_token = false;
+    for ch in combined.chars() {
+        if ch == '<' {
+            current.clear();
+            in_token = true;
+            continue;
+        }
+        if in_token {
+            if ch == '>' {
+                in_token = false;
+            }
+            continue;
+        }
+        if ch.is_alphanumeric() || matches!(ch, '-' | '_') {
+            current.push(ch.to_ascii_lowercase());
+        } else if !current.is_empty() {
+            push_query_term(&mut terms, &current, STOPWORDS);
+            current.clear();
+        }
+        if terms.len() >= 10 {
+            break;
+        }
+    }
+    if !current.is_empty() && terms.len() < 10 {
+        push_query_term(&mut terms, &current, STOPWORDS);
+    }
+    terms.join(" ")
+}
+
+fn push_query_term(out: &mut Vec<String>, term: &str, stopwords: &[&str]) {
+    if term.len() < 4 || term.chars().all(|c| c.is_ascii_digit()) {
+        return;
+    }
+    if stopwords.contains(&term) || term.starts_with("patient_name") || term.starts_with("date_") {
+        return;
+    }
+    if !out.iter().any(|t| t == term) {
+        out.push(term.to_owned());
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrivacySettingsDto {
+    pub default_data_boundary: DataBoundaryMode,
+}
+
+#[tauri::command]
+pub fn privacy_settings(state: State<'_, AppState>) -> CommandResult<PrivacySettingsDto> {
+    let cfg = state.config.lock().map_err(|_| "config poisoned")?.clone();
+    Ok(PrivacySettingsDto {
+        default_data_boundary: DataBoundaryMode::from_db_str(&cfg.privacy.default_data_boundary),
+    })
+}
+
+#[tauri::command]
+pub fn set_privacy_settings(
+    state: State<'_, AppState>,
+    settings: PrivacySettingsDto,
+) -> CommandResult<PrivacySettingsDto> {
+    let mut cfg = state.config.lock().map_err(|_| "config poisoned")?.clone();
+    cfg.privacy.default_data_boundary = settings.default_data_boundary.as_db_str().to_owned();
+    cfg.save(state.paths.config_file())
+        .map_err(|e| e.to_string())?;
+    *state.config.lock().map_err(|_| "config poisoned")? = cfg;
+    Ok(settings)
+}
+
+fn load_skill_raw(
+    state: &AppState,
+    workspace_id: &str,
+    skill_id: Option<&str>,
+) -> CommandResult<Option<Skill>> {
+    let Some(skill_id) = skill_id.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    let user_skills = state.paths.config_dir().join("skills");
+    let workspace_skills = state.paths.workspace_dir(workspace_id).join("skills");
+    conclave_verdict::load_skill(skill_id, Some(&user_skills), Some(&workspace_skills))
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("skill `{skill_id}` not found"))
+        .map(Some)
+}
+
+fn skill_boundary_block_reason(
+    state: &AppState,
+    workspace_id: &str,
+    skill_id: Option<&str>,
+    mode: DataBoundaryMode,
+) -> Option<String> {
+    match load_skill_raw(state, workspace_id, skill_id) {
+        Ok(Some(skill)) if !skill.allows_mode(mode) => Some(format!(
+            "skill `{}` does not allow data boundary `{}`",
+            skill.id,
+            mode.as_db_str()
+        )),
+        Ok(_) => None,
+        Err(e) => Some(e),
+    }
+}
+
+fn load_active_skill_for_mode(
+    state: &AppState,
+    workspace_id: &str,
+    skill_id: Option<&str>,
+    mode: DataBoundaryMode,
+) -> CommandResult<Option<Skill>> {
+    let skill = load_skill_raw(state, workspace_id, skill_id)?;
+    if let Some(skill) = &skill {
+        if !skill.allows_mode(mode) {
+            return err(format!(
+                "skill `{}` does not allow data boundary `{}`",
+                skill.id,
+                mode.as_db_str()
+            ));
+        }
+    }
+    Ok(skill)
+}
+
+#[tauri::command]
+pub async fn preview_data_boundary(
+    state: State<'_, AppState>,
+    request: CaseRunRequest,
+) -> CommandResult<DataBoundaryPreview> {
+    let api_key = match request.provider_id.as_str() {
+        "ollama" | "apple-intelligence" | "anthropic-oauth" | "openai-oauth" => String::new(),
+        other => secrets::load(other)
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default(),
+    };
+    let provider = build_provider(
+        &request.provider_id,
+        &api_key,
+        request.model.clone(),
+        state.paths.config_dir(),
+    )?;
+    let mode = parse_data_boundary_mode(request.data_boundary_mode.as_deref());
+    let skill_blocked_reason = skill_boundary_block_reason(
+        &state,
+        &request.workspace_id,
+        request.active_skill_id.as_deref(),
+        mode,
+    );
+    Ok(boundary_preview_for_request(
+        &request,
+        &provider,
+        skill_blocked_reason,
+    ))
 }
 
 #[tauri::command]
@@ -1424,12 +1743,27 @@ async fn stage_draft(
     let case_id = format!("case-{}", uuid::Uuid::new_v4());
 
     let deid = PipelineDeidentifier::new();
-    let (masked_text, deident_pipeline_id) = if request.text.trim().is_empty() {
-        (String::new(), "noop".to_owned())
-    } else {
-        let r = deid.deidentify(&request.text).map_err(|e| e.to_string())?;
-        (r.masked_text.clone(), r.pipeline_id.to_owned())
-    };
+    let (masked_text, deident_pipeline_id, raw_text_sha256, raw_text_retention) =
+        if request.text.trim().is_empty() {
+            (
+                String::new(),
+                "noop".to_owned(),
+                String::new(),
+                RawTextRetention::Discarded,
+            )
+        } else {
+            let r = deid.deidentify(&request.text).map_err(|e| e.to_string())?;
+            (
+                r.masked_text.clone(),
+                r.pipeline_id.to_owned(),
+                sha256_hex(request.text.as_bytes()),
+                if request.retain_raw_text {
+                    RawTextRetention::ExplicitRetained
+                } else {
+                    RawTextRetention::TemporaryDraft
+                },
+            )
+        };
 
     let cases_root = state.paths.workspace_dir(&workspace.id).join("cases");
     let attachments = if request.attached_file_paths.is_empty() {
@@ -1467,6 +1801,8 @@ async fn stage_draft(
         status: conclave_verdict::CaseStatus::Draft,
         patient_label,
         latest_error: None,
+        raw_text_sha256,
+        raw_text_retention,
     };
 
     {
@@ -1562,10 +1898,24 @@ pub(crate) async fn run_case_impl(
     )?;
     ensure_general_scope(&provider)?;
     ensure_provider_ready(&provider).await?;
+    let mode = parse_data_boundary_mode(request.data_boundary_mode.as_deref());
+    let active_skill = load_active_skill_for_mode(
+        state,
+        &workspace.id,
+        request.active_skill_id.as_deref(),
+        mode,
+    )?;
+    let boundary = boundary_preview_for_request(&request, &provider, None);
+    enforce_data_boundary(&boundary)?;
 
     let store = case_store_arc(state, &workspace.id)?;
     let StagedDraft { case, attachments } =
         stage_draft(app, state, &workspace, &store, &request).await?;
+    let external_evidence = if request.use_online_evidence {
+        fetch_external_evidence_for_case(state, &case.masked_text, &case.question).await?
+    } else {
+        Vec::new()
+    };
 
     // Register a per-case cancel flag so `cancel_case` can short-
     // circuit the run. Quick mode is a single LLM call so the check
@@ -1598,6 +1948,13 @@ pub(crate) async fn run_case_impl(
     if let Some(lang) = workspace.language.clone() {
         options.output_language = lang;
     }
+    options.data_boundary_mode = boundary.mode;
+    options.retain_raw_text = request.retain_raw_text;
+    options.external_evidence = external_evidence;
+    if let Some(skill) = active_skill {
+        options.active_skill_id = Some(skill.id);
+        options.active_skill_instructions = Some(skill.body);
+    }
 
     // `run_for_case` runs the pipeline against the already-persisted
     // draft and promotes it to `Completed` on success.
@@ -1609,6 +1966,7 @@ pub(crate) async fn run_case_impl(
             verdict_record: run.verdict_record,
             verdict: run.verdict,
             attachments,
+            data_boundary: boundary,
         }),
         Err(e) => {
             let msg = e.to_string();
@@ -1678,12 +2036,23 @@ pub async fn create_draft_cases(
     for input in request.cases {
         let case_id = format!("case-{}", uuid::Uuid::new_v4());
 
-        let (masked_text, deident_pipeline_id) = if input.text.trim().is_empty() {
-            (String::new(), "noop".to_owned())
-        } else {
-            let r = deid.deidentify(&input.text).map_err(|e| e.to_string())?;
-            (r.masked_text.clone(), r.pipeline_id.to_owned())
-        };
+        let (masked_text, deident_pipeline_id, raw_text_sha256, raw_text_retention) =
+            if input.text.trim().is_empty() {
+                (
+                    String::new(),
+                    "noop".to_owned(),
+                    String::new(),
+                    RawTextRetention::Discarded,
+                )
+            } else {
+                let r = deid.deidentify(&input.text).map_err(|e| e.to_string())?;
+                (
+                    r.masked_text.clone(),
+                    r.pipeline_id.to_owned(),
+                    sha256_hex(input.text.as_bytes()),
+                    RawTextRetention::TemporaryDraft,
+                )
+            };
 
         let attachments = if input.attached_file_paths.is_empty() {
             Vec::new()
@@ -1715,6 +2084,8 @@ pub async fn create_draft_cases(
             status: conclave_verdict::CaseStatus::Draft,
             patient_label: input.patient_label.trim().to_owned(),
             latest_error: None,
+            raw_text_sha256,
+            raw_text_retention,
         };
         staged.push(Staged {
             record,
@@ -1780,6 +2151,16 @@ pub struct RunDraftCaseRequest {
     pub text: Option<String>,
     /// Optional override applied to the draft row before running.
     pub question: Option<String>,
+    #[serde(default)]
+    pub data_boundary_mode: Option<String>,
+    #[serde(default)]
+    pub allow_phi_payload: bool,
+    #[serde(default)]
+    pub retain_raw_text: bool,
+    #[serde(default)]
+    pub active_skill_id: Option<String>,
+    #[serde(default)]
+    pub use_online_evidence: bool,
 }
 
 #[tauri::command]
@@ -1814,15 +2195,31 @@ pub async fn run_draft_case(
     // Apply any clinical-context edits from NewCase before running.
     let deid = PipelineDeidentifier::new();
     if let Some(new_text) = request.text.clone() {
-        let (masked, pipeline_id) = if new_text.trim().is_empty() {
-            (String::new(), "noop".to_owned())
+        let (masked, pipeline_id, hash, retention) = if new_text.trim().is_empty() {
+            (
+                String::new(),
+                "noop".to_owned(),
+                String::new(),
+                RawTextRetention::Discarded,
+            )
         } else {
             let r = deid.deidentify(&new_text).map_err(|e| e.to_string())?;
-            (r.masked_text.clone(), r.pipeline_id.to_owned())
+            (
+                r.masked_text.clone(),
+                r.pipeline_id.to_owned(),
+                sha256_hex(new_text.as_bytes()),
+                if request.retain_raw_text {
+                    RawTextRetention::ExplicitRetained
+                } else {
+                    RawTextRetention::TemporaryDraft
+                },
+            )
         };
         draft.original_text = new_text;
         draft.masked_text = masked;
         draft.deident_pipeline_id = pipeline_id;
+        draft.raw_text_sha256 = hash;
+        draft.raw_text_retention = retention;
     }
     if let Some(new_question) = request.question.clone() {
         draft.question = new_question;
@@ -1835,6 +2232,8 @@ pub async fn run_draft_case(
             &draft.masked_text,
             &draft.deident_pipeline_id,
             &draft.question,
+            &draft.raw_text_sha256,
+            draft.raw_text_retention,
         )
         .map_err(|e| e.to_string())?;
     }
@@ -1856,11 +2255,46 @@ pub async fn run_draft_case(
     )?;
     ensure_general_scope(&provider)?;
     ensure_provider_ready(&provider).await?;
+    let compat_request = CaseRunRequest {
+        workspace_id: request.workspace_id.clone(),
+        text: draft.original_text.clone(),
+        question: draft.question.clone(),
+        provider_id: request.provider_id.clone(),
+        model: request.model.clone(),
+        attached_file_paths: attachments.iter().map(|a| a.stored_path.clone()).collect(),
+        patient_label: draft.patient_label.clone(),
+        data_boundary_mode: request.data_boundary_mode.clone(),
+        allow_phi_payload: request.allow_phi_payload,
+        retain_raw_text: request.retain_raw_text,
+        active_skill_id: request.active_skill_id.clone(),
+        use_online_evidence: request.use_online_evidence,
+    };
+    let mode = parse_data_boundary_mode(request.data_boundary_mode.as_deref());
+    let active_skill = load_active_skill_for_mode(
+        &state,
+        &workspace.id,
+        request.active_skill_id.as_deref(),
+        mode,
+    )?;
+    let boundary = boundary_preview_for_request(&compat_request, &provider, None);
+    enforce_data_boundary(&boundary)?;
+    let external_evidence = if compat_request.use_online_evidence {
+        fetch_external_evidence_for_case(&state, &draft.masked_text, &draft.question).await?
+    } else {
+        Vec::new()
+    };
     let mut options = VerdictOptions::default();
     let cfg = state.config.lock().map_err(|_| "config poisoned")?.clone();
     options.top_k = cfg.rag.top_k;
     if let Some(lang) = workspace.language.clone() {
         options.output_language = lang;
+    }
+    options.data_boundary_mode = boundary.mode;
+    options.retain_raw_text = request.retain_raw_text;
+    options.external_evidence = external_evidence;
+    if let Some(skill) = active_skill {
+        options.active_skill_id = Some(skill.id);
+        options.active_skill_instructions = Some(skill.body);
     }
 
     let embedder = Arc::clone(&state.embedder);
@@ -1879,6 +2313,7 @@ pub async fn run_draft_case(
             verdict_record: run.verdict_record,
             verdict: run.verdict,
             attachments,
+            data_boundary: boundary,
         }),
         Err(e) => {
             let msg = e.to_string();
@@ -1988,6 +2423,15 @@ pub(crate) async fn run_case_deliberated_impl(
     )?;
     ensure_general_scope(&provider)?;
     ensure_provider_ready(&provider).await?;
+    let mode = parse_data_boundary_mode(request.data_boundary_mode.as_deref());
+    let active_skill = load_active_skill_for_mode(
+        state,
+        &workspace.id,
+        request.active_skill_id.as_deref(),
+        mode,
+    )?;
+    let boundary = boundary_preview_for_request(&request, &provider, None);
+    enforce_data_boundary(&boundary)?;
 
     let store = case_store_arc(state, &workspace.id)?;
 
@@ -1997,12 +2441,23 @@ pub(crate) async fn run_case_deliberated_impl(
     let StagedDraft { case, attachments } =
         stage_draft(app, state, &workspace, &store, &request).await?;
     let masked_text = case.masked_text.clone();
+    let external_evidence = if request.use_online_evidence {
+        fetch_external_evidence_for_case(state, &masked_text, &case.question).await?
+    } else {
+        Vec::new()
+    };
 
     let cfg = state.config.lock().map_err(|_| "config poisoned")?.clone();
     let mut options = VerdictOptions::default();
     options.top_k = cfg.rag.top_k;
     if let Some(lang) = workspace.language.clone() {
         options.output_language = lang;
+    }
+    options.data_boundary_mode = boundary.mode;
+    options.retain_raw_text = request.retain_raw_text;
+    if let Some(skill) = active_skill {
+        options.active_skill_id = Some(skill.id);
+        options.active_skill_instructions = Some(skill.body);
     }
 
     let embedder = Arc::clone(&state.embedder);
@@ -2061,12 +2516,18 @@ pub(crate) async fn run_case_deliberated_impl(
         .collect();
     let past_refs: Vec<String> = (1..=past_cases.len()).map(|i| format!("P{i}")).collect();
     let attachment_refs: Vec<String> = (1..=attachments.len()).map(|i| format!("A{i}")).collect();
+    let online_refs: Vec<String> = (1..=external_evidence.len())
+        .map(|i| format!("X{i}"))
+        .collect();
 
     let mut allowed: std::collections::HashSet<String> = evidence_refs.iter().cloned().collect();
     for r in &past_refs {
         allowed.insert(r.clone());
     }
     for r in &attachment_refs {
+        allowed.insert(r.clone());
+    }
+    for r in &online_refs {
         allowed.insert(r.clone());
     }
 
@@ -2090,7 +2551,10 @@ pub(crate) async fn run_case_deliberated_impl(
         rules_block: options.rules_block.clone(),
         masked_case_text: masked_text.clone(),
         user_question: request.question.clone(),
+        active_skill_id: options.active_skill_id.clone(),
+        active_skill_instructions: options.active_skill_instructions.clone(),
         evidence_chunks,
+        external_evidence: external_evidence.clone(),
         past_cases,
         attachments: attachments.clone(),
         images,
@@ -2210,7 +2674,7 @@ pub(crate) async fn run_case_deliberated_impl(
         verdict_id: verdict_record.id.clone(),
         evidence_refs,
         past_cases_refs: past_refs,
-        online_evidence_refs: Vec::new(),
+        online_evidence_refs: online_refs,
         attachment_refs,
     };
 
@@ -2224,7 +2688,7 @@ pub(crate) async fn run_case_deliberated_impl(
         1_200,
     );
 
-    // Promote draft → Completed and persist the verdict-side records.
+    // Promote draft → review-ready and persist the verdict-side records.
     // The case row and attachments already exist on disk + in SQLite.
     {
         let g = store.lock().map_err(|_| "store poisoned")?;
@@ -2233,6 +2697,35 @@ pub(crate) async fn run_case_deliberated_impl(
         g.insert_trace(&retrieval).map_err(|e| e.to_string())?;
         g.insert_deliberation_trace(&trace)
             .map_err(|e| e.to_string())?;
+        g.insert_audit_run(&conclave_verdict::AuditRunRecord {
+            id: format!("audit-{}", uuid::Uuid::new_v4()),
+            case_id: case.id.clone(),
+            verdict_id: Some(verdict_record.id.clone()),
+            provider_id: provider.id().to_owned(),
+            model: outcome.model.clone(),
+            data_boundary_mode: boundary.mode,
+            payload_mode: AuditPayloadMode::Fingerprint,
+            active_skill_id: options.active_skill_id.clone(),
+            started_at: deliberation_started,
+            completed_at: Some(now),
+            latency_ms: elapsed_ms,
+            input_tokens: outcome.trace.total_input_tokens,
+            output_tokens: outcome.trace.total_output_tokens,
+            prompt_sha256: sha256_hex(format!("{masked_text}{retrieval:?}").as_bytes()),
+            output_sha256: sha256_hex(verdict_record.output_json.as_bytes()),
+            evidence_refs: retrieval.evidence_refs.clone(),
+            past_cases_refs: retrieval.past_cases_refs.clone(),
+            online_evidence_refs: retrieval.online_evidence_refs.clone(),
+            attachment_refs: retrieval.attachment_refs.clone(),
+            raw_text_retention: if request.retain_raw_text {
+                case.raw_text_retention
+            } else {
+                RawTextRetention::Discarded
+            },
+            status: "success".into(),
+            error: None,
+        })
+        .map_err(|e| e.to_string())?;
         g.upsert_case_memory(
             &case.id,
             &case_embedding,
@@ -2240,20 +2733,28 @@ pub(crate) async fn run_case_deliberated_impl(
             &verdict_summary,
         )
         .map_err(|e| e.to_string())?;
-        g.mark_case_status(&case_id, conclave_verdict::CaseStatus::Completed)
+        g.mark_case_status(&case_id, conclave_verdict::CaseStatus::ReviewReady)
             .map_err(|e| e.to_string())?;
+        if !request.retain_raw_text {
+            g.purge_case_phi(&case_id).map_err(|e| e.to_string())?;
+        }
     }
 
-    // The promoted record carries the canonical `Completed` status so
+    // The promoted record carries the canonical `ReviewReady` status so
     // the frontend response matches what's now in SQLite.
     let mut promoted_case = case;
-    promoted_case.status = conclave_verdict::CaseStatus::Completed;
+    promoted_case.status = conclave_verdict::CaseStatus::ReviewReady;
+    if !request.retain_raw_text {
+        promoted_case.original_text.clear();
+        promoted_case.raw_text_retention = RawTextRetention::Discarded;
+    }
 
     Ok(CaseRunResponse {
         case: promoted_case,
         verdict_record,
         verdict: outcome.verdict,
         attachments,
+        data_boundary: boundary,
     })
 }
 
@@ -2441,6 +2942,11 @@ pub async fn run_batch_cases(
                     model,
                     attached_file_paths: case.attached_file_paths,
                     patient_label: case.patient_label.clone(),
+                    data_boundary_mode: None,
+                    allow_phi_payload: false,
+                    retain_raw_text: false,
+                    active_skill_id: None,
+                    use_online_evidence: false,
                 };
                 let result = if deliberative {
                     run_case_deliberated_impl(&app_in_task, state_ref, req, Some(idx)).await
@@ -2592,6 +3098,9 @@ pub struct CaseDetail {
     pub case: CaseRecord,
     pub verdict_record: Option<VerdictRecord>,
     pub verdict: Option<Verdict>,
+    pub attachments: Vec<CaseAttachment>,
+    pub audit: Option<conclave_verdict::AuditRunRecord>,
+    pub review: Option<ReviewMetadataRecord>,
 }
 
 #[tauri::command]
@@ -2609,10 +3118,20 @@ pub fn show_case(
     let verdict = verdict_record
         .as_ref()
         .and_then(|v| serde_json::from_str::<Verdict>(&v.output_json).ok());
+    let audit = store
+        .latest_audit_for_case(&id)
+        .map_err(|e| e.to_string())?;
+    let review = store.get_review_metadata(&id).map_err(|e| e.to_string())?;
+    let attachments = store
+        .list_attachments_for_case(&id)
+        .map_err(|e| e.to_string())?;
     Ok(Some(CaseDetail {
         case,
         verdict_record,
         verdict,
+        attachments,
+        audit,
+        review,
     }))
 }
 
@@ -2622,6 +3141,9 @@ pub struct FeedbackRequest {
     pub case_id: String,
     pub kind: String,
     pub reason: Option<String>,
+    pub reviewer_name: Option<String>,
+    pub reviewer_role: Option<String>,
+    pub final_verdict_json: Option<String>,
 }
 
 #[tauri::command]
@@ -2634,14 +3156,145 @@ pub fn submit_feedback(state: State<'_, AppState>, request: FeedbackRequest) -> 
     };
     let store = case_store_arc(&state, &request.workspace_id)?;
     let store = store.lock().map_err(|_| "store poisoned")?;
+    let verdict = store
+        .latest_verdict(&request.case_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("no verdict found for case `{}`", request.case_id))?;
     store
         .upsert_feedback(&FeedbackRecord {
-            case_id: request.case_id,
+            case_id: request.case_id.clone(),
             kind,
-            reason: request.reason,
-            modified_verdict_json: None,
+            reason: request.reason.clone(),
+            modified_verdict_json: request.final_verdict_json.clone(),
             created_at: chrono::Utc::now(),
         })
+        .map_err(|e| e.to_string())?;
+    let decision = match kind {
+        FeedbackKind::Accept => ReviewDecision::Accept,
+        FeedbackKind::Modify => ReviewDecision::Modify,
+        FeedbackKind::Reject => ReviewDecision::Reject,
+    };
+    let diff_summary = request
+        .final_verdict_json
+        .as_ref()
+        .and_then(|final_json| summarize_json_diff(&verdict.output_json, final_json));
+    store
+        .finalize_review(&ReviewMetadataRecord {
+            case_id: request.case_id,
+            verdict_id: verdict.id,
+            decision,
+            reviewer_name: request.reviewer_name,
+            reviewer_role: request.reviewer_role,
+            note: request.reason,
+            final_verdict_json: request.final_verdict_json,
+            diff_summary,
+            reviewed_at: chrono::Utc::now(),
+        })
+        .map_err(|e| e.to_string())
+}
+
+fn summarize_json_diff(original_json: &str, final_json: &str) -> Option<String> {
+    if original_json.trim() == final_json.trim() {
+        return None;
+    }
+    let Ok(original) = serde_json::from_str::<serde_json::Value>(original_json) else {
+        return Some("Final verdict text differs from generated draft".to_owned());
+    };
+    let Ok(final_value) = serde_json::from_str::<serde_json::Value>(final_json) else {
+        return Some("Final verdict text differs from generated draft".to_owned());
+    };
+    if original == final_value {
+        return None;
+    }
+    let mut changed = Vec::new();
+    if let (Some(o), Some(f)) = (original.as_object(), final_value.as_object()) {
+        for key in f.keys() {
+            if o.get(key) != f.get(key) {
+                changed.push(key.clone());
+            }
+        }
+        for key in o.keys() {
+            if !f.contains_key(key) {
+                changed.push(key.clone());
+            }
+        }
+        changed.sort();
+        changed.dedup();
+    }
+    if changed.is_empty() {
+        Some("Final verdict JSON differs from generated draft".to_owned())
+    } else {
+        Some(format!("Changed fields: {}", changed.join(", ")))
+    }
+}
+
+#[tauri::command]
+pub fn purge_case_phi(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    case_id: String,
+) -> CommandResult<CaseRecord> {
+    let store = case_store_arc(&state, &workspace_id)?;
+    let store = store.lock().map_err(|_| "store poisoned")?;
+    store.purge_case_phi(&case_id).map_err(|e| e.to_string())?;
+    store
+        .get_case(&case_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("case `{case_id}` not found"))
+}
+
+#[tauri::command]
+pub fn purge_case_attachments(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    case_id: String,
+) -> CommandResult<usize> {
+    let store = case_store_arc(&state, &workspace_id)?;
+    let store = store.lock().map_err(|_| "store poisoned")?;
+    store
+        .purge_case_attachment_files(&case_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn audit_status(
+    state: State<'_, AppState>,
+    workspace_id: String,
+) -> CommandResult<conclave_verdict::AuditStatus> {
+    let store = case_store_arc(&state, &workspace_id)?;
+    let store = store.lock().map_err(|_| "store poisoned")?;
+    store.audit_status().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_audit_runs(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    limit: usize,
+) -> CommandResult<Vec<conclave_verdict::AuditRunRecord>> {
+    let store = case_store_arc(&state, &workspace_id)?;
+    let store = store.lock().map_err(|_| "store poisoned")?;
+    store.list_audit_runs(limit).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn export_audit_runs(
+    state: State<'_, AppState>,
+    workspace_id: String,
+) -> CommandResult<Vec<conclave_verdict::AuditRunRecord>> {
+    let store = case_store_arc(&state, &workspace_id)?;
+    let store = store.lock().map_err(|_| "store poisoned")?;
+    store.list_audit_runs(usize::MAX).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_skills(
+    state: State<'_, AppState>,
+    workspace_id: String,
+) -> CommandResult<Vec<conclave_verdict::Skill>> {
+    let user_skills = state.paths.config_dir().join("skills");
+    let workspace_skills = state.paths.workspace_dir(&workspace_id).join("skills");
+    conclave_verdict::load_skills(Some(&user_skills), Some(&workspace_skills))
         .map_err(|e| e.to_string())
 }
 

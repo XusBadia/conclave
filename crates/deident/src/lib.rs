@@ -561,6 +561,58 @@ mod tests {
     }
 
     #[test]
+    fn es_fixture_masks_core_clinical_pii() {
+        let p = pipeline();
+        let text = "Paciente María García López, DNI 12345678Z, NIE X1234567L, \
+                    NHC: 4567890, nacida el 12/03/1940. Contacto +34 612 345 678 \
+                    y maria.garcia@example.com. Revisada en Hospital Clínic de Barcelona. \
+                    Vive en Calle de Mallorca 401.";
+        let out = p.run(text).unwrap();
+        for needle in [
+            "<PATIENT_NAME_1>",
+            "<DNI_1>",
+            "<NIE_1>",
+            "<MRN_1>",
+            "<DATE_1>",
+            "<PHONE_1>",
+            "<EMAIL_1>",
+            "<LOCATION_1>",
+            "<LOCATION_2>",
+        ] {
+            assert!(
+                out.masked_text.contains(needle),
+                "{needle}: {}",
+                out.masked_text
+            );
+        }
+        assert!(out.categories_found.contains(&PiiCategory::Location));
+    }
+
+    #[test]
+    fn en_fixture_masks_core_clinical_pii() {
+        let p = pipeline();
+        let text = "Patient John Smith, MRN 99887766, seen on 2024-05-12 at \
+                    St Mary Medical Center. Phone +1 415 555 2671, email \
+                    john.smith@example.org, address 221 Baker Street.";
+        let out = p.run(text).unwrap();
+        for needle in [
+            "<PATIENT_NAME_1>",
+            "<MRN_1>",
+            "<DATE_1>",
+            "<PHONE_1>",
+            "<EMAIL_1>",
+            "<LOCATION_1>",
+            "<LOCATION_2>",
+        ] {
+            assert!(
+                out.masked_text.contains(needle),
+                "{needle}: {}",
+                out.masked_text
+            );
+        }
+    }
+
+    #[test]
     fn clinician_honorific_masked_separately() {
         let p = pipeline();
         let out = p

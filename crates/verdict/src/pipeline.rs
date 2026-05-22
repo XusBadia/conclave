@@ -31,18 +31,21 @@ use uuid::Uuid;
 
 use conclave_core::{Error, Result, Workspace, MEDICAL_DISCLAIMER};
 use conclave_deident::Deidentifier;
+use conclave_evidence::EvidenceItem;
 use conclave_providers::{CompletionRequest, LlmProvider, Message, ProviderError};
 use conclave_rag::{DocumentRepository, Embedder};
 
 use crate::persistence::{
-    CaseAttachment, CaseRecord, CaseStatus, CaseStore, PastCaseHit, RetrievalTrace, VerdictRecord,
+    AuditRunRecord, CaseAttachment, CaseRecord, CaseStatus, CaseStore, PastCaseHit, RetrievalTrace,
+    VerdictRecord,
 };
 use crate::prompt::{
-    CaseAttachmentInput, EvidenceChunkInput, PastCaseInput, PromptInputs, PromptTemplate,
-    VERDICT_PROMPT_VERSION,
+    CaseAttachmentInput, EvidenceChunkInput, ExternalEvidenceInput, PastCaseInput, PromptInputs,
+    PromptTemplate, VERDICT_PROMPT_VERSION,
 };
 use crate::schema::Verdict;
 use crate::validation::validate_verdict;
+use crate::{sha256_hex, AuditPayloadMode, DataBoundaryMode, RawTextRetention};
 
 /// Configuration knobs for a verdict run.
 #[derive(Debug, Clone)]
@@ -61,6 +64,19 @@ pub struct VerdictOptions {
     pub past_cases_k: usize,
     /// Minimum cosine similarity for a past case to be considered.
     pub past_cases_min_similarity: f32,
+    /// Runtime data-boundary mode.
+    pub data_boundary_mode: DataBoundaryMode,
+    /// Audit payload posture. Default is fingerprint-only.
+    pub audit_payload_mode: AuditPayloadMode,
+    /// Optional skill id persisted in audit metadata.
+    pub active_skill_id: Option<String>,
+    /// Optional markdown skill body appended to the prompt rules.
+    pub active_skill_instructions: Option<String>,
+    /// Keep raw text locally after a successful run.
+    pub retain_raw_text: bool,
+    /// Optional live literature supplied by an opt-in external evidence
+    /// lookup. These become `X1..Xn` refs in the verdict prompt.
+    pub external_evidence: Vec<EvidenceItem>,
 }
 
 impl Default for VerdictOptions {
@@ -73,6 +89,12 @@ impl Default for VerdictOptions {
             max_output_tokens: 2048,
             past_cases_k: 3,
             past_cases_min_similarity: 0.65,
+            data_boundary_mode: DataBoundaryMode::default(),
+            audit_payload_mode: AuditPayloadMode::default(),
+            active_skill_id: None,
+            active_skill_instructions: None,
+            retain_raw_text: false,
+            external_evidence: Vec::new(),
         }
     }
 }
@@ -139,10 +161,17 @@ impl VerdictPipeline {
         attachments: &[CaseAttachment],
         options: &VerdictOptions,
     ) -> Result<VerdictRun> {
+        self.ensure_runtime_boundary(attachments, options)?;
+
         // 1) De-identify.
         let deident_result = self.deident.deidentify(case_text)?;
         let masked_text = deident_result.masked_text.clone();
         let deident_pipeline_id = deident_result.pipeline_id.to_owned();
+        let raw_text_sha256 = if case_text.is_empty() {
+            String::new()
+        } else {
+            sha256_hex(case_text.as_bytes())
+        };
 
         // 2) Embed the case once — reused for both KB retrieval and past
         //    case retrieval.
@@ -161,6 +190,8 @@ impl VerdictPipeline {
         // 4b) Refs for case-scoped attachments.
         let attachment_refs: Vec<String> =
             (1..=attachments.len()).map(|i| format!("A{i}")).collect();
+        let external_rows = external_prompt_rows(&options.external_evidence);
+        let online_refs: Vec<String> = (1..=external_rows.len()).map(|i| format!("X{i}")).collect();
 
         // 5) Assemble prompt.
         let evidence_inputs: Vec<EvidenceChunkInput<'_>> = chunks
@@ -197,6 +228,20 @@ impl VerdictPipeline {
                 needs_ocr: a.needs_ocr,
             })
             .collect();
+        let external_inputs: Vec<ExternalEvidenceInput<'_>> = external_rows
+            .iter()
+            .enumerate()
+            .map(|(i, e)| ExternalEvidenceInput {
+                index: i + 1,
+                source: &e.source,
+                title: &e.title,
+                authors: &e.authors,
+                year: &e.year,
+                venue: &e.venue,
+                url: &e.url,
+                abstract_text: &e.abstract_text,
+            })
+            .collect();
         let specialty = self
             .workspace
             .specialty
@@ -206,8 +251,10 @@ impl VerdictPipeline {
             specialty,
             output_language: &options.output_language,
             rules_block: &options.rules_block,
+            active_skill_id: options.active_skill_id.as_deref(),
+            active_skill_instructions: options.active_skill_instructions.as_deref(),
             evidence_chunks: &evidence_inputs,
-            external_evidence: &[],
+            external_evidence: &external_inputs,
             past_cases: &past_cases_inputs,
             case_attachments: &attachment_inputs,
             de_identified_case_text: &masked_text,
@@ -218,9 +265,17 @@ impl VerdictPipeline {
 
         // 4) Call the LLM with one retry on schema / citation failure.
         let mut allowed_refs: HashSet<String> = evidence_refs.iter().cloned().collect();
+        for r in &past_refs {
+            allowed_refs.insert(r.clone());
+        }
         for r in &attachment_refs {
             allowed_refs.insert(r.clone());
         }
+        for r in &online_refs {
+            allowed_refs.insert(r.clone());
+        }
+        let prompt_hash = sha256_hex(prompt.as_bytes());
+        let audit_started_at = Utc::now();
         let start = Instant::now();
         let (mut response, mut model) = self
             .call_llm(&prompt, options)
@@ -255,18 +310,30 @@ Return the JSON object only, citing only the supplied evidence ids."
 
         // 6) Persist.
         let now = Utc::now();
+        let raw_retention = if options.retain_raw_text {
+            RawTextRetention::ExplicitRetained
+        } else {
+            RawTextRetention::Discarded
+        };
+        let output_json = serde_json::to_string(&verdict).unwrap_or_else(|_| String::from("{}"));
         let case = CaseRecord {
             id: format!("case-{}", Uuid::new_v4()),
             created_at: now,
             case_date: now,
             workspace_id: self.workspace.id.clone(),
             question: question.to_owned(),
-            original_text: case_text.to_owned(),
+            original_text: if options.retain_raw_text {
+                case_text.to_owned()
+            } else {
+                String::new()
+            },
             masked_text,
             deident_pipeline_id,
-            status: CaseStatus::Completed,
+            status: CaseStatus::ReviewReady,
             patient_label: String::new(),
             latest_error: None,
+            raw_text_sha256,
+            raw_text_retention: raw_retention,
         };
         let verdict_record = VerdictRecord {
             id: format!("verdict-{}", Uuid::new_v4()),
@@ -277,14 +344,14 @@ Return the JSON object only, citing only the supplied evidence ids."
             latency_ms: elapsed,
             input_tokens: parsed_response.usage.input_tokens,
             output_tokens: parsed_response.usage.output_tokens,
-            output_json: serde_json::to_string(&verdict).unwrap_or_else(|_| String::from("{}")),
+            output_json: output_json.clone(),
             created_at: now,
         };
         let trace = RetrievalTrace {
             verdict_id: verdict_record.id.clone(),
             evidence_refs,
             past_cases_refs: past_refs,
-            online_evidence_refs: Vec::new(),
+            online_evidence_refs: online_refs,
             attachment_refs,
         };
 
@@ -307,6 +374,30 @@ Return the JSON object only, citing only the supplied evidence ids."
             store.insert_case(&case)?;
             store.insert_verdict(&verdict_record)?;
             store.insert_trace(&trace)?;
+            store.insert_audit_run(&AuditRunRecord {
+                id: format!("audit-{}", Uuid::new_v4()),
+                case_id: case.id.clone(),
+                verdict_id: Some(verdict_record.id.clone()),
+                provider_id: self.provider.id().to_owned(),
+                model: verdict_record.model.clone(),
+                data_boundary_mode: options.data_boundary_mode,
+                payload_mode: options.audit_payload_mode,
+                active_skill_id: options.active_skill_id.clone(),
+                started_at: audit_started_at,
+                completed_at: Some(now),
+                latency_ms: elapsed,
+                input_tokens: parsed_response.usage.input_tokens,
+                output_tokens: parsed_response.usage.output_tokens,
+                prompt_sha256: prompt_hash,
+                output_sha256: sha256_hex(output_json.as_bytes()),
+                evidence_refs: trace.evidence_refs.clone(),
+                past_cases_refs: trace.past_cases_refs.clone(),
+                online_evidence_refs: trace.online_evidence_refs.clone(),
+                attachment_refs: trace.attachment_refs.clone(),
+                raw_text_retention: raw_retention,
+                status: "success".into(),
+                error: None,
+            })?;
             store.upsert_case_memory(
                 &case.id,
                 &case_embedding,
@@ -337,6 +428,8 @@ Return the JSON object only, citing only the supplied evidence ids."
         attachments: &[CaseAttachment],
         options: &VerdictOptions,
     ) -> Result<VerdictRun> {
+        self.ensure_runtime_boundary(attachments, options)?;
+
         // 1) Embed once for KB + past-case retrieval.
         let case_embedding = self.embed_case(&case.masked_text).await?;
 
@@ -353,6 +446,8 @@ Return the JSON object only, citing only the supplied evidence ids."
         // 4) Case-scoped attachment refs.
         let attachment_refs: Vec<String> =
             (1..=attachments.len()).map(|i| format!("A{i}")).collect();
+        let external_rows = external_prompt_rows(&options.external_evidence);
+        let online_refs: Vec<String> = (1..=external_rows.len()).map(|i| format!("X{i}")).collect();
 
         // 5) Assemble prompt.
         let evidence_inputs: Vec<EvidenceChunkInput<'_>> = chunks
@@ -389,6 +484,20 @@ Return the JSON object only, citing only the supplied evidence ids."
                 needs_ocr: a.needs_ocr,
             })
             .collect();
+        let external_inputs: Vec<ExternalEvidenceInput<'_>> = external_rows
+            .iter()
+            .enumerate()
+            .map(|(i, e)| ExternalEvidenceInput {
+                index: i + 1,
+                source: &e.source,
+                title: &e.title,
+                authors: &e.authors,
+                year: &e.year,
+                venue: &e.venue,
+                url: &e.url,
+                abstract_text: &e.abstract_text,
+            })
+            .collect();
         let specialty = self
             .workspace
             .specialty
@@ -398,8 +507,10 @@ Return the JSON object only, citing only the supplied evidence ids."
             specialty,
             output_language: &options.output_language,
             rules_block: &options.rules_block,
+            active_skill_id: options.active_skill_id.as_deref(),
+            active_skill_instructions: options.active_skill_instructions.as_deref(),
             evidence_chunks: &evidence_inputs,
-            external_evidence: &[],
+            external_evidence: &external_inputs,
             past_cases: &past_cases_inputs,
             case_attachments: &attachment_inputs,
             de_identified_case_text: &case.masked_text,
@@ -410,9 +521,17 @@ Return the JSON object only, citing only the supplied evidence ids."
 
         // 6) Call the LLM with one retry on validation failure.
         let mut allowed_refs: HashSet<String> = evidence_refs.iter().cloned().collect();
+        for r in &past_refs {
+            allowed_refs.insert(r.clone());
+        }
         for r in &attachment_refs {
             allowed_refs.insert(r.clone());
         }
+        for r in &online_refs {
+            allowed_refs.insert(r.clone());
+        }
+        let prompt_hash = sha256_hex(prompt.as_bytes());
+        let audit_started_at = Utc::now();
         let start = Instant::now();
         let (mut response, mut model) = self
             .call_llm(&prompt, options)
@@ -445,8 +564,9 @@ Return the JSON object only, citing only the supplied evidence ids."
         verdict.disclaimer = MEDICAL_DISCLAIMER.to_owned();
 
         // 7) Persist the verdict against the existing case_id and flip
-        //    status to Completed. The case row itself is NOT re-inserted.
+        //    status to ReviewReady. The case row itself is NOT re-inserted.
         let now = Utc::now();
+        let output_json = serde_json::to_string(&verdict).unwrap_or_else(|_| String::from("{}"));
         let verdict_record = VerdictRecord {
             id: format!("verdict-{}", Uuid::new_v4()),
             case_id: case.id.clone(),
@@ -456,14 +576,14 @@ Return the JSON object only, citing only the supplied evidence ids."
             latency_ms: elapsed,
             input_tokens: parsed_response.usage.input_tokens,
             output_tokens: parsed_response.usage.output_tokens,
-            output_json: serde_json::to_string(&verdict).unwrap_or_else(|_| String::from("{}")),
+            output_json: output_json.clone(),
             created_at: now,
         };
         let trace = RetrievalTrace {
             verdict_id: verdict_record.id.clone(),
             evidence_refs,
             past_cases_refs: past_refs,
-            online_evidence_refs: Vec::new(),
+            online_evidence_refs: online_refs,
             attachment_refs,
         };
         let verdict_summary = truncate(
@@ -482,17 +602,53 @@ Return the JSON object only, citing only the supplied evidence ids."
                 .map_err(|_| Error::Rag("case store mutex poisoned".into()))?;
             store.insert_verdict(&verdict_record)?;
             store.insert_trace(&trace)?;
+            let raw_retention = if options.retain_raw_text {
+                case.raw_text_retention
+            } else {
+                RawTextRetention::Discarded
+            };
+            store.insert_audit_run(&AuditRunRecord {
+                id: format!("audit-{}", Uuid::new_v4()),
+                case_id: case.id.clone(),
+                verdict_id: Some(verdict_record.id.clone()),
+                provider_id: self.provider.id().to_owned(),
+                model: verdict_record.model.clone(),
+                data_boundary_mode: options.data_boundary_mode,
+                payload_mode: options.audit_payload_mode,
+                active_skill_id: options.active_skill_id.clone(),
+                started_at: audit_started_at,
+                completed_at: Some(now),
+                latency_ms: elapsed,
+                input_tokens: parsed_response.usage.input_tokens,
+                output_tokens: parsed_response.usage.output_tokens,
+                prompt_sha256: prompt_hash,
+                output_sha256: sha256_hex(output_json.as_bytes()),
+                evidence_refs: trace.evidence_refs.clone(),
+                past_cases_refs: trace.past_cases_refs.clone(),
+                online_evidence_refs: trace.online_evidence_refs.clone(),
+                attachment_refs: trace.attachment_refs.clone(),
+                raw_text_retention: raw_retention,
+                status: "success".into(),
+                error: None,
+            })?;
             store.upsert_case_memory(
                 &case.id,
                 &case_embedding,
                 &case_memory_summary,
                 &verdict_summary,
             )?;
-            store.mark_case_status(&case.id, CaseStatus::Completed)?;
+            store.mark_case_status(&case.id, CaseStatus::ReviewReady)?;
+            if !options.retain_raw_text {
+                store.purge_case_phi(&case.id)?;
+            }
         }
 
         let mut promoted_case = case.clone();
-        promoted_case.status = CaseStatus::Completed;
+        promoted_case.status = CaseStatus::ReviewReady;
+        if !options.retain_raw_text {
+            promoted_case.original_text.clear();
+            promoted_case.raw_text_retention = RawTextRetention::Discarded;
+        }
         Ok(VerdictRun {
             case: promoted_case,
             verdict_record,
@@ -560,6 +716,40 @@ Return the JSON object only, citing only the supplied evidence ids."
         )
     }
 
+    fn ensure_runtime_boundary(
+        &self,
+        attachments: &[CaseAttachment],
+        options: &VerdictOptions,
+    ) -> Result<()> {
+        if matches!(options.data_boundary_mode, DataBoundaryMode::LocalOnly)
+            && self.provider.requires_network()
+        {
+            return Err(Error::invalid_config(format!(
+                "local_only blocks network provider `{}`",
+                self.provider.id()
+            )));
+        }
+        if matches!(options.data_boundary_mode, DataBoundaryMode::LocalOnly)
+            && !options.external_evidence.is_empty()
+        {
+            return Err(Error::invalid_config(
+                "local_only blocks online evidence lookup",
+            ));
+        }
+        let has_image_attachment = attachments
+            .iter()
+            .any(|a| a.doc_type.eq_ignore_ascii_case("image"));
+        if has_image_attachment
+            && self.provider.requires_network()
+            && !matches!(options.data_boundary_mode, DataBoundaryMode::ExplicitPhi)
+        {
+            return Err(Error::invalid_config(
+                "cloud vision requires explicit_phi mode",
+            ));
+        }
+        Ok(())
+    }
+
     async fn call_llm(
         &self,
         prompt: &str,
@@ -587,6 +777,44 @@ struct EvidenceChunk {
     snippet: String,
 }
 
+#[derive(Debug, Clone)]
+struct ExternalEvidencePromptRow {
+    source: String,
+    title: String,
+    authors: String,
+    year: String,
+    venue: String,
+    url: String,
+    abstract_text: String,
+}
+
+fn external_prompt_rows(items: &[EvidenceItem]) -> Vec<ExternalEvidencePromptRow> {
+    items
+        .iter()
+        .map(|item| ExternalEvidencePromptRow {
+            source: item.source.clone(),
+            title: item.title.clone(),
+            authors: authors_label(&item.authors),
+            year: item.year.map_or_else(|| "?".to_owned(), |y| y.to_string()),
+            venue: item.venue.clone().unwrap_or_else(|| "?".to_owned()),
+            url: item.url.clone(),
+            abstract_text: item
+                .abstract_text
+                .clone()
+                .unwrap_or_else(|| "No abstract available from the external source.".to_owned()),
+        })
+        .collect()
+}
+
+fn authors_label(authors: &[String]) -> String {
+    match authors {
+        [] => "?".to_owned(),
+        [one] => one.clone(),
+        [one, two] => format!("{one}, {two}"),
+        [one, ..] => format!("{one} et al."),
+    }
+}
+
 fn truncate(s: &str, max_chars: usize) -> String {
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {
@@ -602,9 +830,12 @@ fn truncate(s: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
     use chrono::Utc;
     use conclave_deident::PipelineDeidentifier;
-    use conclave_providers::MockProvider;
+    use conclave_providers::{
+        CompletionResponse, MockProvider, ProviderCapabilities, ProviderScope, Usage,
+    };
     use conclave_rag::{MockEmbedder, RepositoryLayout};
 
     fn sample_workspace() -> Workspace {
@@ -636,6 +867,64 @@ mod tests {
             "disclaimer": "stub"
         }))
         .unwrap()
+    }
+
+    fn sample_verdict_json_with_x_ref() -> String {
+        serde_json::to_string(&serde_json::json!({
+            "case_summary": "Paciente con disnea súbita.",
+            "key_clinical_data": [],
+            "applied_evidence": [{"ref": "X1", "claim": "La literatura externa apoya estratificación inicial."}],
+            "primary_recommendation": {
+                "action": "Estratificar riesgo y validar con protocolo local.",
+                "rationale": "La evidencia externa es auxiliar y no validada por el centro."
+            },
+            "alternatives": [],
+            "certainty_level": "low",
+            "certainty_justification": "Evidencia externa sin protocolo local suficiente.",
+            "red_flags": [],
+            "follow_up_triggers": [],
+            "disclaimer": "stub"
+        }))
+        .unwrap()
+    }
+
+    #[derive(Debug)]
+    struct NetworkProvider;
+
+    #[async_trait]
+    impl LlmProvider for NetworkProvider {
+        fn id(&self) -> &'static str {
+            "network-test"
+        }
+
+        fn capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities {
+                max_context_tokens: 200_000,
+                supports_json_mode: true,
+                supports_streaming: false,
+                vision: false,
+                scope: ProviderScope::General,
+            }
+        }
+
+        fn requires_network(&self) -> bool {
+            true
+        }
+
+        async fn complete(
+            &self,
+            _req: CompletionRequest,
+        ) -> std::result::Result<CompletionResponse, ProviderError> {
+            Ok(CompletionResponse {
+                text: sample_verdict_json(),
+                usage: Usage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                },
+                model: "network-test".into(),
+                web_citations: Vec::new(),
+            })
+        }
     }
 
     #[tokio::test]
@@ -680,5 +969,134 @@ mod tests {
             .starts_with("Conclave is an experimental"));
         assert_eq!(run.case.workspace_id, "test-ws");
         assert_eq!(run.verdict_record.prompt_version, VERDICT_PROMPT_VERSION);
+    }
+
+    #[tokio::test]
+    async fn external_evidence_creates_x_refs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let layout = RepositoryLayout::new(tmp.path().join("ws"));
+        let repo = Arc::new(
+            DocumentRepository::open(layout, MockEmbedder::new().dim())
+                .await
+                .unwrap(),
+        );
+        let store = Arc::new(Mutex::new(
+            CaseStore::open(tmp.path().join("cases.sqlite")).unwrap(),
+        ));
+        let provider: Arc<dyn LlmProvider> =
+            Arc::new(MockProvider::with_response(sample_verdict_json_with_x_ref()));
+        let pipeline = VerdictPipeline::new(
+            sample_workspace(),
+            Box::new(PipelineDeidentifier::new()),
+            Arc::new(MockEmbedder::new()),
+            repo,
+            provider,
+            Arc::clone(&store),
+        );
+        let options = VerdictOptions {
+            external_evidence: vec![EvidenceItem {
+                source: "pubmed".into(),
+                id: "1".into(),
+                title: "External paper".into(),
+                authors: vec!["Smith".into()],
+                year: Some(2025),
+                venue: Some("Journal".into()),
+                abstract_text: Some("Abstract".into()),
+                url: "https://pubmed.ncbi.nlm.nih.gov/1/".into(),
+            }],
+            ..Default::default()
+        };
+
+        let run = pipeline
+            .run("Paciente con disnea.", "Manejo?", &[], &options)
+            .await
+            .unwrap();
+
+        assert_eq!(run.trace.online_evidence_refs, vec!["X1"]);
+        assert_eq!(run.verdict.applied_evidence[0].reference, "X1");
+        let audit = store
+            .lock()
+            .unwrap()
+            .latest_audit_for_case(&run.case.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(audit.online_evidence_refs, vec!["X1"]);
+    }
+
+    #[tokio::test]
+    async fn local_only_rejects_network_provider_before_calling_llm() {
+        let tmp = tempfile::tempdir().unwrap();
+        let layout = RepositoryLayout::new(tmp.path().join("ws"));
+        let repo = Arc::new(
+            DocumentRepository::open(layout, MockEmbedder::new().dim())
+                .await
+                .unwrap(),
+        );
+        let store = Arc::new(Mutex::new(
+            CaseStore::open(tmp.path().join("cases.sqlite")).unwrap(),
+        ));
+        let provider: Arc<dyn LlmProvider> = Arc::new(NetworkProvider);
+        let pipeline = VerdictPipeline::new(
+            sample_workspace(),
+            Box::new(PipelineDeidentifier::new()),
+            Arc::new(MockEmbedder::new()),
+            repo,
+            provider,
+            store,
+        );
+        let options = VerdictOptions {
+            data_boundary_mode: DataBoundaryMode::LocalOnly,
+            ..Default::default()
+        };
+
+        let err = pipeline
+            .run("Paciente con disnea.", "Manejo?", &[], &options)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidConfig(_)));
+    }
+
+    #[tokio::test]
+    async fn local_only_rejects_external_evidence_even_with_local_provider() {
+        let tmp = tempfile::tempdir().unwrap();
+        let layout = RepositoryLayout::new(tmp.path().join("ws"));
+        let repo = Arc::new(
+            DocumentRepository::open(layout, MockEmbedder::new().dim())
+                .await
+                .unwrap(),
+        );
+        let store = Arc::new(Mutex::new(
+            CaseStore::open(tmp.path().join("cases.sqlite")).unwrap(),
+        ));
+        let provider: Arc<dyn LlmProvider> =
+            Arc::new(MockProvider::with_response(sample_verdict_json()));
+        let pipeline = VerdictPipeline::new(
+            sample_workspace(),
+            Box::new(PipelineDeidentifier::new()),
+            Arc::new(MockEmbedder::new()),
+            repo,
+            provider,
+            store,
+        );
+        let options = VerdictOptions {
+            data_boundary_mode: DataBoundaryMode::LocalOnly,
+            external_evidence: vec![EvidenceItem {
+                source: "europepmc".into(),
+                id: "1".into(),
+                title: "External paper".into(),
+                authors: Vec::new(),
+                year: None,
+                venue: None,
+                abstract_text: None,
+                url: "https://example.test/1".into(),
+            }],
+            ..Default::default()
+        };
+
+        let err = pipeline
+            .run("Paciente con disnea.", "Manejo?", &[], &options)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidConfig(_)));
     }
 }

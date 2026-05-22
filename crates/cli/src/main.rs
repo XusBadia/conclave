@@ -93,6 +93,10 @@ enum Command {
     Export(commands::export::ExportArgs),
     /// Search PubMed for recent literature (Phase 6).
     Evidence(commands::evidence::EvidenceArgs),
+    /// Inspect local fingerprint-first audit runs.
+    Audit(commands::audit::AuditArgs),
+    /// List and validate versionable prompt skills.
+    Skills(commands::skills::SkillsArgs),
     /// Inspect, list and test configured LLM providers.
     Providers(commands::providers::ProvidersArgs),
     /// Manage Conclave workspaces (the per-project config + data root).
@@ -136,6 +140,8 @@ async fn main() -> Result<()> {
         Command::Stats(args) => commands::stats::run(&ctx, args),
         Command::Export(args) => commands::export::run(&ctx, args),
         Command::Evidence(args) => commands::evidence::run(&ctx, args).await,
+        Command::Audit(args) => commands::audit::run(&ctx, args),
+        Command::Skills(args) => commands::skills::run(&ctx, args),
         Command::Providers(args) => commands::providers::run(&ctx, args).await,
         Command::Workspace(args) => commands::workspace::run(&ctx, args),
     }

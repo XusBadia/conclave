@@ -86,7 +86,7 @@ export interface ProviderInfo {
   available: boolean;
   default_model: string;
   requires_network: boolean;
-  auth: "api-key" | "local" | "oauth";
+  auth: "api-key" | "local" | "oauth" | "cli";
   // `subtask` flags providers that are restricted to non-clinical
   // utility flows (Apple Intelligence today). The picker filter in
   // Cases/Knowledge already hides them; we surface the kind so the
@@ -118,7 +118,12 @@ export interface CaseRecord {
   original_text: string;
   masked_text: string;
   deident_pipeline_id: string;
-  status: "draft" | "completed" | "failed";
+  status:
+    | "draft"
+    | "review_ready"
+    | "finalized"
+    | "finalized_legacy"
+    | "failed";
   /** Human-friendly identifier shown as the row title in the list — e.g.
    *  "Juan Pérez" or "CR-IA-011". Empty falls back to the question. */
   patient_label: string;
@@ -126,6 +131,22 @@ export interface CaseRecord {
    *  time. Surfaced in the detail view so the clinician sees *why* the
    *  committee aborted. Null otherwise. */
   latest_error: string | null;
+  raw_text_sha256: string;
+  raw_text_retention: RawTextRetention;
+}
+
+export type RawTextRetention =
+  | "legacy_retained"
+  | "temporary_draft"
+  | "explicit_retained"
+  | "discarded";
+
+export type DataBoundaryMode = "local_only" | "deid_cloud" | "explicit_phi";
+
+export type AuditPayloadMode = "none" | "fingerprint" | "preview" | "payload";
+
+export interface PrivacySettings {
+  default_data_boundary: DataBoundaryMode;
 }
 
 export interface VerdictRecord {
@@ -161,12 +182,82 @@ export interface CaseRunResponse {
   verdict_record: VerdictRecord;
   verdict: Verdict;
   attachments: CaseAttachment[];
+  data_boundary: DataBoundaryPreview;
 }
 
 export interface CaseDetail {
   case: CaseRecord;
   verdict_record: VerdictRecord | null;
   verdict: Verdict | null;
+  attachments: CaseAttachment[];
+  audit: AuditRunRecord | null;
+  review: ReviewMetadataRecord | null;
+}
+
+export interface AuditRunRecord {
+  id: string;
+  case_id: string;
+  verdict_id: string | null;
+  provider_id: string;
+  model: string;
+  data_boundary_mode: DataBoundaryMode;
+  payload_mode: AuditPayloadMode;
+  active_skill_id: string | null;
+  started_at: string;
+  completed_at: string | null;
+  latency_ms: number;
+  input_tokens: number;
+  output_tokens: number;
+  prompt_sha256: string;
+  output_sha256: string;
+  evidence_refs: string[];
+  past_cases_refs: string[];
+  online_evidence_refs: string[];
+  attachment_refs: string[];
+  raw_text_retention: RawTextRetention;
+  status: string;
+  error: string | null;
+}
+
+export interface AuditStatus {
+  run_count: number;
+  payload_mode: AuditPayloadMode;
+  retained_raw_cases: number;
+  legacy_retained_cases: number;
+}
+
+export interface ReviewMetadataRecord {
+  case_id: string;
+  verdict_id: string;
+  decision: "accept" | "modify" | "reject";
+  reviewer_name: string | null;
+  reviewer_role: string | null;
+  note: string | null;
+  final_verdict_json: string | null;
+  diff_summary: string | null;
+  reviewed_at: string;
+}
+
+export interface DataBoundaryPreview {
+  mode: DataBoundaryMode;
+  provider_id: string;
+  provider_requires_network: boolean;
+  sends_masked_text: boolean;
+  sends_raw_text: boolean;
+  sends_images: boolean;
+  stores_raw_text: boolean;
+  uses_online_evidence: boolean;
+  blocked_reason: string | null;
+}
+
+export interface Skill {
+  id: string;
+  title: string;
+  description: string;
+  recommended_workflow: string;
+  allowed_modes: string[];
+  body: string;
+  source: "built_in" | "user" | "workspace";
 }
 
 export type DeliberationPhase =
@@ -311,6 +402,9 @@ export const ipc = {
     invoke<string>("test_provider", { id, prompt }),
   removeProviderKey: (id: string) =>
     invoke<void>("remove_provider_key", { id }),
+  privacySettings: () => invoke<PrivacySettings>("privacy_settings"),
+  setPrivacySettings: (settings: PrivacySettings) =>
+    invoke<PrivacySettings>("set_privacy_settings", { settings }),
   oauthAnthropicStart: () =>
     invoke<{ url: string; provider_id: string; instructions: string }>(
       "oauth_anthropic_start",
@@ -337,6 +431,11 @@ export const ipc = {
     model?: string;
     attached_file_paths?: string[];
     patient_label?: string;
+    data_boundary_mode?: DataBoundaryMode;
+    allow_phi_payload?: boolean;
+    retain_raw_text?: boolean;
+    active_skill_id?: string;
+    use_online_evidence?: boolean;
   }) => invoke<CaseRunResponse>("run_case", { request: req }),
   runCaseDeliberated: (req: {
     workspace_id: string;
@@ -346,7 +445,26 @@ export const ipc = {
     model?: string;
     attached_file_paths?: string[];
     patient_label?: string;
+    data_boundary_mode?: DataBoundaryMode;
+    allow_phi_payload?: boolean;
+    retain_raw_text?: boolean;
+    active_skill_id?: string;
+    use_online_evidence?: boolean;
   }) => invoke<CaseRunResponse>("run_case_deliberated", { request: req }),
+  previewDataBoundary: (req: {
+    workspace_id: string;
+    text: string;
+    question: string;
+    provider_id: string;
+    model?: string;
+    attached_file_paths?: string[];
+    patient_label?: string;
+    data_boundary_mode?: DataBoundaryMode;
+    allow_phi_payload?: boolean;
+    retain_raw_text?: boolean;
+    active_skill_id?: string;
+    use_online_evidence?: boolean;
+  }) => invoke<DataBoundaryPreview>("preview_data_boundary", { request: req }),
   listCases: (workspaceId: string, limit: number) =>
     invoke<CaseRecord[]>("list_cases", { workspaceId, limit }),
   showCase: (workspaceId: string, id: string) =>
@@ -366,7 +484,22 @@ export const ipc = {
     case_id: string;
     kind: "accept" | "modify" | "reject";
     reason?: string;
+    reviewer_name?: string;
+    reviewer_role?: string;
+    final_verdict_json?: string;
   }) => invoke<void>("submit_feedback", { request: req }),
+  purgeCasePhi: (workspaceId: string, caseId: string) =>
+    invoke<CaseRecord>("purge_case_phi", { workspaceId, caseId }),
+  purgeCaseAttachments: (workspaceId: string, caseId: string) =>
+    invoke<number>("purge_case_attachments", { workspaceId, caseId }),
+  auditStatus: (workspaceId: string) =>
+    invoke<AuditStatus>("audit_status", { workspaceId }),
+  listAuditRuns: (workspaceId: string, limit: number) =>
+    invoke<AuditRunRecord[]>("list_audit_runs", { workspaceId, limit }),
+  exportAuditRuns: (workspaceId: string) =>
+    invoke<AuditRunRecord[]>("export_audit_runs", { workspaceId }),
+  listSkills: (workspaceId: string) =>
+    invoke<Skill[]>("list_skills", { workspaceId }),
   updateCaseDate: (req: {
     workspace_id: string;
     case_ids: string[];
@@ -415,6 +548,11 @@ export const ipc = {
     model?: string;
     text?: string;
     question?: string;
+    data_boundary_mode?: DataBoundaryMode;
+    allow_phi_payload?: boolean;
+    retain_raw_text?: boolean;
+    active_skill_id?: string;
+    use_online_evidence?: boolean;
   }) => invoke<CaseRunResponse>("run_draft_case", { request: req }),
 
   // Per-case cancel / retry

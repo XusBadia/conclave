@@ -23,6 +23,7 @@ import {
   activeProvider,
   connectedSlotProviders,
   ipc,
+  type DataBoundaryMode,
   type ProviderInfo,
 } from "../lib/ipc";
 import {
@@ -54,6 +55,9 @@ export function SettingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [testOutput, setTestOutput] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [privacyMode, setPrivacyMode] =
+    useState<DataBoundaryMode>("deid_cloud");
+  const [privacyBusy, setPrivacyBusy] = useState(false);
 
   const [flow, setFlow] = useState<ConnectFlow>({ kind: "idle" });
   const [migrationOpen, setMigrationOpen] = useState(false);
@@ -77,8 +81,14 @@ export function SettingsPage() {
     setLoading(true);
     setError(null);
     try {
-      const list = await ipc.listProviders();
+      const [list, privacy] = await Promise.all([
+        ipc.listProviders(),
+        ipc.privacySettings().catch(() => null),
+      ]);
       setProviders(list);
+      if (privacy) {
+        setPrivacyMode(privacy.default_data_boundary);
+      }
       if (
         connectedSlotProviders(list).length > 1 &&
         !migrationDismissed.current
@@ -222,6 +232,21 @@ export function SettingsPage() {
     }
   };
 
+  const savePrivacyMode = async (mode: DataBoundaryMode) => {
+    setPrivacyBusy(true);
+    setError(null);
+    try {
+      const saved = await ipc.setPrivacySettings({
+        default_data_boundary: mode,
+      });
+      setPrivacyMode(saved.default_data_boundary);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setPrivacyBusy(false);
+    }
+  };
+
   const disconnect = async (p: ProviderInfo, opts: { confirm: boolean }) => {
     if (
       opts.confirm &&
@@ -287,6 +312,11 @@ export function SettingsPage() {
   return (
     <div className="mx-auto w-full max-w-2xl space-y-5 p-6">
       <LanguageCard />
+      <PrivacyCard
+        mode={privacyMode}
+        busy={privacyBusy}
+        onChange={savePrivacyMode}
+      />
 
       <Card>
         <CardHeader
@@ -459,6 +489,46 @@ function LanguageCard() {
               {t("settings.theme_dark")}
             </LangPill>
           </div>
+        </Field>
+      </CardBody>
+    </Card>
+  );
+}
+
+function PrivacyCard({
+  mode,
+  busy,
+  onChange,
+}: {
+  mode: DataBoundaryMode;
+  busy: boolean;
+  onChange: (mode: DataBoundaryMode) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Card>
+      <CardHeader
+        title={t("settings.privacy_title")}
+        subtitle={t("settings.privacy_subtitle")}
+      />
+      <CardBody>
+        <Field label={t("settings.privacy_boundary_field")}>
+          <select
+            value={mode}
+            disabled={busy}
+            onChange={(e) => onChange(e.target.value as DataBoundaryMode)}
+            className="w-full rounded-md border border-border-subtle bg-bg px-3 py-2 text-[13px] text-ink outline-none focus:ring-2 focus:ring-accent/40 disabled:opacity-60"
+          >
+            <option value="deid_cloud">
+              {t("settings.privacy_boundary_deid_cloud")}
+            </option>
+            <option value="local_only">
+              {t("settings.privacy_boundary_local_only")}
+            </option>
+            <option value="explicit_phi">
+              {t("settings.privacy_boundary_explicit_phi")}
+            </option>
+          </select>
         </Field>
       </CardBody>
     </Card>
@@ -1384,4 +1454,3 @@ function Radio({ selected }: { selected: boolean }) {
     </span>
   );
 }
-

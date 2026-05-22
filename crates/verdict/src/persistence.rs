@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use conclave_core::{Error, Result};
 
+use crate::privacy::{sha256_hex, AuditPayloadMode, DataBoundaryMode, RawTextRetention};
+
 const SCHEMA_SQL: &str = "
 CREATE TABLE IF NOT EXISTS cases (
     id TEXT PRIMARY KEY,
@@ -22,7 +24,9 @@ CREATE TABLE IF NOT EXISTS cases (
     status TEXT NOT NULL,
     case_date TEXT NOT NULL DEFAULT '',
     patient_label TEXT NOT NULL DEFAULT '',
-    latest_error TEXT
+    latest_error TEXT,
+    raw_text_sha256 TEXT NOT NULL DEFAULT '',
+    raw_text_retention TEXT NOT NULL DEFAULT 'discarded'
 );
 
 CREATE INDEX IF NOT EXISTS cases_created_at_idx ON cases(created_at DESC);
@@ -99,6 +103,46 @@ CREATE TABLE IF NOT EXISTS deliberation_traces (
 
 CREATE INDEX IF NOT EXISTS deliberation_traces_verdict_idx
     ON deliberation_traces(verdict_id);
+
+CREATE TABLE IF NOT EXISTS review_metadata (
+    case_id TEXT PRIMARY KEY REFERENCES cases(id) ON DELETE CASCADE,
+    verdict_id TEXT NOT NULL REFERENCES verdicts(id) ON DELETE CASCADE,
+    decision TEXT NOT NULL,
+    reviewer_name TEXT,
+    reviewer_role TEXT,
+    note TEXT,
+    final_verdict_json TEXT,
+    diff_summary TEXT,
+    reviewed_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS audit_runs (
+    id TEXT PRIMARY KEY,
+    case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+    verdict_id TEXT,
+    provider_id TEXT NOT NULL,
+    model TEXT NOT NULL,
+    data_boundary_mode TEXT NOT NULL,
+    payload_mode TEXT NOT NULL,
+    active_skill_id TEXT,
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    latency_ms INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    prompt_sha256 TEXT NOT NULL DEFAULT '',
+    output_sha256 TEXT NOT NULL DEFAULT '',
+    evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+    past_cases_refs_json TEXT NOT NULL DEFAULT '[]',
+    online_evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+    attachment_refs_json TEXT NOT NULL DEFAULT '[]',
+    raw_text_retention TEXT NOT NULL DEFAULT 'discarded',
+    status TEXT NOT NULL,
+    error TEXT
+);
+
+CREATE INDEX IF NOT EXISTS audit_runs_case_idx
+    ON audit_runs(case_id, started_at DESC);
 ";
 
 /// Outcome flag for a case lifecycle.
@@ -110,7 +154,11 @@ pub enum CaseStatus {
     /// the committee — at which point it becomes `Completed` or `Failed`.
     Draft,
     /// Verdict produced and persisted.
-    Completed,
+    ReviewReady,
+    /// Clinician explicitly reviewed and finalized the verdict.
+    Finalized,
+    /// Legacy row that was created under the old `completed` semantics.
+    FinalizedLegacy,
     /// LLM call or validation failed.
     Failed,
 }
@@ -119,14 +167,18 @@ impl CaseStatus {
     pub const fn as_db_str(self) -> &'static str {
         match self {
             Self::Draft => "draft",
-            Self::Completed => "completed",
+            Self::ReviewReady => "review_ready",
+            Self::Finalized => "finalized",
+            Self::FinalizedLegacy => "finalized_legacy",
             Self::Failed => "failed",
         }
     }
     pub fn from_db_str(s: &str) -> Option<Self> {
         match s {
             "draft" => Some(Self::Draft),
-            "completed" => Some(Self::Completed),
+            "completed" | "finalized_legacy" => Some(Self::FinalizedLegacy),
+            "review_ready" => Some(Self::ReviewReady),
+            "finalized" => Some(Self::Finalized),
             "failed" => Some(Self::Failed),
             _ => None,
         }
@@ -159,6 +211,17 @@ pub struct CaseRecord {
     /// instead of an opaque "failed" badge.
     #[serde(default)]
     pub latest_error: Option<String>,
+    /// Stable fingerprint of the original text, even after raw narrative is
+    /// purged.
+    #[serde(default)]
+    pub raw_text_sha256: String,
+    /// Local retention posture for `original_text`.
+    #[serde(default = "default_raw_text_retention")]
+    pub raw_text_retention: RawTextRetention,
+}
+
+fn default_raw_text_retention() -> RawTextRetention {
+    RawTextRetention::Discarded
 }
 
 /// Stored verdict row.
@@ -262,6 +325,82 @@ pub enum FeedbackKind {
     Reject,
 }
 
+/// Review/finalization decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReviewDecision {
+    Accept,
+    Modify,
+    Reject,
+}
+
+impl ReviewDecision {
+    pub const fn as_db_str(self) -> &'static str {
+        match self {
+            Self::Accept => "accept",
+            Self::Modify => "modify",
+            Self::Reject => "reject",
+        }
+    }
+
+    pub fn from_db_str(s: &str) -> Option<Self> {
+        match s {
+            "accept" => Some(Self::Accept),
+            "modify" => Some(Self::Modify),
+            "reject" => Some(Self::Reject),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewMetadataRecord {
+    pub case_id: String,
+    pub verdict_id: String,
+    pub decision: ReviewDecision,
+    pub reviewer_name: Option<String>,
+    pub reviewer_role: Option<String>,
+    pub note: Option<String>,
+    pub final_verdict_json: Option<String>,
+    pub diff_summary: Option<String>,
+    pub reviewed_at: DateTime<Utc>,
+}
+
+/// One fingerprint-first audit run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuditRunRecord {
+    pub id: String,
+    pub case_id: String,
+    pub verdict_id: Option<String>,
+    pub provider_id: String,
+    pub model: String,
+    pub data_boundary_mode: DataBoundaryMode,
+    pub payload_mode: AuditPayloadMode,
+    pub active_skill_id: Option<String>,
+    pub started_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub latency_ms: u64,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub prompt_sha256: String,
+    pub output_sha256: String,
+    pub evidence_refs: Vec<String>,
+    pub past_cases_refs: Vec<String>,
+    pub online_evidence_refs: Vec<String>,
+    pub attachment_refs: Vec<String>,
+    pub raw_text_retention: RawTextRetention,
+    pub status: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuditStatus {
+    pub run_count: u64,
+    pub payload_mode: AuditPayloadMode,
+    pub retained_raw_cases: u64,
+    pub legacy_retained_cases: u64,
+}
+
 impl FeedbackKind {
     pub const fn as_db_str(self) -> &'static str {
         match self {
@@ -298,6 +437,7 @@ impl CaseStore {
         Self::migrate_retrieval_traces_attachments(&conn)?;
         Self::migrate_cases_case_date(&conn)?;
         Self::migrate_cases_patient_label_and_error(&conn)?;
+        Self::migrate_cases_privacy(&conn)?;
         Ok(Self { conn, path })
     }
 
@@ -383,6 +523,75 @@ impl CaseStore {
         Ok(())
     }
 
+    /// Idempotent migration: add privacy columns. Existing non-empty
+    /// `original_text` rows are marked as `legacy_retained` and
+    /// fingerprinted; empty rows become `discarded`.
+    fn migrate_cases_privacy(conn: &Connection) -> Result<()> {
+        let mut stmt = conn.prepare("PRAGMA table_info(cases)").map_err(map_sql)?;
+        let cols: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .map_err(map_sql)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(map_sql)?;
+        if !cols.iter().any(|c| c == "raw_text_sha256") {
+            conn.execute(
+                "ALTER TABLE cases ADD COLUMN raw_text_sha256 TEXT NOT NULL DEFAULT ''",
+                [],
+            )
+            .map_err(map_sql)?;
+        }
+        if !cols.iter().any(|c| c == "raw_text_retention") {
+            conn.execute(
+                "ALTER TABLE cases ADD COLUMN raw_text_retention TEXT NOT NULL DEFAULT 'discarded'",
+                [],
+            )
+            .map_err(map_sql)?;
+        }
+
+        let mut rows = conn
+            .prepare("SELECT id, original_text, raw_text_sha256, raw_text_retention FROM cases")
+            .map_err(map_sql)?;
+        let rows = rows
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(map_sql)?;
+        let mut updates = Vec::new();
+        for row in rows {
+            let (id, original_text, stored_hash, retention) = row.map_err(map_sql)?;
+            if !stored_hash.is_empty() {
+                continue;
+            }
+            let hash = if original_text.is_empty() {
+                String::new()
+            } else {
+                sha256_hex(original_text.as_bytes())
+            };
+            let next_retention = if !original_text.is_empty() && retention == "discarded" {
+                RawTextRetention::LegacyRetained.as_db_str()
+            } else {
+                RawTextRetention::Discarded.as_db_str()
+            };
+            updates.push((id, hash, next_retention.to_owned()));
+        }
+        for (id, hash, retention) in updates {
+            conn.execute(
+                "UPDATE cases
+                    SET raw_text_sha256 = ?1,
+                        raw_text_retention = ?2
+                  WHERE id = ?3",
+                params![hash, retention, id],
+            )
+            .map_err(map_sql)?;
+        }
+        Ok(())
+    }
+
     /// Path the connection was opened against.
     pub fn path(&self) -> &Path {
         &self.path
@@ -394,8 +603,9 @@ impl CaseStore {
             .execute(
                 "INSERT INTO cases
                    (id, created_at, workspace_id, question, original_text, masked_text,
-                    deident_pipeline_id, status, case_date, patient_label, latest_error)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                    deident_pipeline_id, status, case_date, patient_label, latest_error,
+                    raw_text_sha256, raw_text_retention)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 params![
                     c.id,
                     c.created_at.to_rfc3339(),
@@ -408,6 +618,8 @@ impl CaseStore {
                     c.case_date.to_rfc3339(),
                     c.patient_label,
                     c.latest_error.as_deref(),
+                    c.raw_text_sha256,
+                    c.raw_text_retention.as_db_str(),
                 ],
             )
             .map_err(map_sql)?;
@@ -418,6 +630,7 @@ impl CaseStore {
     /// clinician opens a draft from the list, adds clinical context, and
     /// fires "Run committee" — the values flow back through this UPDATE
     /// before the pipeline runs against the existing row.
+    #[allow(clippy::too_many_arguments)]
     pub fn update_case_draft_content(
         &self,
         case_id: &str,
@@ -425,6 +638,8 @@ impl CaseStore {
         masked_text: &str,
         deident_pipeline_id: &str,
         question: &str,
+        raw_text_sha256: &str,
+        raw_text_retention: RawTextRetention,
     ) -> Result<()> {
         self.conn
             .execute(
@@ -432,13 +647,17 @@ impl CaseStore {
                     SET original_text = ?1,
                         masked_text = ?2,
                         deident_pipeline_id = ?3,
-                        question = ?4
-                  WHERE id = ?5",
+                        question = ?4,
+                        raw_text_sha256 = ?5,
+                        raw_text_retention = ?6
+                  WHERE id = ?7",
                 params![
                     original_text,
                     masked_text,
                     deident_pipeline_id,
                     question,
+                    raw_text_sha256,
+                    raw_text_retention.as_db_str(),
                     case_id,
                 ],
             )
@@ -452,7 +671,7 @@ impl CaseStore {
     /// `latest_error` left behind by a previous failed attempt; Failed
     /// transitions leave it intact so `set_case_error` can populate it.
     pub fn mark_case_status(&self, case_id: &str, status: CaseStatus) -> Result<()> {
-        if matches!(status, CaseStatus::Completed) {
+        if matches!(status, CaseStatus::ReviewReady | CaseStatus::Finalized) {
             self.conn
                 .execute(
                     "UPDATE cases SET status = ?1, latest_error = NULL WHERE id = ?2",
@@ -467,6 +686,39 @@ impl CaseStore {
                 )
                 .map_err(map_sql)?;
         }
+        Ok(())
+    }
+
+    /// Purge locally retained raw PHI for a case while preserving the
+    /// de-identified narrative and SHA-256 fingerprint.
+    pub fn purge_case_phi(&self, case_id: &str) -> Result<()> {
+        let current: Option<(String, String)> = self
+            .conn
+            .query_row(
+                "SELECT original_text, raw_text_sha256 FROM cases WHERE id = ?1",
+                params![case_id],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(map_sql)?;
+        let Some((original, stored_hash)) = current else {
+            return Ok(());
+        };
+        let hash = if stored_hash.is_empty() && !original.is_empty() {
+            sha256_hex(original.as_bytes())
+        } else {
+            stored_hash
+        };
+        self.conn
+            .execute(
+                "UPDATE cases
+                    SET original_text = '',
+                        raw_text_sha256 = ?1,
+                        raw_text_retention = ?2
+                  WHERE id = ?3",
+                params![hash, RawTextRetention::Discarded.as_db_str(), case_id],
+            )
+            .map_err(map_sql)?;
         Ok(())
     }
 
@@ -601,6 +853,41 @@ impl CaseStore {
             .map_err(map_sql)
     }
 
+    /// Remove raw attachment files for a case while keeping the de-identified
+    /// extracted text, filename, hash and `[A*]` trace rows.
+    pub fn purge_case_attachment_files(&self, case_id: &str) -> Result<usize> {
+        let attachments = self.list_attachments_for_case(case_id)?;
+        let mut purged = 0usize;
+        for att in attachments {
+            if att.stored_path.trim().is_empty() {
+                continue;
+            }
+            match std::fs::remove_file(&att.stored_path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        path = %att.stored_path,
+                        "could not remove raw attachment file"
+                    );
+                }
+            }
+            self.conn
+                .execute(
+                    "UPDATE case_attachments
+                        SET stored_path = '',
+                            byte_size = 0,
+                            needs_ocr = 0
+                      WHERE id = ?1",
+                    params![att.id],
+                )
+                .map_err(map_sql)?;
+            purged += 1;
+        }
+        Ok(purged)
+    }
+
     /// Insert a deliberation trace row.
     pub fn insert_deliberation_trace(&self, t: &DeliberationTrace) -> Result<()> {
         self.conn
@@ -668,6 +955,183 @@ impl CaseStore {
         Ok(())
     }
 
+    /// Insert or update explicit clinician review metadata and mark the
+    /// case finalized.
+    pub fn finalize_review(&self, review: &ReviewMetadataRecord) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT INTO review_metadata
+                   (case_id, verdict_id, decision, reviewer_name, reviewer_role, note,
+                    final_verdict_json, diff_summary, reviewed_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 ON CONFLICT(case_id) DO UPDATE SET
+                   verdict_id = excluded.verdict_id,
+                   decision = excluded.decision,
+                   reviewer_name = excluded.reviewer_name,
+                   reviewer_role = excluded.reviewer_role,
+                   note = excluded.note,
+                   final_verdict_json = excluded.final_verdict_json,
+                   diff_summary = excluded.diff_summary,
+                   reviewed_at = excluded.reviewed_at",
+                params![
+                    review.case_id,
+                    review.verdict_id,
+                    review.decision.as_db_str(),
+                    review.reviewer_name,
+                    review.reviewer_role,
+                    review.note,
+                    review.final_verdict_json,
+                    review.diff_summary,
+                    review.reviewed_at.to_rfc3339(),
+                ],
+            )
+            .map_err(map_sql)?;
+        self.mark_case_status(&review.case_id, CaseStatus::Finalized)?;
+        self.purge_case_phi(&review.case_id)?;
+        Ok(())
+    }
+
+    pub fn get_review_metadata(&self, case_id: &str) -> Result<Option<ReviewMetadataRecord>> {
+        self.conn
+            .query_row(
+                "SELECT case_id, verdict_id, decision, reviewer_name, reviewer_role, note,
+                        final_verdict_json, diff_summary, reviewed_at
+                 FROM review_metadata
+                 WHERE case_id = ?1",
+                params![case_id],
+                row_to_review_metadata,
+            )
+            .optional()
+            .map_err(map_sql)
+    }
+
+    /// Insert one audit run. Payload mode is stored as metadata; the run
+    /// itself stores fingerprints by default.
+    pub fn insert_audit_run(&self, run: &AuditRunRecord) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT INTO audit_runs
+                   (id, case_id, verdict_id, provider_id, model, data_boundary_mode,
+                    payload_mode, active_skill_id, started_at, completed_at, latency_ms,
+                    input_tokens, output_tokens, prompt_sha256, output_sha256,
+                    evidence_refs_json, past_cases_refs_json, online_evidence_refs_json,
+                    attachment_refs_json, raw_text_retention, status, error)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                         ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
+                params![
+                    run.id,
+                    run.case_id,
+                    run.verdict_id,
+                    run.provider_id,
+                    run.model,
+                    run.data_boundary_mode.as_db_str(),
+                    run.payload_mode.as_db_str(),
+                    run.active_skill_id,
+                    run.started_at.to_rfc3339(),
+                    run.completed_at.map(|d| d.to_rfc3339()),
+                    run.latency_ms as i64,
+                    i64::from(run.input_tokens),
+                    i64::from(run.output_tokens),
+                    run.prompt_sha256,
+                    run.output_sha256,
+                    serde_json::to_string(&run.evidence_refs).unwrap_or_else(|_| "[]".into()),
+                    serde_json::to_string(&run.past_cases_refs).unwrap_or_else(|_| "[]".into()),
+                    serde_json::to_string(&run.online_evidence_refs)
+                        .unwrap_or_else(|_| "[]".into()),
+                    serde_json::to_string(&run.attachment_refs).unwrap_or_else(|_| "[]".into()),
+                    run.raw_text_retention.as_db_str(),
+                    run.status,
+                    run.error,
+                ],
+            )
+            .map_err(map_sql)?;
+        Ok(())
+    }
+
+    pub fn list_audit_runs(&self, limit: usize) -> Result<Vec<AuditRunRecord>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, case_id, verdict_id, provider_id, model, data_boundary_mode,
+                        payload_mode, active_skill_id, started_at, completed_at, latency_ms,
+                        input_tokens, output_tokens, prompt_sha256, output_sha256,
+                        evidence_refs_json, past_cases_refs_json, online_evidence_refs_json,
+                        attachment_refs_json, raw_text_retention, status, error
+                 FROM audit_runs
+                 ORDER BY started_at DESC
+                 LIMIT ?1",
+            )
+            .map_err(map_sql)?;
+        let rows = stmt
+            .query_map(params![limit as i64], row_to_audit_run)
+            .map_err(map_sql)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(map_sql)?);
+        }
+        Ok(out)
+    }
+
+    pub fn latest_audit_for_case(&self, case_id: &str) -> Result<Option<AuditRunRecord>> {
+        self.conn
+            .query_row(
+                "SELECT id, case_id, verdict_id, provider_id, model, data_boundary_mode,
+                        payload_mode, active_skill_id, started_at, completed_at, latency_ms,
+                        input_tokens, output_tokens, prompt_sha256, output_sha256,
+                        evidence_refs_json, past_cases_refs_json, online_evidence_refs_json,
+                        attachment_refs_json, raw_text_retention, status, error
+                 FROM audit_runs
+                 WHERE case_id = ?1
+                 ORDER BY started_at DESC
+                 LIMIT 1",
+                params![case_id],
+                row_to_audit_run,
+            )
+            .optional()
+            .map_err(map_sql)
+    }
+
+    pub fn audit_status(&self) -> Result<AuditStatus> {
+        let run_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM audit_runs", [], |r| r.get(0))
+            .map_err(map_sql)?;
+        let retained_raw_cases: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM cases
+                 WHERE original_text != '' AND raw_text_retention != 'discarded'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(map_sql)?;
+        let legacy_retained_cases: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM cases WHERE raw_text_retention = 'legacy_retained'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(map_sql)?;
+        Ok(AuditStatus {
+            run_count: run_count.max(0) as u64,
+            payload_mode: AuditPayloadMode::Fingerprint,
+            retained_raw_cases: retained_raw_cases.max(0) as u64,
+            legacy_retained_cases: legacy_retained_cases.max(0) as u64,
+        })
+    }
+
+    pub fn cleanup_discarded_phi(&self) -> Result<usize> {
+        self.conn
+            .execute(
+                "UPDATE cases
+                    SET original_text = ''
+                  WHERE raw_text_retention = 'discarded' AND original_text != ''",
+                [],
+            )
+            .map_err(map_sql)
+    }
+
     /// List cases ordered by `case_date` (user-facing date) descending.
     /// Falls back to `created_at` on ties for stable order.
     pub fn list_cases(&self, limit: usize) -> Result<Vec<CaseRecord>> {
@@ -675,7 +1139,8 @@ impl CaseStore {
             .conn
             .prepare(
                 "SELECT id, created_at, workspace_id, question, original_text, masked_text,
-                        deident_pipeline_id, status, case_date, patient_label, latest_error
+                        deident_pipeline_id, status, case_date, patient_label, latest_error,
+                        raw_text_sha256, raw_text_retention
                  FROM cases
                  ORDER BY case_date DESC, created_at DESC
                  LIMIT ?1",
@@ -696,7 +1161,8 @@ impl CaseStore {
         self.conn
             .query_row(
                 "SELECT id, created_at, workspace_id, question, original_text, masked_text,
-                        deident_pipeline_id, status, case_date, patient_label, latest_error
+                        deident_pipeline_id, status, case_date, patient_label, latest_error,
+                        raw_text_sha256, raw_text_retention
                  FROM cases WHERE id = ?1",
                 params![id],
                 row_to_case,
@@ -892,7 +1358,7 @@ impl CaseStore {
         let completed: i64 = self
             .conn
             .query_row(
-                "SELECT COUNT(*) FROM cases WHERE status = 'completed'",
+                "SELECT COUNT(*) FROM cases WHERE status IN ('review_ready', 'finalized', 'finalized_legacy', 'completed')",
                 [],
                 |r| r.get(0),
             )
@@ -966,6 +1432,8 @@ impl CaseStore {
                 masked_text: c.masked_text,
                 deident_pipeline_id: c.deident_pipeline_id,
                 status: c.status,
+                raw_text_sha256: c.raw_text_sha256,
+                raw_text_retention: c.raw_text_retention,
                 verdict_json: verdict.map(|v| v.output_json),
                 feedback: feedback.map(|f| ExportedFeedback {
                     kind: f.kind,
@@ -1012,6 +1480,8 @@ pub struct ExportedCase {
     pub masked_text: String,
     pub deident_pipeline_id: String,
     pub status: CaseStatus,
+    pub raw_text_sha256: String,
+    pub raw_text_retention: RawTextRetention,
     pub verdict_json: Option<String>,
     pub feedback: Option<ExportedFeedback>,
 }
@@ -1075,6 +1545,57 @@ fn row_to_case(r: &rusqlite::Row<'_>) -> rusqlite::Result<CaseRecord> {
         status: CaseStatus::from_db_str(&r.get::<_, String>(7)?).unwrap_or(CaseStatus::Failed),
         patient_label: r.get::<_, Option<String>>(9)?.unwrap_or_default(),
         latest_error: r.get::<_, Option<String>>(10)?,
+        raw_text_sha256: r.get::<_, Option<String>>(11)?.unwrap_or_default(),
+        raw_text_retention: RawTextRetention::from_db_str(
+            &r.get::<_, Option<String>>(12)?
+                .unwrap_or_else(|| "legacy_retained".into()),
+        ),
+    })
+}
+
+fn row_to_review_metadata(r: &rusqlite::Row<'_>) -> rusqlite::Result<ReviewMetadataRecord> {
+    Ok(ReviewMetadataRecord {
+        case_id: r.get(0)?,
+        verdict_id: r.get(1)?,
+        decision: ReviewDecision::from_db_str(&r.get::<_, String>(2)?)
+            .unwrap_or(ReviewDecision::Accept),
+        reviewer_name: r.get(3)?,
+        reviewer_role: r.get(4)?,
+        note: r.get(5)?,
+        final_verdict_json: r.get(6)?,
+        diff_summary: r.get(7)?,
+        reviewed_at: parse_dt(&r.get::<_, String>(8)?),
+    })
+}
+
+fn row_to_audit_run(r: &rusqlite::Row<'_>) -> rusqlite::Result<AuditRunRecord> {
+    let refs = |idx: usize| -> rusqlite::Result<Vec<String>> {
+        let raw: String = r.get(idx)?;
+        Ok(serde_json::from_str(&raw).unwrap_or_default())
+    };
+    Ok(AuditRunRecord {
+        id: r.get(0)?,
+        case_id: r.get(1)?,
+        verdict_id: r.get(2)?,
+        provider_id: r.get(3)?,
+        model: r.get(4)?,
+        data_boundary_mode: DataBoundaryMode::from_db_str(&r.get::<_, String>(5)?),
+        payload_mode: AuditPayloadMode::from_db_str(&r.get::<_, String>(6)?),
+        active_skill_id: r.get(7)?,
+        started_at: parse_dt(&r.get::<_, String>(8)?),
+        completed_at: r.get::<_, Option<String>>(9)?.map(|s| parse_dt(&s)),
+        latency_ms: r.get::<_, i64>(10)?.max(0) as u64,
+        input_tokens: u32::try_from(r.get::<_, i64>(11)?.max(0)).unwrap_or(0),
+        output_tokens: u32::try_from(r.get::<_, i64>(12)?.max(0)).unwrap_or(0),
+        prompt_sha256: r.get(13)?,
+        output_sha256: r.get(14)?,
+        evidence_refs: refs(15)?,
+        past_cases_refs: refs(16)?,
+        online_evidence_refs: refs(17)?,
+        attachment_refs: refs(18)?,
+        raw_text_retention: RawTextRetention::from_db_str(&r.get::<_, String>(19)?),
+        status: r.get(20)?,
+        error: r.get(21)?,
     })
 }
 
@@ -1160,9 +1681,11 @@ mod tests {
             original_text: "o".into(),
             masked_text: "m".into(),
             deident_pipeline_id: "p".into(),
-            status: CaseStatus::Completed,
+            status: CaseStatus::ReviewReady,
             patient_label: String::new(),
             latest_error: None,
+            raw_text_sha256: sha256_hex("o"),
+            raw_text_retention: RawTextRetention::TemporaryDraft,
         }
     }
 
@@ -1178,6 +1701,33 @@ mod tests {
             output_tokens: 1,
             output_json: "{}".into(),
             created_at: Utc::now(),
+        }
+    }
+
+    fn sample_audit(case_id: &str) -> AuditRunRecord {
+        AuditRunRecord {
+            id: format!("{case_id}-run-1"),
+            case_id: case_id.into(),
+            verdict_id: Some(format!("{case_id}-v1")),
+            provider_id: "mock".into(),
+            model: "mock-model".into(),
+            data_boundary_mode: DataBoundaryMode::DeidCloud,
+            payload_mode: AuditPayloadMode::Fingerprint,
+            active_skill_id: Some("tumor-board".into()),
+            started_at: Utc::now(),
+            completed_at: Some(Utc::now()),
+            latency_ms: 12,
+            input_tokens: 3,
+            output_tokens: 5,
+            prompt_sha256: sha256_hex("prompt"),
+            output_sha256: sha256_hex("output"),
+            evidence_refs: vec!["E1".into()],
+            past_cases_refs: vec!["P1".into()],
+            online_evidence_refs: vec!["X1".into()],
+            attachment_refs: vec!["A1".into()],
+            raw_text_retention: RawTextRetention::Discarded,
+            status: "ok".into(),
+            error: None,
         }
     }
 
@@ -1218,6 +1768,110 @@ mod tests {
     }
 
     #[test]
+    fn migration_marks_legacy_raw_text_retained() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("cases.sqlite");
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE cases (
+                    id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL,
+                    question TEXT NOT NULL,
+                    original_text TEXT NOT NULL,
+                    masked_text TEXT NOT NULL,
+                    deident_pipeline_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    case_date TEXT NOT NULL DEFAULT '',
+                    patient_label TEXT NOT NULL DEFAULT '',
+                    latest_error TEXT
+                );
+                INSERT INTO cases
+                    (id, created_at, workspace_id, question, original_text, masked_text,
+                     deident_pipeline_id, status, case_date, patient_label, latest_error)
+                VALUES
+                    ('legacy','2026-01-01T00:00:00Z','ws','q','Paciente Ana','Paciente [NAME]',
+                     'p','completed','2026-01-01T00:00:00Z','','');",
+            )
+            .unwrap();
+        }
+
+        let store = CaseStore::open(&db).unwrap();
+        let fetched = store.get_case("legacy").unwrap().unwrap();
+        assert_eq!(fetched.status, CaseStatus::FinalizedLegacy);
+        assert_eq!(fetched.raw_text_sha256, sha256_hex("Paciente Ana"));
+        assert_eq!(fetched.raw_text_retention, RawTextRetention::LegacyRetained);
+    }
+
+    #[test]
+    fn purge_case_phi_preserves_hash_and_deidentified_text() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = CaseStore::open(tmp.path().join("cases.sqlite")).unwrap();
+        store.insert_case(&sample_case("c-phi")).unwrap();
+
+        store.purge_case_phi("c-phi").unwrap();
+        let fetched = store.get_case("c-phi").unwrap().unwrap();
+        assert_eq!(fetched.original_text, "");
+        assert_eq!(fetched.masked_text, "m");
+        assert_eq!(fetched.raw_text_sha256, sha256_hex("o"));
+        assert_eq!(fetched.raw_text_retention, RawTextRetention::Discarded);
+    }
+
+    #[test]
+    fn audit_run_round_trip_and_status_counts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = CaseStore::open(tmp.path().join("cases.sqlite")).unwrap();
+        store.insert_case(&sample_case("c-audit")).unwrap();
+        store.insert_verdict(&sample_verdict("c-audit")).unwrap();
+        store.insert_audit_run(&sample_audit("c-audit")).unwrap();
+
+        let status = store.audit_status().unwrap();
+        assert_eq!(status.run_count, 1);
+        assert_eq!(status.payload_mode, AuditPayloadMode::Fingerprint);
+        assert_eq!(status.retained_raw_cases, 1);
+
+        let latest = store.latest_audit_for_case("c-audit").unwrap().unwrap();
+        assert_eq!(latest.payload_mode, AuditPayloadMode::Fingerprint);
+        assert_eq!(latest.evidence_refs, vec!["E1"]);
+        assert_eq!(latest.past_cases_refs, vec!["P1"]);
+        assert_eq!(latest.online_evidence_refs, vec!["X1"]);
+        assert_eq!(latest.attachment_refs, vec!["A1"]);
+        assert_eq!(latest.prompt_sha256, sha256_hex("prompt"));
+    }
+
+    #[test]
+    fn finalize_review_marks_finalized_and_purges_phi() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = CaseStore::open(tmp.path().join("cases.sqlite")).unwrap();
+        store.insert_case(&sample_case("c-review")).unwrap();
+        store.insert_verdict(&sample_verdict("c-review")).unwrap();
+
+        store
+            .finalize_review(&ReviewMetadataRecord {
+                case_id: "c-review".into(),
+                verdict_id: "c-review-v1".into(),
+                decision: ReviewDecision::Accept,
+                reviewer_name: Some("Dr Test".into()),
+                reviewer_role: Some("oncology".into()),
+                note: Some("reviewed".into()),
+                final_verdict_json: Some("{\"ok\":true}".into()),
+                diff_summary: None,
+                reviewed_at: Utc::now(),
+            })
+            .unwrap();
+
+        let fetched = store.get_case("c-review").unwrap().unwrap();
+        assert_eq!(fetched.status, CaseStatus::Finalized);
+        assert_eq!(fetched.original_text, "");
+        assert_eq!(fetched.raw_text_retention, RawTextRetention::Discarded);
+
+        let review = store.get_review_metadata("c-review").unwrap().unwrap();
+        assert_eq!(review.decision, ReviewDecision::Accept);
+        assert_eq!(review.reviewer_name.as_deref(), Some("Dr Test"));
+    }
+
+    #[test]
     fn set_case_error_round_trip() {
         let tmp = tempfile::tempdir().unwrap();
         let store = CaseStore::open(tmp.path().join("cases.sqlite")).unwrap();
@@ -1240,12 +1894,12 @@ mod tests {
             Some("provider returned 400")
         );
 
-        // Promoting to Completed clears the stale error.
+        // Promoting to review-ready clears the stale error.
         store
-            .mark_case_status("c-err", CaseStatus::Completed)
+            .mark_case_status("c-err", CaseStatus::ReviewReady)
             .unwrap();
         let fetched = store.get_case("c-err").unwrap().unwrap();
-        assert_eq!(fetched.status, CaseStatus::Completed);
+        assert_eq!(fetched.status, CaseStatus::ReviewReady);
         assert_eq!(fetched.latest_error, None);
     }
 
@@ -1346,6 +2000,40 @@ mod tests {
         let removed = store.delete_attachments_for_case("cA").unwrap();
         assert_eq!(removed, 2);
         assert!(store.list_attachments_for_case("cA").unwrap().is_empty());
+    }
+
+    #[test]
+    fn purge_case_attachment_files_keeps_deidentified_text() {
+        let tmp = tempfile::tempdir().unwrap();
+        let attachment_path = tmp.path().join("labs.pdf");
+        std::fs::write(&attachment_path, b"raw bytes").unwrap();
+        let store = CaseStore::open(tmp.path().join("cases.sqlite")).unwrap();
+        store.insert_case(&sample_case("c-att-purge")).unwrap();
+        store
+            .insert_attachment(&CaseAttachment {
+                id: "att-purge".into(),
+                case_id: "c-att-purge".into(),
+                position: 1,
+                original_filename: "labs.pdf".into(),
+                stored_path: attachment_path.display().to_string(),
+                sha256: "abc".into(),
+                doc_type: "pdf".into(),
+                mime: "application/pdf".into(),
+                extracted_text: "Hb 12.4".into(),
+                needs_ocr: false,
+                byte_size: 9,
+                created_at: Utc::now(),
+            })
+            .unwrap();
+
+        let purged = store.purge_case_attachment_files("c-att-purge").unwrap();
+        assert_eq!(purged, 1);
+        assert!(!attachment_path.exists());
+        let atts = store.list_attachments_for_case("c-att-purge").unwrap();
+        assert_eq!(atts[0].stored_path, "");
+        assert_eq!(atts[0].byte_size, 0);
+        assert_eq!(atts[0].extracted_text, "Hb 12.4");
+        assert_eq!(atts[0].sha256, "abc");
     }
 
     #[test]

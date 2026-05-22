@@ -29,6 +29,7 @@ pub(crate) fn all_detectors() -> &'static [&'static dyn Detector] {
             &MrnDetector,
             &DateDetector,
             &AgeDetector,
+            &LocationDetector,
         ]
     })
 }
@@ -226,4 +227,115 @@ impl Detector for AgeDetector {
             }
         }
     }
+}
+
+// --------------------------------------------------------------------------
+// Clinical centres and street addresses. These are intentionally conservative
+// high-signal patterns so the Location category is useful before a full NER
+// layer exists.
+// --------------------------------------------------------------------------
+struct LocationDetector;
+impl Detector for LocationDetector {
+    fn detect(&self, text: &str, out: &mut Vec<RawSpan>) {
+        collect_location_matches(centre_prefix_re(), 0.86, text, out);
+        collect_location_matches(centre_suffix_re(), 0.86, text, out);
+        collect_location_matches(spanish_address_re(), 0.88, text, out);
+        collect_location_matches(english_address_re(), 0.88, text, out);
+    }
+}
+
+fn collect_location_matches(re: &Regex, confidence: f32, text: &str, out: &mut Vec<RawSpan>) {
+    for m in re.find_iter(text) {
+        out.push(RawSpan {
+            start: m.start(),
+            end: m.end(),
+            category: PiiCategory::Location,
+            confidence,
+            source: DetectionSource::Rule,
+        });
+    }
+}
+
+fn centre_prefix_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"(?ix)
+            \b
+            (?:
+                Hospital|Cl[ií]nica|Centro\s+de\s+Salud|CAP|Ambulatorio|
+                Medical\s+Center|Health\s+Center|Clinic
+            )
+            \s+
+            [\p{L}0-9'-]+
+            (?:
+                \s+
+                (?:de|del|la|las|los|the|of|[A-ZÁÉÍÓÚÑ][\p{L}0-9'-]+)
+            ){0,5}
+            ",
+        )
+        .expect("centre location regex compiles")
+    })
+}
+
+fn centre_suffix_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"(?ix)
+            \b
+            [A-Z][A-Za-z0-9'-]+
+            (?:
+                \s+
+                [A-Z][A-Za-z0-9'-]+
+            ){0,5}
+            \s+
+            (?:Medical\s+Center|Health\s+Center|Clinic|Hospital)
+            \b
+            ",
+        )
+        .expect("suffix centre location regex compiles")
+    })
+}
+
+fn spanish_address_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"(?ix)
+            \b
+            (?:C/|Calle|Avenida|Avda\.?|Paseo|Plaza|Camino|Ronda|Rambla)
+            \s+
+            [\p{L}0-9.'-]+
+            (?:
+                \s+
+                (?:de|del|la|las|los|[A-ZÁÉÍÓÚÑ0-9][\p{L}0-9.'-]*)
+            ){0,8}
+            (?:,\s*\d+[A-Za-z]?)?
+            ",
+        )
+        .expect("spanish address regex compiles")
+    })
+}
+
+fn english_address_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"(?ix)
+            \b
+            \d{1,5}
+            \s+
+            [A-Z][A-Za-z0-9.'-]+
+            (?:
+                \s+
+                [A-Z][A-Za-z0-9.'-]+
+            ){0,5}
+            \s+
+            (?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Boulevard|Blvd\.?|Drive|Dr\.?|Lane|Ln\.?)
+            \b
+            ",
+        )
+        .expect("english address regex compiles")
+    })
 }

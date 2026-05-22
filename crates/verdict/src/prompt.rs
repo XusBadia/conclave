@@ -23,6 +23,10 @@ pub struct PromptInputs<'a> {
     pub output_language: &'a str,
     /// Workspace rules text, already formatted as bullet list.
     pub rules_block: &'a str,
+    /// Optional active skill id.
+    pub active_skill_id: Option<&'a str>,
+    /// Optional active skill instruction body.
+    pub active_skill_instructions: Option<&'a str>,
     /// Evidence chunks retrieved from the knowledge base.
     pub evidence_chunks: &'a [EvidenceChunkInput<'a>],
     /// External evidence (Phase 6).
@@ -58,10 +62,12 @@ pub struct EvidenceChunkInput<'a> {
 #[derive(Debug, Clone)]
 pub struct ExternalEvidenceInput<'a> {
     pub index: usize,
+    pub source: &'a str,
     pub title: &'a str,
     pub authors: &'a str,
     pub year: &'a str,
     pub venue: &'a str,
+    pub url: &'a str,
     pub abstract_text: &'a str,
 }
 
@@ -105,6 +111,7 @@ impl PromptTemplate {
         let external = render_external(inputs.external_evidence);
         let past_cases = render_past_cases(inputs.past_cases);
         let attachments = render_attachments(inputs.case_attachments);
+        let skill = render_skill(inputs.active_skill_id, inputs.active_skill_instructions);
         let rules = if inputs.rules_block.trim().is_empty() {
             "No workspace rules defined."
         } else {
@@ -154,6 +161,7 @@ certainty_level to \"low\" and list the missing data in red_flags.\n\
 the response.\n\
 - Output language: {output_language}.\n\n\
 WORKSPACE RULES\n===============\n{rules}\n\n\
+ACTIVE SKILL\n============\n{skill}\n\
 EVIDENCE (from this centre's knowledge base)\n============================================\n\
 {evidence}\n\
 CASE ATTACHMENTS (files attached to this specific patient case)\n\
@@ -177,6 +185,7 @@ taken verbatim:\n\n{disclaimer}\n",
             specialty = inputs.specialty,
             output_language = inputs.output_language,
             rules = rules,
+            skill = skill,
             evidence = evidence,
             attachments = attachments,
             external = external,
@@ -185,6 +194,13 @@ taken verbatim:\n\n{disclaimer}\n",
             question = question,
             disclaimer = inputs.disclaimer,
         )
+    }
+}
+
+fn render_skill(id: Option<&str>, body: Option<&str>) -> String {
+    match (id, body.map(str::trim).filter(|b| !b.is_empty())) {
+        (Some(id), Some(body)) => format!("[{id}]\n{body}\n\n"),
+        _ => "(none)\n\n".to_owned(),
     }
 }
 
@@ -213,12 +229,14 @@ fn render_external(items: &[ExternalEvidenceInput<'_>]) -> String {
     let mut out = String::new();
     for ev in items {
         out.push_str(&format!(
-            "[X{index}] {title} ({authors}, {year}, {venue})\n{abstract_text}\n\n",
+            "[X{index}] {title} ({authors}, {year}, {venue})\nsource: {source} · {url}\n{abstract_text}\n\n",
             index = ev.index,
+            source = ev.source,
             title = ev.title,
             authors = ev.authors,
             year = ev.year,
             venue = ev.venue,
+            url = ev.url,
             abstract_text = ev.abstract_text.trim(),
         ));
     }
@@ -283,6 +301,8 @@ mod tests {
             specialty: "cardiología",
             output_language: "es",
             rules_block: "",
+            active_skill_id: None,
+            active_skill_instructions: None,
             evidence_chunks: &[],
             external_evidence: &[],
             past_cases: &[],
@@ -313,6 +333,8 @@ mod tests {
             specialty: "cardiología",
             output_language: "es",
             rules_block: "",
+            active_skill_id: None,
+            active_skill_instructions: None,
             evidence_chunks: &chunks,
             external_evidence: &[],
             past_cases: &[],
@@ -328,6 +350,40 @@ mod tests {
     }
 
     #[test]
+    fn external_evidence_is_numbered_and_labelled_unvalidated() {
+        let external = vec![ExternalEvidenceInput {
+            index: 1,
+            source: "pubmed",
+            title: "Trial title",
+            authors: "Smith et al.",
+            year: "2025",
+            venue: "NEJM",
+            url: "https://pubmed.ncbi.nlm.nih.gov/1/",
+            abstract_text: "External abstract.",
+        }];
+        let inputs = PromptInputs {
+            specialty: "oncología",
+            output_language: "es",
+            rules_block: "",
+            active_skill_id: None,
+            active_skill_instructions: None,
+            evidence_chunks: &[],
+            external_evidence: &external,
+            past_cases: &[],
+            case_attachments: &[],
+            de_identified_case_text: "case",
+            user_question: "",
+            disclaimer: "x",
+        };
+        let prompt = PromptTemplate.render(&inputs);
+        assert!(
+            prompt.contains("EXTERNAL EVIDENCE (live literature, not validated by this centre)")
+        );
+        assert!(prompt.contains("[X1] Trial title"));
+        assert!(prompt.contains("source: pubmed"));
+    }
+
+    #[test]
     fn empty_case_text_with_attachments_renders_explicit_placeholder() {
         let attachments = vec![CaseAttachmentInput {
             index: 1,
@@ -340,6 +396,8 @@ mod tests {
             specialty: "colorrectal",
             output_language: "es",
             rules_block: "",
+            active_skill_id: None,
+            active_skill_instructions: None,
             evidence_chunks: &[],
             external_evidence: &[],
             past_cases: &[],
@@ -363,6 +421,8 @@ mod tests {
             specialty: "colorrectal",
             output_language: "es",
             rules_block: "",
+            active_skill_id: None,
+            active_skill_instructions: None,
             evidence_chunks: &[],
             external_evidence: &[],
             past_cases: &[],
@@ -397,6 +457,8 @@ mod tests {
             specialty: "cardiología",
             output_language: "es",
             rules_block: "",
+            active_skill_id: None,
+            active_skill_instructions: None,
             evidence_chunks: &[],
             external_evidence: &[],
             past_cases: &[],

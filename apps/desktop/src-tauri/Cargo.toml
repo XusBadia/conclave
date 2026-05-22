@@ -27,6 +27,7 @@ conclave-rag = { workspace = true }
 conclave-deident = { workspace = true }
 conclave-providers = { workspace = true }
 conclave-verdict = { workspace = true }
+conclave-evidence = { workspace = true }
 
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"

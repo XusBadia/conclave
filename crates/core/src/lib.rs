@@ -16,7 +16,7 @@ pub mod logging;
 pub mod paths;
 pub mod workspace;
 
-pub use config::{Config, GeneralConfig, LogFormat, ProvidersConfig, RagConfig};
+pub use config::{Config, GeneralConfig, LogFormat, PrivacyConfig, ProvidersConfig, RagConfig};
 pub use error::{Error, Result};
 pub use paths::Paths;
 pub use workspace::{Workspace, WorkspaceManager};

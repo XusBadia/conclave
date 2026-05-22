@@ -18,6 +18,8 @@ pub struct Config {
     pub general: GeneralConfig,
     /// RAG pipeline tuning.
     pub rag: RagConfig,
+    /// Privacy posture for clinical runs.
+    pub privacy: PrivacyConfig,
     /// LLM provider routing and credentials (filled in Phase 2).
     pub providers: ProvidersConfig,
 }
@@ -74,6 +76,22 @@ impl Default for RagConfig {
             chunk_size: 700,
             chunk_overlap: 100,
             top_k: 8,
+        }
+    }
+}
+
+/// Privacy defaults applied before each case can override them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PrivacyConfig {
+    /// `local_only`, `deid_cloud`, or `explicit_phi`.
+    pub default_data_boundary: String,
+}
+
+impl Default for PrivacyConfig {
+    fn default() -> Self {
+        Self {
+            default_data_boundary: "deid_cloud".to_owned(),
         }
     }
 }
@@ -135,6 +153,14 @@ impl Config {
         if self.rag.top_k == 0 {
             return Err(Error::invalid_config("rag.top_k must be > 0"));
         }
+        if !matches!(
+            self.privacy.default_data_boundary.as_str(),
+            "local_only" | "deid_cloud" | "explicit_phi"
+        ) {
+            return Err(Error::invalid_config(
+                "privacy.default_data_boundary must be local_only, deid_cloud or explicit_phi",
+            ));
+        }
         Ok(())
     }
 }
@@ -169,6 +195,7 @@ mod tests {
         cfg.general.log_format = LogFormat::Json;
         cfg.rag.chunk_size = 2048;
         cfg.rag.chunk_overlap = 256;
+        cfg.privacy.default_data_boundary = "local_only".to_owned();
         cfg.providers.default = Some("anthropic".to_owned());
 
         cfg.save(&path).unwrap();
@@ -189,6 +216,13 @@ mod tests {
     fn validate_rejects_overlap_ge_chunk() {
         let mut cfg = Config::default();
         cfg.rag.chunk_overlap = cfg.rag.chunk_size;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_unknown_default_data_boundary() {
+        let mut cfg = Config::default();
+        cfg.privacy.default_data_boundary = "send_everything".to_owned();
         assert!(cfg.validate().is_err());
     }
 

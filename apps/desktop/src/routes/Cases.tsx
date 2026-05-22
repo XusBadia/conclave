@@ -35,12 +35,15 @@ import {
   type BatchEvent,
   type CaseAttachment,
   type CaseDetail,
+  type DataBoundaryMode,
+  type DataBoundaryPreview,
   type CaseDraftedEvent,
   type CaseRecord,
   type DeliberationEvent,
   type DeliberationPhase,
   type DeliberationTrace,
   type ProviderInfo,
+  type Skill,
   type Verdict,
   type Workspace,
 } from "../lib/ipc";
@@ -213,10 +216,17 @@ function StatusBadge({
       </span>
     );
   }
-  if (status === "completed") {
+  if (status === "finalized" || status === "finalized_legacy") {
     return (
       <span className="rounded bg-ok/15 px-2 py-0.5 text-[11px] font-medium text-ok">
-        {t("cases.status.completed")}
+        {t("cases.status.finalized")}
+      </span>
+    );
+  }
+  if (status === "review_ready") {
+    return (
+      <span className="rounded bg-accent/15 px-2 py-0.5 text-[11px] font-medium text-accent">
+        {t("cases.status.review_ready")}
       </span>
     );
   }
@@ -472,7 +482,9 @@ export function CasesPage({
         const next = new Map(prev);
         for (const c of list) {
           if (
-            (c.status === "completed" ||
+            (c.status === "review_ready" ||
+              c.status === "finalized" ||
+              c.status === "finalized_legacy" ||
               c.status === "failed" ||
               c.status === "draft") &&
             next.has(c.id)
@@ -480,7 +492,7 @@ export function CasesPage({
             // If the case is back to Draft, the retry is being
             // dispatched — keep the "Retrying…" chip until a deliberation
             // event flips the row to running, OR a follow-up refresh
-            // moves it to completed/failed.
+            // moves it to review_ready/finalized/failed.
             if (c.status === "draft" && next.get(c.id) === "retry") continue;
             next.delete(c.id);
             changed = true;
@@ -893,7 +905,7 @@ export function CasesPage({
       // the listener via `clearRowBusy` (see below) on the next
       // refresh.
     }
-  }, []);
+  }, [workspace.id]);
 
   /** Reset a failed row to draft and re-run via the current provider. */
   const onRetryRow = useCallback(
@@ -1605,6 +1617,7 @@ function NewCase({
 }) {
   const { t } = useTranslation();
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [skills, setSkills] = useState<Skill[]>([]);
   const [providerId, setProviderId] = useState<string>("");
   const [text, setText] = useState(draft?.case.original_text ?? "");
   const [question, setQuestion] = useState(
@@ -1612,6 +1625,14 @@ function NewCase({
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [dataBoundaryMode, setDataBoundaryMode] =
+    useState<DataBoundaryMode>("deid_cloud");
+  const [allowPhiPayload, setAllowPhiPayload] = useState(false);
+  const [retainRawText, setRetainRawText] = useState(false);
+  const [useOnlineEvidence, setUseOnlineEvidence] = useState(false);
+  const [activeSkillId, setActiveSkillId] = useState("");
+  const [boundaryPreview, setBoundaryPreview] =
+    useState<DataBoundaryPreview | null>(null);
   const [attachments, setAttachments] = useState<PendingAttachment[]>(() =>
     incomingAttachments ?? [],
   );
@@ -1642,7 +1663,13 @@ function NewCase({
   useEffect(() => {
     (async () => {
       const ps = await ipc.listProviders();
+      const privacy = await ipc.privacySettings().catch(() => null);
       setProviders(ps);
+      if (privacy) {
+        setDataBoundaryMode(privacy.default_data_boundary);
+      }
+      const ss = await ipc.listSkills(workspace.id).catch(() => []);
+      setSkills(ss);
       // Pick from the clinical-eligible subset only. Without the filter
       // we could land on Apple Intelligence (Subtask scope) which the
       // backend then rejects with an opaque error.
@@ -1664,7 +1691,7 @@ function NewCase({
       // else: leave providerId as "" — the disabled-button tooltip
       // explains the empty state.
     })();
-  }, []);
+  }, [workspace.id]);
 
   // Merge any incoming page-level drag-drop payload with our local
   // attachments. Cleared in the parent after we've integrated it.
@@ -1749,6 +1776,54 @@ function NewCase({
     [providers],
   );
 
+  useEffect(() => {
+    if (dataBoundaryMode === "local_only" && useOnlineEvidence) {
+      setUseOnlineEvidence(false);
+    }
+  }, [dataBoundaryMode, useOnlineEvidence]);
+
+  useEffect(() => {
+    if (!providerId) {
+      setBoundaryPreview(null);
+      return;
+    }
+    let cancelled = false;
+    const paths = attachments.map((a) => a.path);
+    void ipc
+      .previewDataBoundary({
+        workspace_id: workspace.id,
+        text,
+        question,
+        provider_id: providerId,
+        attached_file_paths: paths,
+        data_boundary_mode: dataBoundaryMode,
+        allow_phi_payload: allowPhiPayload,
+        retain_raw_text: retainRawText,
+        active_skill_id: activeSkillId || undefined,
+        use_online_evidence: useOnlineEvidence,
+      })
+      .then((preview) => {
+        if (!cancelled) setBoundaryPreview(preview);
+      })
+      .catch(() => {
+        if (!cancelled) setBoundaryPreview(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeSkillId,
+    allowPhiPayload,
+    attachments,
+    dataBoundaryMode,
+    providerId,
+    question,
+    retainRawText,
+    text,
+    useOnlineEvidence,
+    workspace.id,
+  ]);
+
   const run = async () => {
     const hasDraftAttachments = draftAttachments.length > 0;
     if (!text.trim() && attachments.length === 0 && !hasDraftAttachments) {
@@ -1756,6 +1831,10 @@ function NewCase({
     }
     if (!providerId) {
       setError(t("cases.no_provider_configured"));
+      return;
+    }
+    if (boundaryPreview?.blocked_reason) {
+      setError(boundaryPreview.blocked_reason);
       return;
     }
     setBusy(true);
@@ -1775,6 +1854,11 @@ function NewCase({
           provider_id: providerId,
           text,
           question,
+          data_boundary_mode: dataBoundaryMode,
+          allow_phi_payload: allowPhiPayload,
+          retain_raw_text: retainRawText,
+          active_skill_id: activeSkillId || undefined,
+          use_online_evidence: useOnlineEvidence,
         });
         onDone(resp.case.id);
       } else if (deliberative) {
@@ -1784,6 +1868,11 @@ function NewCase({
           question,
           provider_id: providerId,
           attached_file_paths: attachments.map((a) => a.path),
+          data_boundary_mode: dataBoundaryMode,
+          allow_phi_payload: allowPhiPayload,
+          retain_raw_text: retainRawText,
+          active_skill_id: activeSkillId || undefined,
+          use_online_evidence: useOnlineEvidence,
         });
         // For deliberative runs we keep the overlay alive so the user
         // can review per-phase output / explicitly Close. `onDone`
@@ -1797,6 +1886,11 @@ function NewCase({
           question,
           provider_id: providerId,
           attached_file_paths: attachments.map((a) => a.path),
+          data_boundary_mode: dataBoundaryMode,
+          allow_phi_payload: allowPhiPayload,
+          retain_raw_text: retainRawText,
+          active_skill_id: activeSkillId || undefined,
+          use_online_evidence: useOnlineEvidence,
         });
         onDone(resp.case.id);
       }
@@ -1919,6 +2013,93 @@ function NewCase({
             onGoToSettings={onGoToSettings}
           />
           <ProviderOfflineBanner providers={providers} providerId={providerId} />
+          <div className="grid gap-3 md:grid-cols-2">
+            <Field label={t("cases.data_boundary_label")}>
+              <select
+                value={dataBoundaryMode}
+                onChange={(e) =>
+                  setDataBoundaryMode(e.target.value as DataBoundaryMode)
+                }
+                className="w-full rounded-md border border-border-subtle bg-bg px-3 py-2 text-[13px] text-ink outline-none focus:ring-2 focus:ring-accent/40"
+              >
+                <option value="deid_cloud">
+                  {t("cases.data_boundary.deid_cloud")}
+                </option>
+                <option value="local_only">
+                  {t("cases.data_boundary.local_only")}
+                </option>
+                <option value="explicit_phi">
+                  {t("cases.data_boundary.explicit_phi")}
+                </option>
+              </select>
+            </Field>
+            <Field label={t("cases.skill_label")}>
+              <select
+                value={activeSkillId}
+                onChange={(e) => setActiveSkillId(e.target.value)}
+                className="w-full rounded-md border border-border-subtle bg-bg px-3 py-2 text-[13px] text-ink outline-none focus:ring-2 focus:ring-accent/40"
+              >
+                <option value="">{t("cases.skill_none")}</option>
+                {skills.map((skill) => (
+                  <option key={skill.id} value={skill.id}>
+                    {skill.title}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          {dataBoundaryMode === "explicit_phi" && (
+            <label className="flex items-center gap-2 rounded-md border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-[12.5px] text-ink-dim">
+              <input
+                type="checkbox"
+                checked={allowPhiPayload}
+                onChange={(e) => setAllowPhiPayload(e.target.checked)}
+              />
+              <span>{t("cases.allow_phi_payload")}</span>
+            </label>
+          )}
+          <label className="flex items-center gap-2 rounded-md border border-border-subtle bg-bg px-3 py-2 text-[12.5px] text-ink-dim">
+            <input
+              type="checkbox"
+              checked={retainRawText}
+              onChange={(e) => setRetainRawText(e.target.checked)}
+            />
+            <span>{t("cases.retain_raw_text")}</span>
+          </label>
+          <label className="flex items-center gap-2 rounded-md border border-border-subtle bg-bg px-3 py-2 text-[12.5px] text-ink-dim">
+            <input
+              type="checkbox"
+              checked={useOnlineEvidence}
+              disabled={dataBoundaryMode === "local_only"}
+              onChange={(e) => setUseOnlineEvidence(e.target.checked)}
+            />
+            <span>{t("cases.use_online_evidence")}</span>
+          </label>
+          {boundaryPreview && (
+            <div
+              className={cn(
+                "rounded-md border px-3 py-2 text-[12px] leading-relaxed",
+                boundaryPreview.blocked_reason
+                  ? "border-danger/40 bg-danger/10 text-danger"
+                  : "border-border-subtle bg-bg-subtle text-ink-dim",
+              )}
+            >
+              {boundaryPreview.blocked_reason ??
+                t("cases.data_boundary_preview", {
+                  mode: t(`cases.data_boundary.${boundaryPreview.mode}`),
+                  provider: boundaryPreview.provider_id,
+                  images: boundaryPreview.sends_images
+                    ? t("common.yes")
+                    : t("common.no"),
+                  online: boundaryPreview.uses_online_evidence
+                    ? t("common.yes")
+                    : t("common.no"),
+                  retention: t(
+                    `cases.raw_retention.${boundaryPreview.stores_raw_text ? "explicit_retained" : "discarded"}`,
+                  ),
+                })}
+            </div>
+          )}
           {!draft && (
             <ModeSelector
               checked={deliberative}
@@ -2077,7 +2258,7 @@ function ProviderField({
 
 function ShowCase({
   workspace,
-  detail,
+  detail: initialDetail,
   onBack,
 }: {
   workspace: Workspace;
@@ -2090,18 +2271,26 @@ function ShowCase({
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [localDetail, setLocalDetail] = useState<CaseDetail | null>(initialDetail);
+
+  useEffect(() => {
+    setLocalDetail(initialDetail);
+  }, [initialDetail]);
 
   const feedback = async (kind: "accept" | "modify" | "reject") => {
-    if (!detail) return;
+    const current = localDetail;
+    if (!current) return;
     setBusy(true);
     setError(null);
     try {
       await ipc.submitFeedback({
         workspace_id: workspace.id,
-        case_id: detail.case.id,
+        case_id: current.case.id,
         kind,
       });
       alert(t("cases.feedback_recorded", { kind }));
+      const refreshed = await ipc.showCase(workspace.id, current.case.id);
+      if (refreshed) setLocalDetail(refreshed);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -2109,9 +2298,42 @@ function ShowCase({
     }
   };
 
-  if (!detail) {
+  const purgePhi = async () => {
+    const current = localDetail;
+    if (!current) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const purged = await ipc.purgeCasePhi(workspace.id, current.case.id);
+      setLocalDetail({ ...current, case: purged });
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const purgeAttachments = async () => {
+    const current = localDetail;
+    if (!current) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await ipc.purgeCaseAttachments(workspace.id, current.case.id);
+      const refreshed = await ipc.showCase(workspace.id, current.case.id);
+      if (refreshed) setLocalDetail(refreshed);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!localDetail) {
     return <ShowCaseSkeleton onBack={onBack} />;
   }
+
+  const detail = localDetail;
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-5 p-6">
@@ -2121,6 +2343,16 @@ function ShowCase({
         </Button>
         {detail.verdict && (
           <div className="flex gap-2">
+            {detail.case.raw_text_retention !== "discarded" && (
+              <Button size="sm" variant="ghost" onClick={purgePhi} loading={busy}>
+                {t("cases.purge_phi")}
+              </Button>
+            )}
+            {detail.attachments.some((a) => a.stored_path) && (
+              <Button size="sm" variant="ghost" onClick={purgeAttachments} loading={busy}>
+                {t("cases.purge_attachments")}
+              </Button>
+            )}
             <Button size="sm" onClick={() => feedback("accept")} loading={busy}>
               {t("cases.accept")}
             </Button>
@@ -2173,6 +2405,17 @@ function ShowCase({
               </div>
             </div>
           )}
+          {detail.review && (
+            <div className="rounded-md border border-ok/30 bg-ok/5 px-3 py-2 text-[12.5px] text-ok">
+              {t("cases.review_finalized", {
+                decision: detail.review.decision,
+                date: new Date(detail.review.reviewed_at).toLocaleString(),
+              })}
+              {detail.review.diff_summary && (
+                <div className="mt-1 text-ink-dim">{detail.review.diff_summary}</div>
+              )}
+            </div>
+          )}
           {detail.verdict ? (
             <VerdictRenderer verdict={detail.verdict} />
           ) : (
@@ -2190,6 +2433,33 @@ function ShowCase({
           workspaceId={workspace.id}
           verdictId={detail.verdict_record.id}
         />
+      )}
+
+      {detail.audit && (
+        <Card>
+          <CardHeader
+            title={t("cases.audit_title")}
+            subtitle={`${detail.audit.provider_id} · ${detail.audit.model}`}
+          />
+          <CardBody>
+            <div className="grid gap-2 text-[12px] text-ink-dim md:grid-cols-2">
+              <AuditRow label={t("cases.audit_mode")} value={detail.audit.data_boundary_mode} />
+              <AuditRow label={t("cases.audit_payload")} value={detail.audit.payload_mode} />
+              <AuditRow label={t("cases.audit_prompt_hash")} value={detail.audit.prompt_sha256} mono />
+              <AuditRow label={t("cases.audit_output_hash")} value={detail.audit.output_sha256} mono />
+              <AuditRow label={t("cases.audit_raw_retention")} value={detail.audit.raw_text_retention} />
+              <AuditRow
+                label={t("cases.audit_refs")}
+                value={[
+                  ...detail.audit.evidence_refs,
+                  ...detail.audit.attachment_refs,
+                  ...detail.audit.past_cases_refs,
+                  ...detail.audit.online_evidence_refs,
+                ].join(", ") || "—"}
+              />
+            </div>
+          </CardBody>
+        </Card>
       )}
 
       <Card>
@@ -2213,6 +2483,33 @@ function ShowCase({
           </pre>
         </CardBody>
       </Card>
+    </div>
+  );
+}
+
+function AuditRow({
+  label,
+  value,
+  mono,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+}) {
+  return (
+    <div className="min-w-0 rounded-md border border-border-subtle bg-bg px-2.5 py-2">
+      <div className="text-[10.5px] uppercase tracking-wide text-ink-faint">
+        {label}
+      </div>
+      <div
+        className={cn(
+          "mt-1 min-w-0 truncate text-ink",
+          mono && "font-mono text-[11px]",
+        )}
+        title={value}
+      >
+        {value}
+      </div>
     </div>
   );
 }

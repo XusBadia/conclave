@@ -43,35 +43,52 @@
 //!
 //! - Every case is run through the de-identifier before any LLM call. The
 //!   pipeline holds the original text in memory only long enough to mask
-//!   it and store both copies in the workspace database; the prompt and
-//!   the on-disk persistence both use the masked text.
+//!   it and compute a fingerprint. New finalized runs persist masked text
+//!   plus hashes by default, not raw clinical narrative.
 //! - The disclaimer field is copied verbatim from
 //!   [`conclave_core::MEDICAL_DISCLAIMER`] regardless of what the model
 //!   produced, so we control the legal footer at all times.
 
 pub mod attachments;
+pub mod clinical_services;
+pub mod connectors;
 pub mod deliberation;
 pub mod persistence;
 pub mod pipeline;
+pub mod privacy;
 pub mod prompt;
 pub mod qa;
 pub mod schema;
+pub mod skills;
 pub mod validation;
+pub mod workflows;
 
 pub use attachments::ingest_case_attachments;
+pub use clinical_services::{
+    CsvTerminologyService, DeidentService, EvidenceService, ExternalEvidenceHit, ExtractionHit,
+    ExtractionService, LocalDeidentService, TerminologyHit, TerminologyService,
+};
+pub use connectors::{
+    ConnectorAuditEvent, ConnectorAuth, ConnectorCallPlan, ConnectorCallRequest, ConnectorConfig,
+    ConnectorLoggingPolicy, ConnectorRegistry,
+};
 pub use deliberation::{
     run_deliberation, DeliberationEvent, DeliberationEvidence, DeliberationInputs,
     DeliberationOptions, DeliberationOutcome, DeliberationPastCase, DeliberationPhase,
 };
 pub use persistence::{
-    CaseAttachment, CaseRecord, CaseStatus, CaseStore, DeliberationTrace, ExportedCase,
-    ExportedFeedback, PastCaseHit, RetrievalTrace, StoreStats, VerdictRecord,
+    AuditRunRecord, AuditStatus, CaseAttachment, CaseRecord, CaseStatus, CaseStore,
+    DeliberationTrace, ExportedCase, ExportedFeedback, FeedbackKind, FeedbackRecord, PastCaseHit,
+    RetrievalTrace, ReviewDecision, ReviewMetadataRecord, StoreStats, VerdictRecord,
 };
 pub use pipeline::{VerdictOptions, VerdictPipeline, VerdictRun};
+pub use privacy::{sha256_hex, AuditPayloadMode, DataBoundaryMode, RawTextRetention};
 pub use prompt::{
     CaseAttachmentInput, EvidenceChunkInput, ExternalEvidenceInput, PastCaseInput, PromptInputs,
     PromptTemplate, VERDICT_PROMPT_VERSION,
 };
 pub use qa::{QaPipeline, QaResponse, QaSource};
 pub use schema::{Alternative, CertaintyLevel, EvidenceClaim, KeyValue, Recommendation, Verdict};
+pub use skills::{load_skill, load_skills, Skill, SkillSource};
 pub use validation::{validate_verdict, ValidationError};
+pub use workflows::{run_workflow, ClinicalWorkflow, WorkflowOutput};

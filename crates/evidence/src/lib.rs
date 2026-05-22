@@ -25,9 +25,8 @@
 
 //! Online-evidence adapters for the verdict engine.
 //!
-//! Phase 6 wires PubMed (NCBI E-utilities). Europe PMC and a richer MeSH
-//! query generator are out of scope for this slice; the public
-//! [`EvidenceSource`] trait makes them straightforward additions later.
+//! Phase 6 wires PubMed (NCBI E-utilities) with Europe PMC fallback. A richer
+//! MeSH query generator can build on the public [`EvidenceSource`] trait.
 //!
 //! ## Privacy
 //!
@@ -37,6 +36,7 @@
 //! that nothing else leaves the device.
 
 mod cache;
+mod europe_pmc;
 mod pubmed;
 
 use async_trait::async_trait;
@@ -44,6 +44,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub use cache::EvidenceCache;
+pub use europe_pmc::EuropePmcSource;
 pub use pubmed::PubMedSource;
 
 /// Anything that can search a literature corpus and return hits.

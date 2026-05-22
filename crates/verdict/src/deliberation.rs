@@ -34,11 +34,13 @@ use tokio::sync::mpsc::UnboundedSender;
 use uuid::Uuid;
 
 use conclave_core::{Error, Result, MEDICAL_DISCLAIMER};
+use conclave_evidence::EvidenceItem;
 use conclave_providers::{CompletionRequest, ImageInput, LlmProvider, Message};
 
 use crate::persistence::{CaseAttachment, DeliberationTrace};
 use crate::prompt::{
-    CaseAttachmentInput, EvidenceChunkInput, PastCaseInput, PromptInputs, PromptTemplate,
+    CaseAttachmentInput, EvidenceChunkInput, ExternalEvidenceInput, PastCaseInput, PromptInputs,
+    PromptTemplate,
 };
 use crate::schema::Verdict;
 use crate::validation::validate_verdict;
@@ -106,7 +108,10 @@ pub struct DeliberationInputs {
     pub rules_block: String,
     pub masked_case_text: String,
     pub user_question: String,
+    pub active_skill_id: Option<String>,
+    pub active_skill_instructions: Option<String>,
     pub evidence_chunks: Vec<DeliberationEvidence>,
+    pub external_evidence: Vec<EvidenceItem>,
     pub past_cases: Vec<DeliberationPastCase>,
     pub attachments: Vec<CaseAttachment>,
     /// Optional images already loaded as base64 + media_type, ready to be
@@ -436,12 +441,29 @@ fn render_shared_evidence_block(inputs: &DeliberationInputs) -> String {
             needs_ocr: a.needs_ocr,
         })
         .collect();
+    let external_rows = external_prompt_rows(&inputs.external_evidence);
+    let external_inputs: Vec<ExternalEvidenceInput<'_>> = external_rows
+        .iter()
+        .enumerate()
+        .map(|(i, e)| ExternalEvidenceInput {
+            index: i + 1,
+            source: &e.source,
+            title: &e.title,
+            authors: &e.authors,
+            year: &e.year,
+            venue: &e.venue,
+            url: &e.url,
+            abstract_text: &e.abstract_text,
+        })
+        .collect();
     let prompt_inputs = PromptInputs {
         specialty: &inputs.specialty,
         output_language: &inputs.output_language,
         rules_block: &inputs.rules_block,
+        active_skill_id: inputs.active_skill_id.as_deref(),
+        active_skill_instructions: inputs.active_skill_instructions.as_deref(),
         evidence_chunks: &evidence_inputs,
-        external_evidence: &[],
+        external_evidence: &external_inputs,
         past_cases: &past_inputs,
         case_attachments: &attachment_inputs,
         de_identified_case_text: &inputs.masked_case_text,
@@ -462,7 +484,7 @@ Read every supplied source carefully, including any images attached to \
 this turn. Produce a structured **markdown briefing** — NOT JSON, NOT a \
 recommendation. The briefing must contain these sections:\n\n\
 1. **What we have** — bullet list of every salient finding, grouped by \
-source ([E*], [A*], [P*]). Quote evidence ids inline so later phases can \
+source ([E*], [A*], [P*], [X*]). Quote evidence ids inline so later phases can \
 trace each point.\n\
 2. **What we're missing** — data that would change the management.\n\
 3. **Preliminary red flags** — anything that warrants escalation or a \
@@ -488,7 +510,7 @@ A peer briefing has already been produced for this case (see BRIEFING \
 below). Use it as a high-level digest, but defer to the EVIDENCE / CASE \
 ATTACHMENTS blocks for the authoritative content.\n\n\
 Produce a JSON verdict that strictly matches the schema described in the \
-EVIDENCE block. Cite only the supplied evidence ids ([E*], [A*], [P*]). \
+EVIDENCE block. Cite only the supplied evidence ids ([E*], [A*], [P*], [X*]). \
 Treat this as a first draft — the next phase will challenge it.\n\n\
 BRIEFING\n========\n{briefing}\n\n{shared}",
     )
@@ -544,6 +566,44 @@ BRIEFING (for reference)\n========================\n{briefing}\n\n{shared}",
     )
 }
 
+#[derive(Debug, Clone)]
+struct ExternalEvidencePromptRow {
+    source: String,
+    title: String,
+    authors: String,
+    year: String,
+    venue: String,
+    url: String,
+    abstract_text: String,
+}
+
+fn external_prompt_rows(items: &[EvidenceItem]) -> Vec<ExternalEvidencePromptRow> {
+    items
+        .iter()
+        .map(|item| ExternalEvidencePromptRow {
+            source: item.source.clone(),
+            title: item.title.clone(),
+            authors: authors_label(&item.authors),
+            year: item.year.map_or_else(|| "?".to_owned(), |y| y.to_string()),
+            venue: item.venue.clone().unwrap_or_else(|| "?".to_owned()),
+            url: item.url.clone(),
+            abstract_text: item
+                .abstract_text
+                .clone()
+                .unwrap_or_else(|| "No abstract available from the external source.".to_owned()),
+        })
+        .collect()
+}
+
+fn authors_label(authors: &[String]) -> String {
+    match authors {
+        [] => "?".to_owned(),
+        [one] => one.clone(),
+        [one, two] => format!("{one}, {two}"),
+        [one, ..] => format!("{one} et al."),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -556,11 +616,14 @@ mod tests {
             rules_block: String::new(),
             masked_case_text: "Paciente con dolor torácico opresivo.".into(),
             user_question: "Manejo inicial?".into(),
+            active_skill_id: None,
+            active_skill_instructions: None,
             evidence_chunks: vec![DeliberationEvidence {
                 document_title: "Guía SCA".into(),
                 doc_type: "pdf".into(),
                 snippet: "AAS 300mg + clopidogrel 600mg.".into(),
             }],
+            external_evidence: vec![],
             past_cases: vec![],
             attachments: vec![],
             images: vec![],
