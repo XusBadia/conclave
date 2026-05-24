@@ -1,45 +1,50 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <defs>
-    <radialGradient id="bg" cx="0.3" cy="0.2" r="1.05">
-      <stop offset="0%"   stop-color="#fdfcf8"/>
-      <stop offset="55%"  stop-color="#f7f4ec"/>
-      <stop offset="100%" stop-color="#ece7da"/>
+    <radialGradient id="tile" cx="0.24" cy="0.16" r="1.08">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="58%" stop-color="#f7f7f3"/>
+      <stop offset="100%" stop-color="#dedfd8"/>
     </radialGradient>
-    <linearGradient id="topHighlight" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%"   stop-color="#ffffff" stop-opacity="0.75"/>
-      <stop offset="45%"  stop-color="#ffffff" stop-opacity="0.10"/>
-      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    <linearGradient id="rim" x1="196" y1="140" x2="828" y2="884">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="54%" stop-color="#f5f6f1" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#9fa29a" stop-opacity="0.38"/>
     </linearGradient>
-    <linearGradient id="bottomShade" x1="0" y1="0.55" x2="0" y2="1">
-      <stop offset="0%"   stop-color="#000000" stop-opacity="0"/>
-      <stop offset="100%" stop-color="#5a4a2d" stop-opacity="0.08"/>
+    <linearGradient id="ink" x1="220" y1="188" x2="704" y2="835">
+      <stop offset="0%" stop-color="#22242a"/>
+      <stop offset="100%" stop-color="#050607"/>
     </linearGradient>
-    <linearGradient id="markInk" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%"   stop-color="#1c1c20"/>
-      <stop offset="100%" stop-color="#070709"/>
+    <linearGradient id="node" x1="650" y1="252" x2="820" y2="772">
+      <stop offset="0%" stop-color="#24b7d5"/>
+      <stop offset="100%" stop-color="#0e7490"/>
     </linearGradient>
     <clipPath id="squircle">
-      <rect x="100" y="100" width="824" height="824" rx="184" ry="184"/>
+      <rect x="96" y="96" width="832" height="832" rx="190"/>
     </clipPath>
   </defs>
 
-  <rect x="100" y="100" width="824" height="824" rx="184" ry="184" fill="url(#bg)"/>
-
-  <g clip-path="url(#squircle)">
-    <rect x="100" y="100" width="824" height="824" fill="url(#topHighlight)"/>
-    <rect x="100" y="100" width="824" height="824" fill="url(#bottomShade)"/>
-    <rect x="101" y="101" width="822" height="822" rx="183" ry="183"
-          fill="none" stroke="#ffffff" stroke-opacity="0.55" stroke-width="2"/>
+  <rect x="122" y="148" width="780" height="780" rx="178" fill="#050607" opacity="0.13"/>
+  <g>
+    <rect x="96" y="96" width="832" height="832" rx="190" fill="url(#tile)"/>
+    <g clip-path="url(#squircle)">
+      <rect x="96" y="96" width="832" height="832" fill="#ffffff" opacity="0.34"/>
+      <path d="M96 692C252 778 424 820 612 820C720 820 824 804 928 772V928H96Z" fill="#080a0c" opacity="0.045"/>
+      <rect x="111" y="111" width="802" height="802" rx="176" fill="none" stroke="url(#rim)" stroke-width="30"/>
+    </g>
   </g>
 
-  <g transform="translate(240 240) scale(8.5)" fill="none" stroke="url(#markInk)"
-     stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
-    <circle cx="32" cy="32" r="24"/>
-    <circle cx="32"    cy="8"     r="5.5" fill="url(#markInk)" stroke="none"/>
-    <circle cx="9.17"  cy="24.58" r="5.5" fill="url(#markInk)" stroke="none"/>
-    <circle cx="17.89" cy="51.42" r="5.5" fill="url(#markInk)" stroke="none"/>
-    <circle cx="46.11" cy="51.42" r="5.5" fill="url(#markInk)" stroke="none"/>
-    <circle cx="54.83" cy="24.58" r="5.5" fill="url(#markInk)" stroke="none"/>
-    <circle cx="32"    cy="32"    r="8"   fill="url(#markInk)" stroke="none"/>
-  </g>
+  <path
+    d="M682 330C632 278 563 246 489 246C342 246 228 365 228 512C228 659 342 778 489 778C563 778 632 746 682 694"
+    fill="none"
+    stroke="url(#ink)"
+    stroke-width="122"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <circle cx="716" cy="346" r="70" fill="#050607" opacity="0.14"/>
+  <circle cx="716" cy="710" r="70" fill="#050607" opacity="0.14"/>
+  <circle cx="700" cy="330" r="68" fill="url(#node)"/>
+  <circle cx="700" cy="694" r="68" fill="url(#node)"/>
+  <circle cx="512" cy="512" r="72" fill="url(#ink)"/>
+  <circle cx="527" cy="492" r="20" fill="#ffffff" opacity="0.18"/>
 </svg>

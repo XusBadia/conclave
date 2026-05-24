@@ -6,7 +6,7 @@
 //   2. Invoke `pnpm tauri icon` against the PNG, which produces every
 //      platform-specific format (.icns, .ico, sized PNGs, Windows Store
 //      tiles) into src-tauri/icons/.
-//   3. Delete the throwaway _source-1024.png.
+//   3. Delete the throwaway _source-1024.png and mobile byproducts.
 //
 // Run with `pnpm --dir apps/desktop run icons` (see package.json scripts).
 
@@ -39,5 +39,8 @@ execFileSync(
 
 console.log(`[icons] cleaning up ${masterPng}`);
 rmSync(masterPng);
+for (const mobileDir of ["android", "ios"]) {
+  rmSync(resolve(iconsDir, mobileDir), { recursive: true, force: true });
+}
 
 console.log(`[icons] done`);
