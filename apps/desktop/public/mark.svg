@@ -1,9 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" stroke="#121214" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-  <circle cx="32" cy="32" r="24" />
-  <circle cx="32"    cy="8"     r="5.5" fill="#121214" stroke="none" />
-  <circle cx="9.17"  cy="24.58" r="5.5" fill="#121214" stroke="none" />
-  <circle cx="17.89" cy="51.42" r="5.5" fill="#121214" stroke="none" />
-  <circle cx="46.11" cy="51.42" r="5.5" fill="#121214" stroke="none" />
-  <circle cx="54.83" cy="24.58" r="5.5" fill="#121214" stroke="none" />
-  <circle cx="32"    cy="32"    r="8"   fill="#121214" stroke="none" />
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true">
+  <style>
+    .tile { fill: #faf9f8; stroke: #d8d8d2; }
+    .mark { stroke: #121214; }
+    .node { fill: #0e7490; }
+    .core { fill: #121214; }
+
+    @media (prefers-color-scheme: dark) {
+      .tile { fill: #080a0c; stroke: #242931; }
+      .mark { stroke: #f5f6f8; }
+      .node { fill: #7dd3fc; }
+      .core { fill: #f5f6f8; }
+    }
+  </style>
+  <rect class="tile" x="5" y="5" width="54" height="54" rx="15" stroke-width="3" />
+  <path
+    class="mark"
+    d="M43 20.5C39.9 17.4 35.8 15.5 31.4 15.5C22.5 15.5 15.5 22.8 15.5 32C15.5 41.2 22.5 48.5 31.4 48.5C35.8 48.5 39.9 46.6 43 43.5"
+    fill="none"
+    stroke-width="7.5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <circle class="node" cx="43.5" cy="20.5" r="4.75" />
+  <circle class="node" cx="43.5" cy="43.5" r="4.75" />
+  <circle class="core" cx="32" cy="32" r="4.25" />
 </svg>

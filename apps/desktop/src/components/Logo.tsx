@@ -13,22 +13,31 @@ export function Logo({ size = 28, className, title = "Conclave" }: LogoProps) {
       viewBox="0 0 64 64"
       width={size}
       height={size}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={5}
-      strokeLinecap="round"
-      strokeLinejoin="round"
       role="img"
       aria-label={title}
       className={clsx("inline-block text-ink", className)}
     >
-      <circle cx={32} cy={32} r={24} />
-      <circle cx={32} cy={8} r={5.5} fill="currentColor" stroke="none" />
-      <circle cx={9.17} cy={24.58} r={5.5} fill="currentColor" stroke="none" />
-      <circle cx={17.89} cy={51.42} r={5.5} fill="currentColor" stroke="none" />
-      <circle cx={46.11} cy={51.42} r={5.5} fill="currentColor" stroke="none" />
-      <circle cx={54.83} cy={24.58} r={5.5} fill="currentColor" stroke="none" />
-      <circle cx={32} cy={32} r={8} fill="currentColor" stroke="none" />
+      <rect
+        x={5}
+        y={5}
+        width={54}
+        height={54}
+        rx={15}
+        fill="rgb(var(--surface))"
+        stroke="rgb(var(--border))"
+        strokeWidth={3}
+      />
+      <path
+        d="M43 20.5C39.9 17.4 35.8 15.5 31.4 15.5C22.5 15.5 15.5 22.8 15.5 32C15.5 41.2 22.5 48.5 31.4 48.5C35.8 48.5 39.9 46.6 43 43.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={7.5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx={43.5} cy={20.5} r={4.75} fill="rgb(var(--accent))" />
+      <circle cx={43.5} cy={43.5} r={4.75} fill="rgb(var(--accent))" />
+      <circle cx={32} cy={32} r={4.25} fill="currentColor" />
     </svg>
   );
 }

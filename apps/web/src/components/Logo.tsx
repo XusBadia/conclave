@@ -1,6 +1,6 @@
 /**
  * Conclave brand mark — inline SVG so it inherits currentColor and ships
- * zero extra requests. Geometry matches apps/desktop/public/mark.svg.
+ * zero extra requests. Geometry matches public/mark.svg.
  */
 type LogoProps = {
   size?: number;
@@ -15,23 +15,32 @@ export function Logo({ size = 28, className, ariaLabel }: LogoProps) {
       viewBox="0 0 64 64"
       width={size}
       height={size}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={5}
-      strokeLinecap="round"
-      strokeLinejoin="round"
       className={className}
       role={ariaLabel ? "img" : undefined}
       aria-label={ariaLabel}
       aria-hidden={ariaLabel ? undefined : true}
     >
-      <circle cx="32" cy="32" r="24" />
-      <circle cx="32" cy="8" r="5.5" fill="currentColor" stroke="none" />
-      <circle cx="9.17" cy="24.58" r="5.5" fill="currentColor" stroke="none" />
-      <circle cx="17.89" cy="51.42" r="5.5" fill="currentColor" stroke="none" />
-      <circle cx="46.11" cy="51.42" r="5.5" fill="currentColor" stroke="none" />
-      <circle cx="54.83" cy="24.58" r="5.5" fill="currentColor" stroke="none" />
-      <circle cx="32" cy="32" r="8" fill="currentColor" stroke="none" />
+      <rect
+        x="5"
+        y="5"
+        width="54"
+        height="54"
+        rx="15"
+        fill="var(--color-paper)"
+        stroke="var(--color-hairline)"
+        strokeWidth="3"
+      />
+      <path
+        d="M43 20.5C39.9 17.4 35.8 15.5 31.4 15.5C22.5 15.5 15.5 22.8 15.5 32C15.5 41.2 22.5 48.5 31.4 48.5C35.8 48.5 39.9 46.6 43 43.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="7.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="43.5" cy="20.5" r="4.75" fill="var(--color-accent)" />
+      <circle cx="43.5" cy="43.5" r="4.75" fill="var(--color-accent)" />
+      <circle cx="32" cy="32" r="4.25" fill="currentColor" />
     </svg>
   );
 }
