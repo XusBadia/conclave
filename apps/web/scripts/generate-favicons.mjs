@@ -1,6 +1,7 @@
 /**
- * Derive favicon.ico, apple-touch-icon.png, icon-192.png, icon-512.png from mark.svg.
- * Runs as `prebuild` so the static export always ships fresh icons matching the brand mark.
+ * Derive favicon.ico, apple-touch-icon.png, icon-192.png, icon-512.png from
+ * favicon.svg. Runs as `prebuild` so the static export always ships fresh
+ * icons matching the small-size browser mark.
  *
  * Idempotent: skips work if outputs are newer than the source SVG.
  */
@@ -11,15 +12,15 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
-const SRC = resolve(ROOT, "public/mark.svg");
+const SRC = resolve(ROOT, "public/favicon.svg");
 const PUBLIC = resolve(ROOT, "public");
 
 const TARGETS = [
-  { file: "apple-touch-icon.png", size: 180, padding: 24, bg: "#faf9f8" },
-  { file: "icon-192.png", size: 192, padding: 28, bg: "transparent" },
-  { file: "icon-512.png", size: 512, padding: 72, bg: "transparent" },
-  { file: "favicon-32.png", size: 32, padding: 4, bg: "transparent" },
-  { file: "favicon-16.png", size: 16, padding: 2, bg: "transparent" },
+  { file: "apple-touch-icon.png", size: 180, padding: 14, bg: "#faf9f8" },
+  { file: "icon-192.png", size: 192, padding: 16, bg: "transparent" },
+  { file: "icon-512.png", size: 512, padding: 42, bg: "transparent" },
+  { file: "favicon-32.png", size: 32, padding: 0, bg: "transparent" },
+  { file: "favicon-16.png", size: 16, padding: 0, bg: "transparent" },
 ];
 
 const sourceSvg = readFileSync(SRC, "utf-8");
@@ -30,23 +31,12 @@ function isStale(out) {
   return statSync(out).mtimeMs < sourceMtime;
 }
 
-function wrapWithBackground(svg, bg) {
-  if (bg === "transparent") return svg;
-  return svg.replace(
-    /<svg([^>]*)>/,
-    `<svg$1><rect width="100%" height="100%" fill="${bg}" />`,
-  );
-}
-
 function renderPng({ size, padding, bg }) {
   const innerSize = size - padding * 2;
-  const paddedSvg = sourceSvg.replace(
-    /viewBox="0 0 64 64"/,
-    `viewBox="0 0 64 64" width="${innerSize}" height="${innerSize}"`,
-  );
+  const scale = innerSize / 64;
   const wrapped = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${
     bg !== "transparent" ? `<rect width="100%" height="100%" fill="${bg}"/>` : ""
-  }<g transform="translate(${padding} ${padding})">${paddedSvg.replace(
+  }<g transform="translate(${padding} ${padding}) scale(${scale})">${sourceSvg.replace(
     /<svg[^>]*>|<\/svg>/g,
     "",
   )}</g></svg>`;
@@ -67,8 +57,7 @@ for (const target of TARGETS) {
   console.log(`  · ${target.file} (${target.size}×${target.size})`);
 }
 
-// favicon.ico is built by concatenating 16/32 PNGs into a minimal ICO container.
-// resvg doesn't write ICO directly; we emit a single 32×32 PNG bytes inside an ICO header.
+// resvg doesn't write ICO directly; emit one 32×32 PNG inside an ICO header.
 const icoPath = resolve(PUBLIC, "favicon.ico");
 if (isStale(icoPath)) {
   const png32 = readFileSync(resolve(PUBLIC, "favicon-32.png"));

@@ -19,22 +19,6 @@ export function Hero() {
           <div className="mockup-float lg:w-[108%]">
             <HeroMockup />
           </div>
-          {/* Floating mark behind the mockup */}
-          <div className="absolute -top-24 -right-24 -z-10 text-ink/5 dark:text-ink/10">
-            <svg
-              width={360}
-              height={360}
-              viewBox="0 0 64 64"
-              fill="currentColor"
-            >
-              <circle cx="32" cy="32" r="8" />
-              <circle cx="32" cy="8" r="5" />
-              <circle cx="9.17" cy="24.58" r="5" />
-              <circle cx="17.89" cy="51.42" r="5" />
-              <circle cx="46.11" cy="51.42" r="5" />
-              <circle cx="54.83" cy="24.58" r="5" />
-            </svg>
-          </div>
         </div>
       </div>
 
