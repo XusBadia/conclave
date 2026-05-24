@@ -12,7 +12,7 @@ export function Logo({ size = 28, className, ariaLabel }: LogoProps) {
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 64 64"
+      viewBox="8 8 48 48"
       width={size}
       height={size}
       className={className}
@@ -20,16 +20,6 @@ export function Logo({ size = 28, className, ariaLabel }: LogoProps) {
       aria-label={ariaLabel}
       aria-hidden={ariaLabel ? undefined : true}
     >
-      <rect
-        x="5"
-        y="5"
-        width="54"
-        height="54"
-        rx="15"
-        fill="var(--color-paper)"
-        stroke="var(--color-hairline)"
-        strokeWidth="3"
-      />
       <path
         d="M43 20.5C39.9 17.4 35.8 15.5 31.4 15.5C22.5 15.5 15.5 22.8 15.5 32C15.5 41.2 22.5 48.5 31.4 48.5C35.8 48.5 39.9 46.6 43 43.5"
         fill="none"

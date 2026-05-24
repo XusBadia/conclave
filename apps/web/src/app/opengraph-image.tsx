@@ -26,9 +26,8 @@ export default async function OpenGraphImage() {
           <svg
             width="52"
             height="52"
-            viewBox="0 0 64 64"
+            viewBox="8 8 48 48"
           >
-            <rect x="5" y="5" width="54" height="54" rx="15" fill="#faf9f8" stroke="#d8d8d2" strokeWidth="3" />
             <path
               d="M43 20.5C39.9 17.4 35.8 15.5 31.4 15.5C22.5 15.5 15.5 22.8 15.5 32C15.5 41.2 22.5 48.5 31.4 48.5C35.8 48.5 39.9 46.6 43 43.5"
               fill="none"
