@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { TFunction } from "i18next";
 import { Trans, useTranslation } from "react-i18next";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -2952,9 +2953,40 @@ function SectionRow({ title, copyText }: { title: string; copyText: string }) {
 //   • "Ejecutar comité (N)"     → `run_batch_cases` (creates + runs)
 // ---------------------------------------------------------------------------
 
-const DROP_MIME = "application/x-conclave-classify-file";
+// Drag/drop between cards uses Pointer events instead of the HTML5 drag/drop
+// API. WKWebView's protected-mode handling of `dataTransfer` is unreliable in
+// Tauri 2 (custom MIME types are stripped from `dataTransfer.types` during
+// dragover, and `dragover`/`drop` events frequently never reach the target
+// element underneath the drag image). Pointer events bypass that entire
+// pipeline and work consistently inside the WebView. The page-level Tauri
+// `onDragDropEvent` listener for OS-file drops is unaffected because it
+// operates at the NSView level, not the HTML5 event level.
 
-type DragPayload = { fromRow: number; fileIdx: number };
+type ClassifyDragState = {
+  /** Index of the source row the chip came from. */
+  fromRow: number;
+  /** Index of the chip inside the source row. */
+  fileIdx: number;
+  /** File path — captured at pointerdown for the floating ghost label. */
+  filePath: string;
+  /** Pointer coordinates at pointerdown (for the 5 px activation threshold). */
+  startX: number;
+  startY: number;
+  /** Live pointer position (drives the ghost's transform). */
+  cursorX: number;
+  cursorY: number;
+  /** True once the cursor has moved > 5 px from (startX, startY). Below this
+   *  threshold we treat the gesture as a click and never commit a move, so
+   *  the chip's "Quitar" button keeps working. */
+  activated: boolean;
+  /** Which drop target the cursor is currently over, or `null` if none. */
+  hoveringTarget: number | "new" | null;
+};
+
+/** CSS selector for any element that accepts a chip drop. Cards and the
+ *  new-case zone both render this attribute so hit-testing is a single
+ *  `closest(...)` walk in the pointermove handler. */
+const CLASSIFY_DROP_TARGET_ATTR = "data-classify-drop-target";
 
 function ClassifyDropDialog({
   workspace,
@@ -2983,7 +3015,25 @@ function ClassifyDropDialog({
   const [providerId, setProviderId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [draggingFrom, setDraggingFrom] = useState<number | null>(null);
+  const [drag, setDrag] = useState<ClassifyDragState | null>(null);
+  // Mirror of `drag` for use inside the window-level pointer listeners. The
+  // listeners are installed once per drag and need to read the latest state
+  // without re-binding on every cursor move.
+  const dragRef = useRef<ClassifyDragState | null>(null);
+  const updateDrag = useCallback(
+    (
+      next:
+        | ClassifyDragState
+        | null
+        | ((prev: ClassifyDragState | null) => ClassifyDragState | null),
+    ) => {
+      const resolved =
+        typeof next === "function" ? next(dragRef.current) : next;
+      dragRef.current = resolved;
+      setDrag(resolved);
+    },
+    [],
+  );
   const [openNoteIdx, setOpenNoteIdx] = useState<number | null>(null);
   // Deliberative toggle for the batch path. When ON, every case in the
   // batch runs through the 4-pass committee. Drafts ignore the toggle
@@ -3124,6 +3174,110 @@ function ClassifyDropDialog({
         (r) => r.attached_file_paths.length > 0 || r.text.trim().length > 0,
       );
     });
+  };
+
+  // Begin a chip drag. Called from the chip's `onPointerDown`. Installs
+  // window-level pointer/keyboard listeners imperatively (rather than via a
+  // useEffect keyed on `drag`) so we don't miss the first pointermove that
+  // can fire before React commits the state change. The listeners read from
+  // `dragRef.current` to stay current without re-binding.
+  const beginChipDrag = (
+    fromRow: number,
+    fileIdx: number,
+    startX: number,
+    startY: number,
+    filePath: string,
+  ) => {
+    if (busy) return;
+    updateDrag({
+      fromRow,
+      fileIdx,
+      filePath,
+      startX,
+      startY,
+      cursorX: startX,
+      cursorY: startY,
+      activated: false,
+      hoveringTarget: null,
+    });
+
+    const teardown = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      window.removeEventListener("keydown", onKey, true);
+    };
+
+    const hitTest = (x: number, y: number): number | "new" | null => {
+      const el = document
+        .elementFromPoint(x, y)
+        ?.closest(`[${CLASSIFY_DROP_TARGET_ATTR}]`);
+      if (!el) return null;
+      const raw = el.getAttribute(CLASSIFY_DROP_TARGET_ATTR);
+      if (raw === "new") return "new";
+      if (raw && raw.startsWith("card-")) {
+        const idx = Number.parseInt(raw.slice("card-".length), 10);
+        return Number.isFinite(idx) ? idx : null;
+      }
+      return null;
+    };
+
+    const onMove = (ev: PointerEvent) => {
+      const current = dragRef.current;
+      if (!current) {
+        teardown();
+        return;
+      }
+      const dx = ev.clientX - current.startX;
+      const dy = ev.clientY - current.startY;
+      const activated = current.activated || Math.hypot(dx, dy) > 5;
+      const hoveringRaw = activated ? hitTest(ev.clientX, ev.clientY) : null;
+      // Hide self-targeting: dropping back on the source row is a no-op,
+      // so we never light it up as a hover target either.
+      const hoveringTarget =
+        hoveringRaw === current.fromRow ? null : hoveringRaw;
+      updateDrag({
+        ...current,
+        cursorX: ev.clientX,
+        cursorY: ev.clientY,
+        activated,
+        hoveringTarget,
+      });
+    };
+
+    const onUp = (_ev: PointerEvent) => {
+      teardown();
+      const current = dragRef.current;
+      updateDrag(null);
+      if (!current || !current.activated) return;
+      const target = current.hoveringTarget;
+      if (target === null) return;
+      if (target === current.fromRow) return;
+      moveFile(current.fromRow, current.fileIdx, target);
+    };
+
+    const onCancel = (_ev: PointerEvent) => {
+      teardown();
+      updateDrag(null);
+    };
+
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key !== "Escape") return;
+      if (!dragRef.current) return;
+      // Swallow the keystroke so the dialog (and anything else above) sees
+      // the drag-cancel rather than treating it as a request to close.
+      ev.stopPropagation();
+      ev.preventDefault();
+      teardown();
+      updateDrag(null);
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+    // Capture phase so we beat any document-level Escape handler that might
+    // otherwise interpret the keystroke as "close the dialog".
+    window.addEventListener("keydown", onKey, true);
   };
 
   const mergeAllIntoOne = () => {
@@ -3350,10 +3504,9 @@ function ClassifyDropDialog({
                     key={`${row.patient_label}-${i}`}
                     row={row}
                     index={i}
-                    isDragSource={draggingFrom === i}
-                    isDropEligible={
-                      draggingFrom !== null && draggingFrom !== i
-                    }
+                    isDragSource={!!drag?.activated && drag.fromRow === i}
+                    isDropEligible={!!drag?.activated && drag.fromRow !== i}
+                    isHoverTarget={drag?.hoveringTarget === i}
                     busy={busy}
                     noteOpen={openNoteIdx === i}
                     onToggleNote={() =>
@@ -3364,15 +3517,14 @@ function ClassifyDropDialog({
                     onTextChange={(v) => updateRow(i, { text: v })}
                     onRemoveCase={() => removeRow(i)}
                     onRemoveFile={(idx) => removeFileFromRow(i, idx)}
-                    onDragStart={() => setDraggingFrom(i)}
-                    onDragEnd={() => setDraggingFrom(null)}
-                    onDropFile={(p) => moveFile(p.fromRow, p.fileIdx, i)}
+                    onChipPointerDown={(fileIdx, x, y, path) =>
+                      beginChipDrag(i, fileIdx, x, y, path)
+                    }
                   />
                 ))}
-                {draggingFrom !== null && (
+                {drag?.activated && (
                   <ClassifyNewCardDropTarget
-                    onDropFile={(p) => moveFile(p.fromRow, p.fileIdx, "new")}
-                    onDragEnd={() => setDraggingFrom(null)}
+                    hover={drag.hoveringTarget === "new"}
                   />
                 )}
               </div>
@@ -3429,6 +3581,13 @@ function ClassifyDropDialog({
           </div>
         </footer>
       </div>
+      {drag?.activated && (
+        <ClassifyDragGhost
+          path={drag.filePath}
+          x={drag.cursorX}
+          y={drag.cursorY}
+        />
+      )}
       {/* Touch onOpenCase to silence the unused-warning lint until we
           surface a per-card "Open" affordance in a follow-up. */}
       {false && <span onClick={() => onOpenCase("")} />}
@@ -3436,27 +3595,12 @@ function ClassifyDropDialog({
   );
 }
 
-function readDragPayload(e: React.DragEvent): DragPayload | null {
-  try {
-    const raw = e.dataTransfer.getData(DROP_MIME);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as DragPayload;
-    if (
-      typeof parsed.fromRow !== "number" ||
-      typeof parsed.fileIdx !== "number"
-    )
-      return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
 function ClassifyCard({
   row,
   index,
   isDragSource,
   isDropEligible,
+  isHoverTarget,
   busy,
   noteOpen,
   onToggleNote,
@@ -3465,17 +3609,19 @@ function ClassifyCard({
   onTextChange,
   onRemoveCase,
   onRemoveFile,
-  onDragStart,
-  onDragEnd,
-  onDropFile,
+  onChipPointerDown,
 }: {
   row: BatchCaseInput;
   index: number;
+  /** True while one of *this* card's chips is being dragged. Dims the card
+   *  so the user can see they're moving the chip away from it. */
   isDragSource: boolean;
-  /** True while a sibling card is being dragged. Used to subtly
-   *  highlight this card as a valid drop target without forcing the
-   *  user to hover first. */
+  /** True while a sibling card's chip is in flight. Subtly highlights this
+   *  card as a valid drop target without forcing the user to hover. */
   isDropEligible: boolean;
+  /** True when the dragging cursor is currently over this card. The
+   *  authoritative hit-test lives in the dialog's pointermove handler. */
+  isHoverTarget: boolean;
   busy: boolean;
   noteOpen: boolean;
   onToggleNote: () => void;
@@ -3484,35 +3630,23 @@ function ClassifyCard({
   onTextChange: (v: string) => void;
   onRemoveCase: () => void;
   onRemoveFile: (fileIdx: number) => void;
-  onDragStart: () => void;
-  onDragEnd: () => void;
-  onDropFile: (p: DragPayload) => void;
+  /** Start a chip drag. `(x, y)` are the pointer coordinates at pointerdown,
+   *  passed in so the dialog can derive the 5 px activation threshold. */
+  onChipPointerDown: (
+    fileIdx: number,
+    x: number,
+    y: number,
+    path: string,
+  ) => void;
 }) {
   const { t } = useTranslation();
-  const [dragOver, setDragOver] = useState(false);
 
   return (
     <div
-      onDragOver={(e) => {
-        if (busy) return;
-        const has = Array.from(e.dataTransfer.types).includes(DROP_MIME);
-        if (!has) return;
-        e.preventDefault();
-        setDragOver(true);
-      }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={(e) => {
-        setDragOver(false);
-        if (busy) return;
-        const payload = readDragPayload(e);
-        if (!payload) return;
-        e.preventDefault();
-        onDropFile(payload);
-        onDragEnd();
-      }}
+      data-classify-drop-target={`card-${index}`}
       className={cn(
         "rounded-lg border bg-bg p-3 transition",
-        dragOver
+        isHoverTarget
           ? "border-accent bg-accent/5 ring-1 ring-accent"
           : isDragSource
             ? "border-border-subtle opacity-70"
@@ -3581,17 +3715,19 @@ function ClassifyCard({
         {row.attached_file_paths.map((path, fileIdx) => (
           <li
             key={`${path}-${fileIdx}`}
-            draggable={!busy}
-            onDragStart={(e) => {
-              if (busy) return;
-              e.dataTransfer.setData(
-                DROP_MIME,
-                JSON.stringify({ fromRow: index, fileIdx }),
-              );
-              e.dataTransfer.effectAllowed = "move";
-              onDragStart();
+            onPointerDown={(e) => {
+              if (busy || e.button !== 0) return;
+              // Don't start a drag when the press lands on the inline
+              // "Quitar" button — let the click pass through unchanged.
+              if (
+                e.target instanceof Element &&
+                e.target.closest("button[data-classify-chip-remove]")
+              ) {
+                return;
+              }
+              onChipPointerDown(fileIdx, e.clientX, e.clientY, path);
             }}
-            onDragEnd={onDragEnd}
+            style={{ touchAction: "none", userSelect: "none" }}
             className={cn(
               "group/chip flex max-w-full items-center gap-1.5 rounded-md border border-border-subtle bg-bg-subtle px-2 py-1 text-[11.5px] text-ink-dim transition",
               !busy && "cursor-grab hover:border-accent/40 hover:bg-bg hover:shadow-sm active:cursor-grabbing",
@@ -3608,6 +3744,7 @@ function ClassifyCard({
             {!busy && (
               <button
                 type="button"
+                data-classify-chip-remove
                 onClick={() => onRemoveFile(fileIdx)}
                 aria-label={t("cases.attachment_remove")}
                 className="rounded p-0.5 text-ink-faint transition hover:bg-surface hover:text-ink"
@@ -3644,41 +3781,61 @@ function ClassifyFileChip({ path }: { path: string }) {
   );
 }
 
-function ClassifyNewCardDropTarget({
-  onDropFile,
-  onDragEnd,
-}: {
-  onDropFile: (p: DragPayload) => void;
-  onDragEnd: () => void;
-}) {
+/** Pure presentational drop zone. Mounts only while a drag is active
+ *  (the dialog gates on `drag?.activated`). The dialog's pointermove
+ *  handler does the hit-testing and flips `hover` on; we just paint. */
+function ClassifyNewCardDropTarget({ hover }: { hover: boolean }) {
   const { t } = useTranslation();
-  const [over, setOver] = useState(false);
   return (
     <div
-      onDragOver={(e) => {
-        const has = Array.from(e.dataTransfer.types).includes(DROP_MIME);
-        if (!has) return;
-        e.preventDefault();
-        setOver(true);
-      }}
-      onDragLeave={() => setOver(false)}
-      onDrop={(e) => {
-        setOver(false);
-        const payload = readDragPayload(e);
-        if (!payload) return;
-        e.preventDefault();
-        onDropFile(payload);
-        onDragEnd();
-      }}
+      data-classify-drop-target="new"
       className={cn(
         "flex items-center justify-center rounded-lg border border-dashed py-6 text-[12.5px] transition",
-        over
+        hover
           ? "border-accent bg-accent/5 text-accent"
           : "border-border-subtle text-ink-faint",
       )}
     >
       + {t("cases.classify_dialog_drop_new_card")}
     </div>
+  );
+}
+
+/** Floating chip preview that follows the cursor during a drag. Rendered
+ *  via a portal into `document.body` so it sits above the dialog's z-40
+ *  backdrop, and made `pointer-events: none` so it doesn't shadow the
+ *  drop targets from `document.elementFromPoint`. */
+function ClassifyDragGhost({
+  path,
+  x,
+  y,
+}: {
+  path: string;
+  x: number;
+  y: number;
+}) {
+  return createPortal(
+    <div
+      aria-hidden
+      style={{
+        position: "fixed",
+        left: 0,
+        top: 0,
+        transform: `translate(${x + 12}px, ${y + 12}px)`,
+        pointerEvents: "none",
+        zIndex: 50,
+      }}
+      className="flex max-w-[260px] items-center gap-1.5 rounded-md border border-accent bg-bg-elevated px-2 py-1 text-[11.5px] text-ink shadow-soft"
+    >
+      <IconGripVertical
+        size={12}
+        stroke={1.6}
+        aria-hidden
+        className="text-accent"
+      />
+      <ClassifyFileChip path={path} />
+    </div>,
+    document.body,
   );
 }
 
