@@ -26,6 +26,7 @@ import {
 import { Button } from "../components/Button";
 import { Card, CardBody, CardHeader } from "../components/Card";
 import { Field, Input, Textarea } from "../components/Field";
+import { Popover } from "../components/Popover";
 import { Sheet } from "../components/Sheet";
 import { cn } from "../lib/cn";
 import {
@@ -459,12 +460,19 @@ export function CasesPage({
   const [editingDate, setEditingDate] = useState(false);
   const [editDateError, setEditDateError] = useState<string | null>(null);
   const [editDateBusy, setEditDateBusy] = useState(false);
-  // When non-null, the delete-confirmation dialog is open for this
+  // When non-null, the delete-confirmation popover is open for this
   // set of ids. Used both by the per-row hover trash button (length 1)
-  // and by the batch toolbar (length N).
+  // and by the batch toolbar (length N). `deleteAnchor` is the element
+  // the popover anchors to (the actual button that was clicked) and
+  // `deleteSource` flips the popover from below-the-trigger (rows) to
+  // above-the-trigger (bulk toolbar at the bottom of the viewport).
   const [deletingIds, setDeletingIds] = useState<string[] | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteAnchor, setDeleteAnchor] = useState<HTMLElement | null>(null);
+  const [deleteSource, setDeleteSource] = useState<"row" | "bulk" | null>(
+    null,
+  );
 
   const refresh = async () => {
     setLoading(true);
@@ -525,6 +533,8 @@ export function CasesPage({
     setEditDateError(null);
     setDeletingIds(null);
     setDeleteError(null);
+    setDeleteAnchor(null);
+    setDeleteSource(null);
     setPendingDrop([]);
     setUnsupportedDropError(null);
     setClassifyDialog(null);
@@ -1351,6 +1361,8 @@ export function CasesPage({
                           onClick={(e) => {
                             e.stopPropagation();
                             setDeleteError(null);
+                            setDeleteAnchor(e.currentTarget);
+                            setDeleteSource("row");
                             setDeletingIds([c.id]);
                           }}
                           aria-label={t("cases.delete_row")}
@@ -1360,7 +1372,10 @@ export function CasesPage({
                           // right). On row hover (or keyboard focus) the
                           // button grows to its natural size and the
                           // status badge slides left to make room — the
-                          // shift is the affordance.
+                          // shift is the affordance. While this row's
+                          // delete popover is open the button is pinned
+                          // expanded so the popover's anchor doesn't
+                          // collapse out from under it.
                           className={cn(
                             "grid h-7 w-0 shrink-0 place-content-center overflow-hidden rounded-md",
                             "-ml-3 text-ink-faint opacity-0",
@@ -1368,6 +1383,10 @@ export function CasesPage({
                             "hover:bg-danger/10 hover:text-danger",
                             "group-hover:ml-0 group-hover:w-7 group-hover:opacity-100",
                             "focus:ml-0 focus:w-7 focus:opacity-100 focus:outline-none focus-visible:ring-conclave",
+                            deleteSource === "row" &&
+                              deletingIds?.length === 1 &&
+                              deletingIds[0] === c.id &&
+                              "ml-0 w-7 bg-danger/10 text-danger opacity-100",
                           )}
                         >
                           <IconTrash
@@ -1399,8 +1418,10 @@ export function CasesPage({
               <Button
                 size="sm"
                 variant="danger"
-                onClick={() => {
+                onClick={(e) => {
                   setDeleteError(null);
+                  setDeleteAnchor(e.currentTarget);
+                  setDeleteSource("bulk");
                   setDeletingIds(Array.from(selectedIds));
                 }}
               >
@@ -1434,14 +1455,19 @@ export function CasesPage({
         onApply={onApplyDate}
       />
 
-      <ConfirmDeleteSheet
+      <ConfirmDeletePopover
         open={deletingIds !== null}
         onOpenChange={(next) => {
           if (!next) {
             setDeletingIds(null);
             setDeleteError(null);
+            setDeleteAnchor(null);
+            setDeleteSource(null);
           }
         }}
+        anchor={deleteAnchor}
+        side={deleteSource === "bulk" ? "top" : "bottom"}
+        align="end"
         count={deletingIds?.length ?? 0}
         busy={deleteBusy}
         error={deleteError}
@@ -1540,20 +1566,26 @@ function EditDateSheet({
   );
 }
 
-function ConfirmDeleteSheet({
+function ConfirmDeletePopover({
   open,
   onOpenChange,
+  anchor,
   count,
   busy,
   error,
   onConfirm,
+  side = "bottom",
+  align = "end",
 }: {
   open: boolean;
   onOpenChange: (next: boolean) => void;
+  anchor: HTMLElement | null;
   count: number;
   busy: boolean;
   error: string | null;
   onConfirm: () => void;
+  side?: "top" | "bottom";
+  align?: "start" | "center" | "end";
 }) {
   const { t } = useTranslation();
   const title =
@@ -1566,29 +1598,33 @@ function ConfirmDeleteSheet({
       : t("cases.delete_confirm_body");
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange} title={title}>
-      <div className="space-y-4 px-5 py-4">
+    <Popover
+      open={open}
+      onOpenChange={onOpenChange}
+      anchor={anchor}
+      side={side}
+      align={align}
+      width={320}
+      ariaLabel={title}
+    >
+      <div className="space-y-3 p-4">
+        <h3 className="text-[13px] font-semibold text-ink">{title}</h3>
         {error && (
-          <div className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-[13px] text-danger">
+          <div className="rounded-md border border-danger/40 bg-danger/10 px-2.5 py-1.5 text-[12px] text-danger">
             {t("cases.delete_error", { error })}
           </div>
         )}
-        <p className="text-[13px] leading-relaxed text-ink-dim">{body}</p>
-        <div className="flex justify-end gap-2 pt-2">
+        <p className="text-[12.5px] leading-relaxed text-ink-dim">{body}</p>
+        <div className="flex justify-end gap-2 pt-1">
           <Button size="sm" variant="ghost" onClick={() => onOpenChange(false)}>
             {t("common.cancel")}
           </Button>
-          <Button
-            size="sm"
-            variant="danger"
-            loading={busy}
-            onClick={onConfirm}
-          >
+          <Button size="sm" variant="danger" loading={busy} onClick={onConfirm}>
             {t("cases.delete_confirm_apply")}
           </Button>
         </div>
       </div>
-    </Sheet>
+    </Popover>
   );
 }
 
