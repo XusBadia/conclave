@@ -35,7 +35,7 @@ use uuid::Uuid;
 
 use conclave_core::{Error, Result, MEDICAL_DISCLAIMER};
 use conclave_evidence::EvidenceItem;
-use conclave_providers::{CompletionRequest, ImageInput, LlmProvider, Message};
+use conclave_providers::{CompletionRequest, ImageInput, LlmProvider, Message, ProviderError};
 
 use crate::persistence::{CaseAttachment, DeliberationTrace};
 use crate::prompt::{
@@ -88,9 +88,19 @@ pub enum DeliberationEvent {
         phase: DeliberationPhase,
         output: String,
     },
-    /// Phase i/4 failed. The orchestrator surfaces the same error through
-    /// its `Result` return, but a frontend listening to events can colour
-    /// the failed phase before the awaiting code resolves.
+    /// Phase i/4 hit a transient error and is being retried. `attempt`
+    /// is the upcoming attempt number (e.g. 2 after the first failure).
+    /// `reason` is a short human-readable cause for the retry, suitable
+    /// for surfacing in the UI alongside a spinner.
+    PhaseRetrying {
+        phase: DeliberationPhase,
+        attempt: u8,
+        reason: String,
+    },
+    /// Phase i/4 failed terminally (no more retries). The orchestrator
+    /// surfaces the same error through its `Result` return, but a
+    /// frontend listening to events can colour the failed phase before
+    /// the awaiting code resolves.
     PhaseFailed {
         phase: DeliberationPhase,
         error: String,
@@ -206,7 +216,7 @@ pub async fn run_deliberation(
     let _ = events.send(DeliberationEvent::PhaseStarted {
         phase: DeliberationPhase::Briefing,
     });
-    let briefing_resp = call_phase(
+    let briefing_resp = call_phase_with_retry(
         &provider,
         &briefing_prompt,
         DeliberationPhase::Briefing,
@@ -217,6 +227,7 @@ pub async fn run_deliberation(
             Vec::new()
         },
         false,
+        &events,
     )
     .await
     .inspect_err(|e| {
@@ -242,13 +253,14 @@ pub async fn run_deliberation(
     let _ = events.send(DeliberationEvent::PhaseStarted {
         phase: DeliberationPhase::Drafting,
     });
-    let draft_resp = call_phase(
+    let draft_resp = call_phase_with_retry(
         &provider,
         &drafting_prompt,
         DeliberationPhase::Drafting,
         options.temperature,
         Vec::new(),
         true,
+        &events,
     )
     .await
     .inspect_err(|e| {
@@ -273,7 +285,7 @@ pub async fn run_deliberation(
     let _ = events.send(DeliberationEvent::PhaseStarted {
         phase: DeliberationPhase::RedTeam,
     });
-    let redteam_resp = call_phase(
+    let redteam_resp = call_phase_with_retry(
         &provider,
         &redteam_prompt,
         DeliberationPhase::RedTeam,
@@ -282,6 +294,7 @@ pub async fn run_deliberation(
         options.temperature.max(0.35),
         Vec::new(),
         false,
+        &events,
     )
     .await
     .inspect_err(|e| {
@@ -307,13 +320,14 @@ pub async fn run_deliberation(
     let _ = events.send(DeliberationEvent::PhaseStarted {
         phase: DeliberationPhase::Finalize,
     });
-    let final_resp = call_phase(
+    let final_resp = call_phase_with_retry(
         &provider,
         &finalize_prompt,
         DeliberationPhase::Finalize,
         options.temperature,
         Vec::new(),
         true,
+        &events,
     )
     .await
     .inspect_err(|e| {
@@ -370,7 +384,8 @@ pub async fn run_deliberation(
 }
 
 /// Run one LLM call for a single phase. `json_mode` toggles the request
-/// JSON-mode hint (used for drafting + finalize).
+/// JSON-mode hint (used for drafting + finalize). Returns the raw
+/// `ProviderError` on failure so the caller can classify retryability.
 async fn call_phase(
     provider: &Arc<dyn LlmProvider>,
     prompt: &str,
@@ -378,7 +393,7 @@ async fn call_phase(
     temperature: f32,
     images: Vec<ImageInput>,
     json_mode: bool,
-) -> Result<conclave_providers::CompletionResponse> {
+) -> std::result::Result<conclave_providers::CompletionResponse, ProviderError> {
     let req = CompletionRequest {
         model: String::new(),
         messages: vec![Message::user(prompt.to_owned())],
@@ -392,10 +407,164 @@ async fn call_phase(
         allow_web_search: false,
         images,
     };
-    provider
-        .complete(req)
+    provider.complete(req).await
+}
+
+/// Maximum number of attempts (initial + retries) per phase. One retry is
+/// enough to ride out the common case of a single dropped SSE stream or
+/// a momentary 429 — beyond that the failure is likely structural and
+/// retrying just delays the user's error message.
+const PHASE_MAX_ATTEMPTS: u8 = 2;
+/// Default backoff (seconds) before retrying a transient phase failure.
+/// Overridden by `Retry-After` for `RateLimit` errors.
+const PHASE_RETRY_BACKOFF_SECS: u32 = 2;
+
+/// Wrap [`call_phase`] with one retry on transient provider errors. Emits
+/// a `PhaseRetrying` event before the second attempt so the UI can show
+/// the user that work is still happening. On terminal failure (or after
+/// retries are exhausted) stringifies the underlying error into
+/// `Error::Provider("deliberation phase {phase} failed: …")`, preserving
+/// the legacy `latest_error` format the UI already parses.
+async fn call_phase_with_retry(
+    provider: &Arc<dyn LlmProvider>,
+    prompt: &str,
+    phase: DeliberationPhase,
+    temperature: f32,
+    images: Vec<ImageInput>,
+    json_mode: bool,
+    events: &UnboundedSender<DeliberationEvent>,
+) -> Result<conclave_providers::CompletionResponse> {
+    let phase_start = Instant::now();
+    let mut attempt: u8 = 1;
+    loop {
+        let images_for_attempt = images.clone();
+        match call_phase(
+            provider,
+            prompt,
+            phase,
+            temperature,
+            images_for_attempt,
+            json_mode,
+        )
         .await
-        .map_err(|e| Error::Provider(format!("deliberation phase {} failed: {e}", phase.as_str())))
+        {
+            Ok(resp) => {
+                tracing::debug!(
+                    target: "conclave_verdict::deliberation",
+                    phase = phase.as_str(),
+                    attempt,
+                    elapsed_ms = phase_start.elapsed().as_millis() as u64,
+                    tokens_in = resp.usage.input_tokens,
+                    tokens_out = resp.usage.output_tokens,
+                    "phase ok"
+                );
+                return Ok(resp);
+            }
+            Err(err) => {
+                let plan = classify_provider_error(&err);
+                let next_attempt = attempt.saturating_add(1);
+                if !plan.retryable || next_attempt > PHASE_MAX_ATTEMPTS {
+                    tracing::error!(
+                        target: "conclave_verdict::deliberation",
+                        phase = phase.as_str(),
+                        attempt,
+                        retryable = plan.retryable,
+                        err = %err,
+                        "phase failed (terminal)"
+                    );
+                    return Err(Error::Provider(format!(
+                        "deliberation phase {} failed: {}",
+                        phase.as_str(),
+                        err
+                    )));
+                }
+                tracing::warn!(
+                    target: "conclave_verdict::deliberation",
+                    phase = phase.as_str(),
+                    attempt,
+                    next_attempt,
+                    sleep_secs = plan.sleep_secs,
+                    err = %err,
+                    "phase failed (transient); retrying"
+                );
+                let _ = events.send(DeliberationEvent::PhaseRetrying {
+                    phase,
+                    attempt: next_attempt,
+                    reason: plan.reason,
+                });
+                if plan.sleep_secs > 0 {
+                    tokio::time::sleep(std::time::Duration::from_secs(u64::from(plan.sleep_secs)))
+                        .await;
+                }
+                attempt = next_attempt;
+            }
+        }
+    }
+}
+
+struct RetryPlan {
+    retryable: bool,
+    sleep_secs: u32,
+    reason: String,
+}
+
+/// Decide whether a `ProviderError` warrants a retry. Network blips,
+/// rate limits, and the openai-oauth stream-read class of errors are
+/// transient. Auth, bad-request, context-overflow, and "unavailable"
+/// are terminal — retrying just delays the error message.
+///
+/// Two arms share the same `RetryPlan { retryable: false, … }` body on
+/// purpose: the explicit arm documents the variants we've exhaustively
+/// considered today (so adding a new variant to the `#[non_exhaustive]`
+/// enum will draw a compile warning here once `match_same_arms` is
+/// re-enabled), and the wildcard catches anything future. Don't merge
+/// them.
+#[allow(clippy::match_same_arms)]
+fn classify_provider_error(err: &ProviderError) -> RetryPlan {
+    match err {
+        ProviderError::Network(msg) => RetryPlan {
+            retryable: true,
+            sleep_secs: PHASE_RETRY_BACKOFF_SECS,
+            reason: format!("network: {msg}"),
+        },
+        ProviderError::RateLimit { retry_after_secs } => {
+            let secs = retry_after_secs.unwrap_or(PHASE_RETRY_BACKOFF_SECS);
+            RetryPlan {
+                retryable: true,
+                sleep_secs: secs,
+                reason: format!("rate limited (retry in {secs}s)"),
+            }
+        }
+        ProviderError::Other(msg)
+            if msg.starts_with("openai-oauth read:")
+                || msg.contains("openai-oauth stream interrupted")
+                || msg.contains("no SSE events received") =>
+        {
+            RetryPlan {
+                retryable: true,
+                sleep_secs: PHASE_RETRY_BACKOFF_SECS,
+                reason: format!("transient: {msg}"),
+            }
+        }
+        ProviderError::Auth
+        | ProviderError::BadRequest(_)
+        | ProviderError::ContextOverflow
+        | ProviderError::Unavailable(_)
+        | ProviderError::Other(_) => RetryPlan {
+            retryable: false,
+            sleep_secs: 0,
+            reason: err.to_string(),
+        },
+        // `ProviderError` is marked `#[non_exhaustive]`. Treat any
+        // future variant as terminal until we explicitly opt it in
+        // here — silently retrying an unknown error class would mask
+        // bugs.
+        _ => RetryPlan {
+            retryable: false,
+            sleep_secs: 0,
+            reason: err.to_string(),
+        },
+    }
 }
 
 // ---------- Prompt rendering ----------
