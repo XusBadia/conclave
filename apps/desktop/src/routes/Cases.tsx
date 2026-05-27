@@ -28,6 +28,7 @@ import { Button } from "../components/Button";
 import { Card, CardBody, CardHeader } from "../components/Card";
 import { Field, Input, Textarea } from "../components/Field";
 import { Popover } from "../components/Popover";
+import { ProviderStatusPill } from "../components/ProviderStatusPill";
 import { Sheet } from "../components/Sheet";
 import { cn } from "../lib/cn";
 import {
@@ -49,6 +50,7 @@ import {
   type Verdict,
   type Workspace,
 } from "../lib/ipc";
+import { isReady } from "../lib/providerStatus";
 import { isClinicalEligible, metaFor, preferredProvider } from "../lib/providers";
 
 // Extensions we accept when the user drops or picks files for a case.
@@ -2144,28 +2146,48 @@ function NewCase({
             />
           )}
           <div className="flex justify-end pt-1">
-            <Button
-              variant="primary"
-              onClick={run}
-              loading={busy}
-              disabled={
-                (!text.trim() &&
-                  attachments.length === 0 &&
-                  draftAttachments.length === 0) ||
-                !providerId
-              }
-            >
-              {draft
-                ? t("cases.draft_run_button")
-                : deliberative
-                  ? t("cases.run_button_deliberative")
-                  : t("cases.run_button")}
-            </Button>
+            {/* When the selected provider isn't `ready` we both
+                disable the button AND surface a tooltip telling the
+                clinician why. Stops the "click run → wait → fail"
+                round-trip that used to be the only feedback channel
+                for an expired OAuth session. */}
+            {(() => {
+              const selectedProvider = providers.find(
+                (p) => p.id === providerId,
+              );
+              const providerNotReady =
+                !!selectedProvider && !isReady(selectedProvider);
+              const tooltip = providerNotReady
+                ? t("cases.run_disabled_provider_not_ready")
+                : undefined;
+              return (
+                <Button
+                  variant="primary"
+                  onClick={run}
+                  loading={busy}
+                  title={tooltip}
+                  disabled={
+                    (!text.trim() &&
+                      attachments.length === 0 &&
+                      draftAttachments.length === 0) ||
+                    !providerId ||
+                    providerNotReady
+                  }
+                >
+                  {draft
+                    ? t("cases.draft_run_button")
+                    : deliberative
+                      ? t("cases.run_button_deliberative")
+                      : t("cases.run_button")}
+                </Button>
+              );
+            })()}
           </div>
         </CardBody>
       </Card>
       {deliberationActive && (
         <DeliberationOverlay
+          provider={providers.find((p) => p.id === providerId) ?? null}
           onDismiss={() => {
             setDeliberationActive(false);
             // If the run resolved successfully while the user was
@@ -2238,8 +2260,14 @@ function ProviderField({
             {meta.monogram}
           </span>
           <div className="min-w-0 flex-1">
-            <div className="truncate text-[13px] font-medium text-ink">
-              {meta.name}
+            <div className="flex items-center gap-2">
+              <div className="truncate text-[13px] font-medium text-ink">
+                {meta.name}
+              </div>
+              {/* Status pill mirrors what Settings shows — the user
+                  sees provider health at the moment of running, not
+                  only after a committee fails. */}
+              <ProviderStatusPill status={p.status} size="sm" />
             </div>
             <div className="truncate text-[11.5px] text-ink-faint">
               <span className="font-mono">{p.default_model}</span>
@@ -2261,6 +2289,7 @@ function ProviderField({
     );
   }
 
+  const selected = providers.find((p) => p.id === providerId);
   return (
     <Field
       label={t("cases.field_provider")}
@@ -2280,14 +2309,19 @@ function ProviderField({
           );
         })}
       </select>
-      {onGoToSettings && (
-        <button
-          type="button"
-          onClick={onGoToSettings}
-          className="mt-1.5 text-[12px] text-ink-faint transition hover:text-ink focus:outline-none focus-visible:underline"
-        >
-          {t("cases.provider_change_link")}
-        </button>
+      {selected && (
+        <div className="mt-1.5 flex items-center gap-2 text-[11.5px] text-ink-faint">
+          <ProviderStatusPill status={selected.status} size="sm" />
+          {onGoToSettings && (
+            <button
+              type="button"
+              onClick={onGoToSettings}
+              className="text-[12px] text-ink-faint transition hover:text-ink focus:outline-none focus-visible:underline"
+            >
+              {t("cases.provider_change_link")}
+            </button>
+          )}
+        </div>
       )}
     </Field>
   );
@@ -2424,8 +2458,8 @@ function ShowCase({
           right={
             detail.verdict_record && (
               <span className="text-[12px] text-ink-faint">
-                {detail.verdict_record.provider_id} · {detail.verdict_record.model} ·
-                {" "}
+                {metaFor(detail.verdict_record.provider_id).name} ·{" "}
+                {detail.verdict_record.model} ·{" "}
                 {detail.verdict_record.latency_ms}ms
               </span>
             )
@@ -2433,14 +2467,7 @@ function ShowCase({
         />
         <CardBody className="space-y-6 prose-conclave">
           {detail.case.status === "failed" && detail.case.latest_error && (
-            <div className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-[13px] text-danger">
-              <div className="font-medium mb-1">
-                {t("cases.failed_title")}
-              </div>
-              <div className="whitespace-pre-wrap break-words font-mono text-[12px]">
-                {detail.case.latest_error}
-              </div>
-            </div>
+            <FailedCaseErrorBlock error={detail.case.latest_error} />
           )}
           {detail.review && (
             <div className="rounded-md border border-ok/30 bg-ok/5 px-3 py-2 text-[12.5px] text-ok">
@@ -3902,10 +3929,10 @@ function ModeSelector({
   );
 }
 
-// Warning banner shown when the currently-picked provider reports
-// `available === false`. It doesn't disable the run button — the user
-// might be reconnecting Ollama right this second — but it surfaces the
-// fact so they don't burn an LLM call (or 11) before discovering it.
+// Warning banner shown when the currently-picked provider isn't
+// `ready`. The copy adapts per status so the user knows whether to
+// reconnect (expired), retry (unreachable), or just connect at all
+// (not_configured). When the provider is `ready` it renders nothing.
 function ProviderOfflineBanner({
   providers,
   providerId,
@@ -3915,10 +3942,19 @@ function ProviderOfflineBanner({
 }) {
   const { t } = useTranslation();
   const current = providers.find((p) => p.id === providerId);
-  if (!current || current.available) return null;
+  if (!current || isReady(current)) return null;
+  const name = metaFor(current.id).name;
+  let copy: string;
+  if (current.status === "expired") {
+    copy = t("cases.provider_expired_warning", { name });
+  } else if (current.status === "not_configured") {
+    copy = t("cases.provider_not_configured_warning", { name });
+  } else {
+    copy = t("cases.provider_offline_warning", { name });
+  }
   return (
     <div className="rounded-md border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-[12px] text-amber-200">
-      {t("cases.provider_offline_warning", { name: metaFor(current.id).name })}
+      {copy}
     </div>
   );
 }
@@ -3930,13 +3966,59 @@ const PHASE_ORDER: DeliberationPhase[] = [
   "finalize",
 ];
 
+/**
+ * The deliberation pipeline persists failures as
+ * `"deliberation phase {phase} failed: {provider error}"` — sometimes
+ * with a leading `"provider error: "` prefix when the verdict pipeline
+ * re-wraps the error. Extract the phase tag (briefing / drafting /
+ * redteam / finalize) so the UI can render a localized header. Returns
+ * `null` for legacy or non-deliberation errors so the caller falls back
+ * to the generic "ejecución ha fallado" header.
+ */
+function parseFailedPhase(error: string): DeliberationPhase | null {
+  const match = error.match(
+    /deliberation phase (briefing|drafting|redteam|finalize) failed:/,
+  );
+  return (match?.[1] as DeliberationPhase | undefined) ?? null;
+}
+
+function FailedCaseErrorBlock({ error }: { error: string }) {
+  const { t } = useTranslation();
+  const phase = parseFailedPhase(error);
+  const title = phase
+    ? t("cases.failed_phase_title", {
+        phase: t(`cases.phases.${phase}`),
+      })
+    : t("cases.failed_title");
+  return (
+    <div className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-[13px] text-danger">
+      <div className="font-medium mb-1">{title}</div>
+      <details className="text-[12px]">
+        <summary className="cursor-pointer select-none text-danger/80 hover:text-danger">
+          {t("cases.failed_show_details")}
+        </summary>
+        <div className="mt-1 whitespace-pre-wrap break-words font-mono">
+          {error}
+        </div>
+      </details>
+    </div>
+  );
+}
+
 type PhaseState = {
-  status: "pending" | "active" | "done" | "failed";
+  status: "pending" | "active" | "retrying" | "done" | "failed";
   output?: string;
   error?: string;
   /** Wall-clock duration of this phase as reported by the backend.
    *  Present only on `done` / `failed` — pending/active rows omit it. */
   elapsedMs?: number;
+  /** Upcoming attempt number when status === "retrying" (e.g. 2 after
+   *  the first transient failure). Used by the badge to render
+   *  "Retrying (2/2)". */
+  retryAttempt?: number;
+  /** Short human-readable cause for the retry (e.g. "network: …").
+   *  Shown next to the badge so the user knows why we're retrying. */
+  retryReason?: string;
 };
 
 function PhaseIcon({
@@ -4056,8 +4138,13 @@ function PhaseOutput({
  * back to `false`.
  */
 function DeliberationOverlay({
+  provider,
   onDismiss,
 }: {
+  /** Provider executing the committee. Rendered in the overlay
+   *  header so an auth/network failure mid-run lands next to the
+   *  pill that explains what happened. */
+  provider: ProviderInfo | null;
   /** Called when the user clicks Close or presses Esc on the overlay
    *  AFTER the deliberation has finished. While the run is still in
    *  flight the overlay swallows Esc to avoid dropping a half-formed
@@ -4102,6 +4189,18 @@ function DeliberationOverlay({
                 output: ev.output,
                 elapsedMs: ev.elapsed_ms,
               };
+            } else if (ev.kind === "phase_retrying") {
+              // Preserve any partial output the active attempt produced
+              // and surface the upcoming attempt number + reason. The
+              // backend will follow this with another implicit "active"
+              // run; the next phase_completed/phase_failed resets the row.
+              next[ev.phase] = {
+                ...prev[ev.phase],
+                status: "retrying",
+                retryAttempt: ev.attempt,
+                retryReason: ev.reason,
+              };
+              setExpanded(ev.phase);
             } else if (ev.kind === "phase_failed") {
               next[ev.phase] = {
                 status: "failed",
@@ -4143,16 +4242,38 @@ function DeliberationOverlay({
     >
       <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-border bg-bg-elevated shadow-soft">
         <header className="border-b border-border-subtle px-5 py-4">
-          <h2 className="text-[15px] font-semibold text-ink">
-            {done
-              ? t("cases.deliberation_overlay_done_title")
-              : t("cases.deliberation_overlay_title")}
-          </h2>
-          <p className="mt-0.5 text-[12.5px] text-ink-subtle">
-            {done
-              ? t("cases.deliberation_overlay_done_subtitle")
-              : t("cases.deliberation_overlay_subtitle")}
-          </p>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h2 className="text-[15px] font-semibold text-ink">
+                {done
+                  ? t("cases.deliberation_overlay_done_title")
+                  : t("cases.deliberation_overlay_title")}
+              </h2>
+              <p className="mt-0.5 text-[12.5px] text-ink-subtle">
+                {done
+                  ? t("cases.deliberation_overlay_done_subtitle")
+                  : t("cases.deliberation_overlay_subtitle")}
+              </p>
+            </div>
+            {/* Provider info pinned to the right of the modal header.
+                If the LLM fails mid-run, the pill flips to amber and
+                the user sees the cause inline with the failing phase
+                row — no more orphaned red boxes. */}
+            {provider && (
+              <div className="flex shrink-0 items-center gap-2 rounded-md border border-border-subtle bg-bg px-2 py-1">
+                <span
+                  aria-hidden
+                  className="grid h-5 w-5 place-content-center rounded bg-slate-400/10 text-[10px] font-semibold text-ink-dim ring-1 ring-border-subtle"
+                >
+                  {metaFor(provider.id).monogram}
+                </span>
+                <span className="truncate text-[11.5px] font-medium text-ink-dim">
+                  {metaFor(provider.id).name}
+                </span>
+                <ProviderStatusPill status={provider.status} size="sm" />
+              </div>
+            )}
+          </div>
         </header>
         <div className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
           {PHASE_ORDER.map((phase, i) => (
@@ -4209,6 +4330,15 @@ function DeliberationPhaseRow({
             {t("cases.phase_status_active")}
           </span>
         );
+      case "retrying":
+        return (
+          <span className="flex items-center gap-1.5 rounded bg-amber-400/15 px-2 py-0.5 text-[10.5px] font-medium uppercase tracking-wide text-amber-200">
+            <IconRefresh size={12} stroke={2} className="animate-spin" aria-hidden />
+            {t("cases.phase_status_retrying", {
+              attempt: state.retryAttempt ?? 2,
+            })}
+          </span>
+        );
       case "done":
         return (
           <span className="flex items-center gap-1.5 rounded bg-ok/15 px-2 py-0.5 text-[10.5px] font-medium uppercase tracking-wide text-ok">
@@ -4244,9 +4374,11 @@ function DeliberationPhaseRow({
     <div
       className={cn(
         "rounded-lg border transition",
-        state.status === "active"
-          ? "border-accent/60 bg-accent/5"
-          : "border-border-subtle bg-bg",
+        state.status === "active" && "border-accent/60 bg-accent/5",
+        state.status === "retrying" && "border-amber-400/60 bg-amber-400/5",
+        state.status !== "active" &&
+          state.status !== "retrying" &&
+          "border-border-subtle bg-bg",
       )}
     >
       <button
@@ -4268,8 +4400,20 @@ function DeliberationPhaseRow({
         </div>
         {badge}
       </button>
-      {expanded && (state.output || state.error) && (
-        <div className="border-t border-border-subtle px-3 py-3">
+      {expanded && (state.output || state.error || state.retryReason) && (
+        <div className="border-t border-border-subtle px-3 py-3 space-y-2">
+          {state.status === "retrying" && state.retryReason && (
+            <div className="rounded-md border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-[12px] text-amber-200">
+              <span className="font-medium">
+                {t("cases.phase_retry_caption", {
+                  attempt: state.retryAttempt ?? 2,
+                })}
+              </span>
+              <span className="ml-2 font-mono text-[11.5px] opacity-90">
+                {state.retryReason}
+              </span>
+            </div>
+          )}
           {state.error && (
             <div className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-[12px] text-danger">
               {state.error}

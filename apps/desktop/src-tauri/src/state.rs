@@ -3,11 +3,14 @@
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use conclave_core::{paths::Paths, Config};
 use conclave_providers::AnthropicLoginFlow;
 use conclave_rag::{DocumentRepository, Embedder, FastEmbedEmbedder};
 use tokio::task::AbortHandle;
+
+use crate::commands::ProviderStatus;
 
 /// One per app instance.
 pub struct AppState {
@@ -40,6 +43,16 @@ pub struct AppState {
     /// it so the deliberation (or quick) pipeline short-circuits at the
     /// next phase boundary. Cleared after the case worker resolves.
     pub case_cancels: tokio::sync::Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// Probe-result cache for `list_providers`. Maps provider id to the
+    /// last probe outcome plus the wall-clock instant it was recorded.
+    /// Entries are reused while still within `PROBE_TTL` (60 s) so
+    /// repeated `list_providers` calls from the UI don't hammer the
+    /// upstream provider once per render. The `force_refresh: true`
+    /// path on `list_providers` bypasses this cache. Wrapped in `Arc`
+    /// so a background task (e.g. the OpenAI OAuth callback waiter)
+    /// can keep a handle and invalidate entries after the new
+    /// credentials land on disk.
+    pub probe_cache: Arc<tokio::sync::Mutex<HashMap<String, (Instant, ProviderStatus)>>>,
 }
 
 impl AppState {
@@ -60,6 +73,7 @@ impl AppState {
             ingest_cancel: Arc::new(AtomicBool::new(false)),
             batch_cancel: Arc::new(AtomicBool::new(false)),
             case_cancels: tokio::sync::Mutex::new(HashMap::new()),
+            probe_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
 }

@@ -3,12 +3,14 @@ import { useTranslation } from "react-i18next";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { Onboarding } from "./components/Onboarding";
+import { ProviderStatusPill } from "./components/ProviderStatusPill";
 import { Sidebar, type Section } from "./components/Sidebar";
 import { CasesPage } from "./routes/Cases";
 import { KnowledgePage } from "./routes/Knowledge";
 import { SettingsPage } from "./routes/Settings";
 import { WorkspacesPage } from "./routes/Workspaces";
-import { ipc, type Workspace } from "./lib/ipc";
+import { activeProvider, ipc, type ProviderInfo, type Workspace } from "./lib/ipc";
+import { metaFor } from "./lib/providers";
 
 // Belt-and-suspenders drag handler. data-tauri-drag-region requires the
 // core:window:allow-start-dragging permission (granted via capabilities);
@@ -29,6 +31,7 @@ export function App() {
   const { t } = useTranslation();
   const [section, setSection] = useState<Section>("workspaces");
   const [active, setActive] = useState<Workspace | null>(null);
+  const [providers, setProviders] = useState<ProviderInfo[] | null>(null);
   const [bootstrap, setBootstrap] = useState<{
     accepted: boolean;
     disclaimerEn: string;
@@ -50,6 +53,40 @@ export function App() {
       }
     })();
   }, []);
+
+  // App-wide provider snapshot for the title-bar pill and the
+  // sidebar workspace card. Refreshed on mount, on a slow 60s
+  // interval while the window is focused, and immediately when the
+  // window regains focus (the user may have reconnected the LLM in
+  // a CLI or browser tab between blurs). The 60s tick aligns with
+  // the backend's probe cache TTL so we never trigger a real probe
+  // more than once per minute.
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const list = await ipc.listProviders();
+        if (!cancelled) setProviders(list);
+      } catch {
+        /* best-effort polling */
+      }
+    };
+    void tick();
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") void tick();
+    }, 60_000);
+    const onFocus = () => void tick();
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
+    };
+  }, []);
+
+  const activeProviderInfo = providers ? activeProvider(providers) : null;
 
   if (!bootstrap) {
     return (
@@ -95,6 +132,28 @@ export function App() {
           {t(`section.${section}`)}
         </div>
         <div data-tauri-drag-region className="flex-1" />
+        {/* Global LLM status pill — visible in every section. The
+            user always knows whether the AI is reachable without
+            having to drill into Settings or wait for a committee
+            to fail. Hidden until the first provider poll resolves. */}
+        {activeProviderInfo && (
+          <div
+            data-tauri-drag-region="false"
+            className="flex items-center gap-1.5 border border-border bg-surface/70 px-2 py-1 text-[11px] text-ink-dim"
+            title={metaFor(activeProviderInfo.id).name}
+          >
+            <span
+              aria-hidden
+              className="grid h-4 w-4 place-content-center rounded bg-slate-400/10 text-[9px] font-semibold text-ink-dim ring-1 ring-border-subtle"
+            >
+              {metaFor(activeProviderInfo.id).monogram}
+            </span>
+            <ProviderStatusPill
+              status={activeProviderInfo.status}
+              size="sm"
+            />
+          </div>
+        )}
         {active ? (
           <div
             data-tauri-drag-region="false"
@@ -127,6 +186,8 @@ export function App() {
           active={section}
           onSelect={setSection}
           workspaceLabel={active ? active.name : null}
+          activeProvider={activeProviderInfo}
+          providersLoaded={providers !== null}
         />
 
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">

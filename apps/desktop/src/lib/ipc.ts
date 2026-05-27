@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import { isOccupyingSlot } from "./providers";
+import { isConfigured, isReady } from "./providerStatus";
 
 // ---------------------------------------------------------------------------
 // Types — mirror the Tauri command return values in
@@ -80,10 +81,25 @@ export type IngestProgressEvent =
   | { kind: "skipped"; path: string; reason: string }
   | { kind: "failed"; path: string; error: string };
 
+/**
+ * Mirrors the Rust-side `ProviderStatus` enum in `commands.rs`. One of
+ * six mutually exclusive states; the UI renders a single
+ * `<ProviderStatusPill>` per provider rather than two independent flags
+ * that could disagree (we used to ship "Connected" + "Reachable" green
+ * badges next to an "authentication failed" banner — that contradiction
+ * is exactly what this refactor kills).
+ */
+export type ProviderStatus =
+  | "ready"
+  | "expired"
+  | "unreachable"
+  | "not_configured"
+  | "login_required"
+  | "not_installed";
+
 export interface ProviderInfo {
   id: string;
-  configured: boolean;
-  available: boolean;
+  status: ProviderStatus;
   default_model: string;
   requires_network: boolean;
   auth: "api-key" | "local" | "oauth" | "cli";
@@ -93,6 +109,22 @@ export interface ProviderInfo {
   // Settings card can render the right badge.
   kind: "standard" | "oauth" | "subtask";
   hint: string | null;
+}
+
+/**
+ * Diagnostic payload returned by the `cli_diagnostics` Tauri command.
+ * Drives the in-Settings CLI setup panel. Includes the process `$PATH`
+ * verbatim so the user can verify whether their unusual install dir is
+ * visible to the bundled app — the most common failure mode on macOS is
+ * a binary in `~/.local/bin` or `~/.nvm/.../bin` that launchd's bare
+ * PATH doesn't include.
+ */
+export interface CliDiagnostics {
+  binary_path: string | null;
+  path_var: string;
+  install_url: string;
+  login_command: string;
+  status: ProviderStatus;
 }
 
 export interface Verdict {
@@ -282,6 +314,14 @@ export type DeliberationEvent =
       batch_index: number | null;
     }
   | {
+      kind: "phase_retrying";
+      phase: DeliberationPhase;
+      attempt: number;
+      reason: string;
+      case_id: string;
+      batch_index: number | null;
+    }
+  | {
       kind: "phase_failed";
       phase: DeliberationPhase;
       error: string;
@@ -395,13 +435,23 @@ export const ipc = {
   }) => invoke<AskDocumentsResponse>("ask_documents", { request: req }),
 
   // Providers
-  listProviders: () => invoke<ProviderInfo[]>("list_providers"),
+  listProviders: (opts?: { forceRefresh?: boolean }) =>
+    invoke<ProviderInfo[]>("list_providers", {
+      forceRefresh: opts?.forceRefresh ?? false,
+    }),
   setProviderKey: (id: string, apiKey: string) =>
     invoke<void>("set_provider_key", { id, apiKey }),
   testProvider: (id: string, prompt?: string) =>
     invoke<string>("test_provider", { id, prompt }),
   removeProviderKey: (id: string) =>
     invoke<void>("remove_provider_key", { id }),
+  cliDiagnostics: (id: "claude-cli" | "codex-cli") =>
+    invoke<CliDiagnostics>("cli_diagnostics", { id }),
+  /** Invalidate the process-wide which() cache for both CLI providers
+   *  so the next listProviders/cliDiagnostics call re-walks $PATH. Use
+   *  after the user installs the CLI in a terminal while Conclave is
+   *  open — they shouldn't have to restart the app to be detected. */
+  redetectCliBinaries: () => invoke<void>("redetect_cli_binaries"),
   privacySettings: () => invoke<PrivacySettings>("privacy_settings"),
   setPrivacySettings: (settings: PrivacySettings) =>
     invoke<PrivacySettings>("set_privacy_settings", { settings }),
@@ -575,19 +625,20 @@ export const ipc = {
 // ---------------------------------------------------------------------------
 
 export function activeProvider(list: ProviderInfo[]): ProviderInfo | null {
-  return list.find((p) => p.configured && isOccupyingSlot(p.id)) ?? null;
+  // "Active" = the user has a credential for a slot-occupying provider.
+  // Whether it's actually reachable right now is a *separate* question
+  // handled by the status pill; for the empty-state vs active-card
+  // decision in Settings we only care that something is connected.
+  return list.find((p) => isConfigured(p) && isOccupyingSlot(p.id)) ?? null;
 }
 
 export function connectedSlotProviders(list: ProviderInfo[]): ProviderInfo[] {
-  return list.filter((p) => p.configured && isOccupyingSlot(p.id));
+  return list.filter((p) => isConfigured(p) && isOccupyingSlot(p.id));
 }
 
 export function usableProviders(list: ProviderInfo[]): ProviderInfo[] {
-  // A provider is usable if it's configured (API key set / OAuth completed)
-  // OR if it's Ollama AND the local server is actually responding right now.
-  // We rely on `available` here so Ollama only shows up when it's reachable
-  // — we never advertise an AI the user can't actually call.
-  return list.filter(
-    (p) => (p.configured || p.id === "ollama") && p.available,
-  );
+  // "Usable right now" means `status === "ready"`: the credential is
+  // present AND (for OAuth / Ollama) the upstream probe just succeeded.
+  // We never advertise an AI the user can't actually call.
+  return list.filter(isReady);
 }

@@ -3,6 +3,7 @@
 
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, State};
@@ -578,11 +579,61 @@ pub fn deident_text(text: String) -> CommandResult<DeidentResponse> {
 // Providers
 // ---------------------------------------------------------------------------
 
+/// Unified state machine for every provider entry the UI renders. Replaces
+/// the older `configured` + `available` pair, which let us tell the UI
+/// "connected AND reachable" purely because a credentials file existed on
+/// disk — without ever validating that the credential still worked. The
+/// six variants below are mutually exclusive; the frontend renders a
+/// single status pill per provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderStatus {
+    /// Credential is present and (for OAuth/Ollama) the upstream probe
+    /// succeeded. API-key providers map to `Ready` purely on key
+    /// presence — see `list_providers` for the asymmetry rationale.
+    Ready,
+    /// OAuth session is no longer accepted by the provider (401/403 on
+    /// probe, or refresh-token rejected). Distinct from `Unreachable`
+    /// because the fix is reconnect / switch to API key, not retry.
+    Expired,
+    /// Transport-level failure on the probe — network down, DNS timeout,
+    /// provider 5xx. Retrying may succeed.
+    Unreachable,
+    /// No credential present (no API key in keychain, no OAuth file on
+    /// disk). The user must run through the connect flow first.
+    NotConfigured,
+    /// CLI binary is installed on `$PATH` but the user hasn't completed
+    /// the CLI's own login. Tied to the CLI provider ids only.
+    LoginRequired,
+    /// CLI binary is not on `$PATH`. Tied to the CLI provider ids only.
+    NotInstalled,
+}
+
+impl ProviderStatus {
+    /// `true` for the one status that allows actually calling the
+    /// provider. Mirrors the old `configured && available` check the
+    /// frontend used to do at every call site.
+    pub fn is_ready(self) -> bool {
+        matches!(self, Self::Ready)
+    }
+}
+
+/// How long a probe result stays in the cache before we hit the upstream
+/// provider again. Picked to balance "UI feels responsive" against "stop
+/// burning quota on every render". A user hammering the Refresh button
+/// can still force a fresh probe via `force_refresh: true`.
+const PROBE_TTL: Duration = Duration::from_secs(60);
+
+/// Upper bound for a single probe call. The Codex and Anthropic
+/// endpoints normally respond well under a second; anything past 4s
+/// we treat as `Unreachable` so a hung connection can't block the
+/// Settings page from rendering.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(4);
+
 #[derive(Debug, Serialize)]
 pub struct ProviderInfo {
     pub id: String,
-    pub configured: bool,
-    pub available: bool,
+    pub status: ProviderStatus,
     pub default_model: String,
     pub requires_network: bool,
     pub auth: String,
@@ -609,9 +660,15 @@ async fn apple_intelligence_info() -> Option<ProviderInfo> {
         id: "apple-intelligence".to_owned(),
         // No keychain entry to consult — the runtime availability is
         // the only "is this ready?" signal. Mirrors how Ollama is
-        // surfaced (always present, configured == reachable).
-        configured: available,
-        available,
+        // surfaced (always present, ready == reachable). When the
+        // model is still downloading or AI is off, we surface
+        // `Unreachable` so the UI's single pill reflects "you can't
+        // use this right now" without inventing a new state.
+        status: if available {
+            ProviderStatus::Ready
+        } else {
+            ProviderStatus::Unreachable
+        },
         default_model: APPLE_INTELLIGENCE_MODEL_LABEL.to_owned(),
         requires_network: false,
         auth: "local".into(),
@@ -626,8 +683,37 @@ async fn apple_intelligence_info() -> Option<ProviderInfo> {
     })
 }
 
+/// Probe an OAuth provider's stored credentials by calling the real
+/// upstream endpoint (`probe()`). Wrapped in a 4-second timeout so a
+/// hung TLS handshake can't block the entire Settings render.
+async fn probe_oauth_status(id: &str, path: &std::path::Path) -> ProviderStatus {
+    use conclave_providers::ProviderError;
+    let probe_fut = async {
+        match id {
+            "anthropic-oauth" => match AnthropicOAuthProvider::from_conclave_tokens(path) {
+                Ok(p) => p.probe().await,
+                Err(e) => Err(e),
+            },
+            "openai-oauth" => match OpenAIOAuthProvider::from_conclave_tokens(path) {
+                Ok(p) => p.probe().await,
+                Err(e) => Err(e),
+            },
+            _ => Err(ProviderError::Other(format!("unknown oauth id `{id}`"))),
+        }
+    };
+    match tokio::time::timeout(PROBE_TIMEOUT, probe_fut).await {
+        Ok(Ok(())) => ProviderStatus::Ready,
+        Ok(Err(ProviderError::Auth)) => ProviderStatus::Expired,
+        Ok(Err(_)) | Err(_) => ProviderStatus::Unreachable,
+    }
+}
+
 #[tauri::command]
-pub async fn list_providers(state: State<'_, AppState>) -> CommandResult<Vec<ProviderInfo>> {
+pub async fn list_providers(
+    state: State<'_, AppState>,
+    force_refresh: Option<bool>,
+) -> CommandResult<Vec<ProviderInfo>> {
+    let force = force_refresh.unwrap_or(false);
     let mut out = Vec::new();
     for id in KNOWN_PROVIDERS {
         // Apple Intelligence is omitted entirely on hosts where it
@@ -643,20 +729,56 @@ pub async fn list_providers(state: State<'_, AppState>) -> CommandResult<Vec<Pro
         }
 
         let configured = secrets::load(id).unwrap_or(None).is_some();
-        let (available, default_model, requires_net) = match *id {
+        let (status, default_model, requires_net) = match *id {
             "ollama" => {
+                // Local Ollama daemon — `ping()` is cheap and bounded
+                // by reqwest's default connect timeout. No keychain
+                // entry to consult; the daemon's availability IS the
+                // "ready" signal.
                 let p = OllamaProvider::new();
-                (p.ping().await, "llama3.1:8b".into(), false)
+                let reachable = p.ping().await;
+                (
+                    if reachable {
+                        ProviderStatus::Ready
+                    } else {
+                        ProviderStatus::Unreachable
+                    },
+                    "llama3.1:8b".to_owned(),
+                    false,
+                )
             }
-            "anthropic" => (configured, "claude-sonnet-4-6-20250929".into(), true),
-            "openai" => (configured, "gpt-5".into(), true),
-            "openrouter" => (configured, "set per call".into(), true),
-            _ => (false, "—".into(), false),
+            "anthropic" => (
+                if configured {
+                    ProviderStatus::Ready
+                } else {
+                    ProviderStatus::NotConfigured
+                },
+                "claude-sonnet-4-6-20250929".into(),
+                true,
+            ),
+            "openai" => (
+                if configured {
+                    ProviderStatus::Ready
+                } else {
+                    ProviderStatus::NotConfigured
+                },
+                "gpt-5".into(),
+                true,
+            ),
+            "openrouter" => (
+                if configured {
+                    ProviderStatus::Ready
+                } else {
+                    ProviderStatus::NotConfigured
+                },
+                "set per call".into(),
+                true,
+            ),
+            _ => (ProviderStatus::NotConfigured, "—".into(), false),
         };
         out.push(ProviderInfo {
             id: (*id).to_owned(),
-            configured,
-            available,
+            status,
             default_model,
             requires_network: requires_net,
             auth: if *id == "ollama" {
@@ -678,7 +800,27 @@ pub async fn list_providers(state: State<'_, AppState>) -> CommandResult<Vec<Pro
             .config_dir()
             .join("oauth")
             .join(format!("{id}.json"));
-        let (configured, available, hint) = if conclave_path.exists() {
+        let (status, hint) = if conclave_path.exists() {
+            // Read the cache before probing — repeated UI refreshes
+            // (Settings auto-refresh, title-bar polling) all share
+            // the same 60s window.
+            let cached = if force {
+                None
+            } else {
+                let guard = state.probe_cache.lock().await;
+                guard
+                    .get(*id)
+                    .filter(|(when, _)| when.elapsed() < PROBE_TTL)
+                    .map(|(_, s)| *s)
+            };
+            let probed = if let Some(s) = cached {
+                s
+            } else {
+                let s = probe_oauth_status(id, &conclave_path).await;
+                let mut guard = state.probe_cache.lock().await;
+                guard.insert((*id).to_owned(), (Instant::now(), s));
+                s
+            };
             let hint = match *id {
                 "anthropic-oauth" => AnthropicOAuthProvider::from_conclave_tokens(&conclave_path)
                     .ok()
@@ -688,9 +830,16 @@ pub async fn list_providers(state: State<'_, AppState>) -> CommandResult<Vec<Pro
                     .and_then(|p| p.account_label()),
                 _ => None,
             };
-            (true, true, hint)
+            (probed, hint)
         } else {
-            (false, false, Some("sign in to start".into()))
+            // No credential file — clear any stale cache entry so a
+            // fresh sign-in is reflected immediately.
+            let mut guard = state.probe_cache.lock().await;
+            guard.remove(*id);
+            (
+                ProviderStatus::NotConfigured,
+                Some("sign in to start".into()),
+            )
         };
         let default_model = match *id {
             "anthropic-oauth" => "claude-sonnet-4-6-20250929".into(),
@@ -699,8 +848,7 @@ pub async fn list_providers(state: State<'_, AppState>) -> CommandResult<Vec<Pro
         };
         out.push(ProviderInfo {
             id: (*id).to_owned(),
-            configured,
-            available,
+            status,
             default_model,
             requires_network: true,
             auth: "oauth".into(),
@@ -708,15 +856,36 @@ pub async fn list_providers(state: State<'_, AppState>) -> CommandResult<Vec<Pro
             hint,
         });
     }
-    // Local CLI providers. `configured` = binary present on `$PATH`;
-    // `available` = `configured` AND the user is signed in (verified
-    // via `claude auth status` for Claude, or the existence of
-    // `~/.codex/auth.json` for Codex, which lacks a documented
-    // status command). The `hint` carries a stable tag the frontend
-    // i18n maps to actionable copy (install command / login command
-    // for the right binary).
+    // Local CLI providers. Maps the two underlying flags
+    // (`is_installed` / `is_logged_in`) onto the three statuses the UI
+    // cares about — `NotInstalled` (binary missing), `LoginRequired`
+    // (binary present but no session), `Ready`. The `hint` carries a
+    // stable tag the frontend i18n maps to actionable copy ("install
+    // from claude.com/code", "run `codex login`", etc.).
+    //
+    // The "user explicitly disconnected" set lives in `conclave.toml`
+    // (`providers.disabled_provider_ids`). When a CLI id appears
+    // there we surface it as `NotConfigured` even though the binary
+    // is still installed + logged in via its own credentials — that's
+    // what "Disconnect" must mean for a provider Conclave does not
+    // own credentials for. Re-picking the tile clears the flag.
+    let disabled_ids: Vec<String> = state
+        .config
+        .lock()
+        .map_err(|_| "config poisoned")?
+        .providers
+        .disabled_provider_ids
+        .clone();
+    // Force-refresh on Reload (or after the frontend's redetect button)
+    // invalidates the binary path cache so the very next probe re-walks
+    // `$PATH`. Without this the user would have to relaunch Conclave to
+    // pick up a CLI they just installed in another window.
+    if force {
+        ClaudeCliProvider::refresh_binary_cache();
+        CodexCliProvider::refresh_binary_cache();
+    }
     for id in CLI_PROVIDERS {
-        let (configured, available, default_model) = match *id {
+        let (status, default_model) = match *id {
             "claude-cli" => {
                 let installed = ClaudeCliProvider::is_installed();
                 let logged_in = if installed {
@@ -724,11 +893,14 @@ pub async fn list_providers(state: State<'_, AppState>) -> CommandResult<Vec<Pro
                 } else {
                     false
                 };
-                (
-                    installed,
-                    installed && logged_in,
-                    CLAUDE_CLI_DEFAULT_MODEL.to_owned(),
-                )
+                let status = if !installed {
+                    ProviderStatus::NotInstalled
+                } else if !logged_in {
+                    ProviderStatus::LoginRequired
+                } else {
+                    ProviderStatus::Ready
+                };
+                (status, CLAUDE_CLI_DEFAULT_MODEL.to_owned())
             }
             "codex-cli" => {
                 let installed = CodexCliProvider::is_installed();
@@ -737,25 +909,35 @@ pub async fn list_providers(state: State<'_, AppState>) -> CommandResult<Vec<Pro
                 } else {
                     false
                 };
-                (
-                    installed,
-                    installed && logged_in,
-                    CODEX_CLI_DEFAULT_MODEL.to_owned(),
-                )
+                let status = if !installed {
+                    ProviderStatus::NotInstalled
+                } else if !logged_in {
+                    ProviderStatus::LoginRequired
+                } else {
+                    ProviderStatus::Ready
+                };
+                (status, CODEX_CLI_DEFAULT_MODEL.to_owned())
             }
             _ => continue,
         };
-        let hint = if !configured {
-            Some("not_installed".into())
-        } else if !available {
-            Some("login_required".into())
+        let user_disabled = disabled_ids.iter().any(|d| d == *id);
+        // Override only when the user disconnected from inside Conclave
+        // AND the CLI is otherwise usable — leave `NotInstalled` /
+        // `LoginRequired` alone so the picker still surfaces the
+        // actionable install/login hint.
+        let final_status = if user_disabled && matches!(status, ProviderStatus::Ready) {
+            ProviderStatus::NotConfigured
         } else {
-            None
+            status
+        };
+        let hint = match final_status {
+            ProviderStatus::NotInstalled => Some("not_installed".into()),
+            ProviderStatus::LoginRequired => Some("login_required".into()),
+            _ => None,
         };
         out.push(ProviderInfo {
             id: (*id).to_owned(),
-            configured,
-            available,
+            status: final_status,
             default_model,
             requires_network: true,
             auth: "cli".into(),
@@ -766,16 +948,44 @@ pub async fn list_providers(state: State<'_, AppState>) -> CommandResult<Vec<Pro
     Ok(out)
 }
 
+/// Mutate the `providers.disabled_provider_ids` set and persist
+/// `conclave.toml`. Used by `set_provider_key` / `remove_provider_key`
+/// to record "the user has explicitly disconnected this CLI inside
+/// Conclave" without touching the user's actual CLI credentials.
+fn set_cli_disabled(state: &AppState, id: &str, disabled: bool) -> CommandResult<()> {
+    let mut cfg = state.config.lock().map_err(|_| "config poisoned")?.clone();
+    let already_disabled = cfg.providers.disabled_provider_ids.iter().any(|d| d == id);
+    if disabled == already_disabled {
+        return Ok(());
+    }
+    if disabled {
+        cfg.providers.disabled_provider_ids.push(id.to_owned());
+    } else {
+        cfg.providers.disabled_provider_ids.retain(|d| d != id);
+    }
+    cfg.save(state.paths.config_file())
+        .map_err(|e| e.to_string())?;
+    *state.config.lock().map_err(|_| "config poisoned")? = cfg;
+    Ok(())
+}
+
 #[tauri::command]
-pub async fn set_provider_key(id: String, api_key: String) -> CommandResult<()> {
-    if matches!(
-        id.as_str(),
-        "ollama" | "apple-intelligence" | "claude-cli" | "codex-cli"
-    ) {
-        // Local providers have no Conclave-side credential to store —
-        // either no auth at all (Ollama, Apple Intelligence) or auth
-        // is handled exclusively by the user's installed CLI in its
-        // own credential store.
+pub async fn set_provider_key(
+    state: State<'_, AppState>,
+    id: String,
+    api_key: String,
+) -> CommandResult<()> {
+    if matches!(id.as_str(), "claude-cli" | "codex-cli") {
+        // CLI providers have no Conclave-side credential to store
+        // (auth is handled by the user's installed CLI), so the
+        // picker tile click reuses this command to clear the
+        // user-disabled flag and resurface the CLI as the active
+        // provider. The `api_key` argument is ignored.
+        let _ = api_key;
+        return set_cli_disabled(&state, &id, false);
+    }
+    if matches!(id.as_str(), "ollama" | "apple-intelligence") {
+        // Always-available local providers — nothing to persist.
         return ok(());
     }
     if api_key.trim().is_empty() {
@@ -800,7 +1010,7 @@ pub async fn test_provider(
     };
     let provider = build_provider(&id, &api_key, None, state.paths.config_dir())?;
     let prompt = prompt.unwrap_or_else(|| "Reply with one word: hello.".into());
-    let resp = provider
+    let result = provider
         .complete(CompletionRequest {
             model: String::new(),
             messages: vec![Message::user(prompt)],
@@ -810,8 +1020,32 @@ pub async fn test_provider(
             allow_web_search: false,
             images: Vec::new(),
         })
-        .await
-        .map_err(|e| e.to_string())?;
+        .await;
+    // The test is the same code path the committee uses, so the
+    // result tells us truthfully whether the provider is currently
+    // healthy. Update the probe cache so the next `list_providers`
+    // (which the UI fires right after the test) reflects the new
+    // status without waiting for the TTL to expire. Only OAuth ids
+    // are cached today — the others compute status cheaply enough
+    // that there's no cache entry to invalidate.
+    if matches!(id.as_str(), "anthropic-oauth" | "openai-oauth") {
+        use conclave_providers::ProviderError;
+        let cached_status = match &result {
+            Ok(_) => Some(ProviderStatus::Ready),
+            Err(ProviderError::Auth) => Some(ProviderStatus::Expired),
+            Err(
+                ProviderError::Network(_)
+                | ProviderError::Unavailable(_)
+                | ProviderError::RateLimit { .. },
+            ) => Some(ProviderStatus::Unreachable),
+            Err(_) => None,
+        };
+        if let Some(s) = cached_status {
+            let mut guard = state.probe_cache.lock().await;
+            guard.insert(id.clone(), (Instant::now(), s));
+        }
+    }
+    let resp = result.map_err(|e| e.to_string())?;
     Ok(format!(
         "{}\n\n— {} ({}+{} tokens)",
         resp.text, resp.model, resp.usage.input_tokens, resp.usage.output_tokens
@@ -819,12 +1053,15 @@ pub async fn test_provider(
 }
 
 #[tauri::command]
-pub fn remove_provider_key(id: String) -> CommandResult<()> {
+pub fn remove_provider_key(state: State<'_, AppState>, id: String) -> CommandResult<()> {
     if matches!(id.as_str(), "claude-cli" | "codex-cli") {
-        // No Conclave-managed credential to delete — disconnecting a
-        // CLI provider is a no-op here. The user logs out via the
-        // CLI's own command (`claude auth logout` / `codex logout`).
-        return ok(());
+        // No Conclave-managed credential to delete (auth lives in
+        // the user's installed CLI). Persist a "user disconnected
+        // this CLI inside Conclave" flag instead so the next
+        // `list_providers` returns `NotConfigured` and the picker
+        // re-appears. The user's actual CLI session is left alone —
+        // re-picking the tile clears the flag.
+        return set_cli_disabled(&state, &id, true);
     }
     secrets::delete(&id).map_err(|e| e.to_string())
 }
@@ -879,6 +1116,10 @@ pub async fn oauth_anthropic_complete(
     let tokens = flow.complete(&code).await.map_err(|e| e.to_string())?;
     persist_tokens(state.paths.config_dir(), "anthropic-oauth", &tokens)
         .map_err(|e| e.to_string())?;
+    // Drop any stale probe result from a previous session so the
+    // next `list_providers` call triggers a fresh probe against the
+    // brand-new credentials.
+    state.probe_cache.lock().await.remove("anthropic-oauth");
     Ok(())
 }
 
@@ -910,6 +1151,7 @@ pub async fn oauth_openai_start(state: State<'_, AppState>) -> CommandResult<OAu
     let _ = open_in_browser(&url);
 
     let config_dir = state.paths.config_dir().to_owned();
+    let probe_cache = Arc::clone(&state.probe_cache);
     let task = tokio::spawn(async move {
         match started
             .flow
@@ -920,6 +1162,10 @@ pub async fn oauth_openai_start(state: State<'_, AppState>) -> CommandResult<OAu
                 if let Err(e) = persist_tokens(&config_dir, "openai-oauth", &tokens) {
                     eprintln!("openai oauth persist failed: {e}");
                 }
+                // Clear any cached probe outcome from a previous
+                // session — the next `list_providers` poll will
+                // exercise the brand-new credentials directly.
+                probe_cache.lock().await.remove("openai-oauth");
             }
             Err(e) => {
                 eprintln!("openai oauth flow failed: {e}");
@@ -949,17 +1195,21 @@ pub fn oauth_openai_cancel(state: State<'_, AppState>) -> CommandResult<()> {
 }
 
 #[tauri::command]
-pub fn oauth_logout(state: State<'_, AppState>, id: String) -> CommandResult<()> {
+pub async fn oauth_logout(state: State<'_, AppState>, id: String) -> CommandResult<()> {
     let path = state
         .paths
         .config_dir()
         .join("oauth")
         .join(format!("{id}.json"));
     match std::fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e.to_string()),
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.to_string()),
     }
+    // Always clear any cached probe result so the next
+    // `list_providers` reflects the disconnected state.
+    state.probe_cache.lock().await.remove(&id);
+    Ok(())
 }
 
 fn build_provider(
@@ -2369,6 +2619,17 @@ pub enum DeliberationEventDto {
         case_id: String,
         batch_index: Option<usize>,
     },
+    /// A phase hit a transient error and is being retried. `attempt`
+    /// is the upcoming attempt number (e.g. 2 after the first failure).
+    /// The UI uses this to swap the live phase badge from "Running" to
+    /// "Retrying (N/2)" without persisting a Failed status.
+    PhaseRetrying {
+        phase: String,
+        attempt: u8,
+        reason: String,
+        case_id: String,
+        batch_index: Option<usize>,
+    },
     PhaseFailed {
         phase: String,
         error: String,
@@ -2593,6 +2854,24 @@ pub(crate) async fn run_case_deliberated_impl(
                         phase: p,
                         output,
                         elapsed_ms,
+                        case_id: case_id_for_forward.clone(),
+                        batch_index: batch_index_for_forward,
+                    }
+                }
+                DeliberationEvent::PhaseRetrying {
+                    phase,
+                    attempt,
+                    reason,
+                } => {
+                    let p = phase.as_str().to_owned();
+                    // Reset the phase start clock so the eventual
+                    // PhaseCompleted/PhaseFailed elapsed_ms measures the
+                    // *successful* attempt, not the original try.
+                    phase_starts.insert(p.clone(), std::time::Instant::now());
+                    DeliberationEventDto::PhaseRetrying {
+                        phase: p,
+                        attempt,
+                        reason,
                         case_id: case_id_for_forward.clone(),
                         batch_index: batch_index_for_forward,
                     }
@@ -3384,6 +3663,117 @@ pub fn delete_cases(
     }
 
     Ok(DeleteCasesResponse { deleted })
+}
+
+// ---------------------------------------------------------------------------
+// CLI provider diagnostics
+//
+// These commands back the in-Settings "CLI setup" panel. The panel
+// renders when the user clicks a `claude-cli` or `codex-cli` tile whose
+// status is anything other than `Ready` — i.e. either the binary is
+// missing from `$PATH` (`NotInstalled`) or the user hasn't run
+// `claude auth login` / `codex login` yet (`LoginRequired`).
+//
+// The panel needs two things the regular `list_providers` payload
+// doesn't carry:
+//
+// 1. Diagnostics — the resolved binary path (when present), the actual
+//    process `$PATH` Conclave was launched with, and the documented
+//    install URL / login command. We surface the PATH so a user with an
+//    unusual install location can immediately see why detection failed
+//    instead of guessing.
+// 2. A re-detection trigger — `RwLock`-backed cache invalidation that
+//    forces the next `is_installed` call to re-walk `$PATH`. The user
+//    clicks "Volver a detectar" after installing the CLI in another
+//    window without restarting Conclave.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+pub struct CliDiagnostics {
+    /// Resolved absolute path to the binary on `$PATH`, or `None` when
+    /// `which::which` couldn't find it.
+    pub binary_path: Option<String>,
+    /// The full process `$PATH` as Conclave currently sees it. Used by
+    /// the UI's collapsible debug block so the user can confirm whether
+    /// their custom install dir is on the path the bundled app sees.
+    pub path_var: String,
+    /// Vendor-documented install URL (opened in the system browser).
+    pub install_url: String,
+    /// The exact terminal command the user must run to authenticate.
+    /// Surfaced verbatim with a copy-to-clipboard affordance.
+    pub login_command: String,
+    /// Same probe result that `list_providers` reports — the panel uses
+    /// it to decide which variant copy to show (not_installed,
+    /// login_required, expired, ready).
+    pub status: ProviderStatus,
+}
+
+/// Return diagnostic info for one of the CLI providers. Rejects any
+/// non-CLI id so the frontend can't accidentally fan this command out.
+#[tauri::command]
+pub async fn cli_diagnostics(id: String) -> CommandResult<CliDiagnostics> {
+    let (binary_path, status, install_url, login_command) = match id.as_str() {
+        "claude-cli" => {
+            let installed = ClaudeCliProvider::is_installed();
+            let logged_in = if installed {
+                ClaudeCliProvider::is_logged_in().await
+            } else {
+                false
+            };
+            let status = if !installed {
+                ProviderStatus::NotInstalled
+            } else if !logged_in {
+                ProviderStatus::LoginRequired
+            } else {
+                ProviderStatus::Ready
+            };
+            (
+                ClaudeCliProvider::binary_path().map(|p| p.display().to_string()),
+                status,
+                "https://docs.claude.com/en/docs/agents/claude-code/overview".to_owned(),
+                "claude auth login".to_owned(),
+            )
+        }
+        "codex-cli" => {
+            let installed = CodexCliProvider::is_installed();
+            let logged_in = if installed {
+                CodexCliProvider::is_logged_in().await
+            } else {
+                false
+            };
+            let status = if !installed {
+                ProviderStatus::NotInstalled
+            } else if !logged_in {
+                ProviderStatus::LoginRequired
+            } else {
+                ProviderStatus::Ready
+            };
+            (
+                CodexCliProvider::binary_path().map(|p| p.display().to_string()),
+                status,
+                "https://github.com/openai/codex".to_owned(),
+                "codex login".to_owned(),
+            )
+        }
+        _ => return Err(format!("cli_diagnostics: unsupported provider id `{id}`")),
+    };
+    Ok(CliDiagnostics {
+        binary_path,
+        path_var: std::env::var("PATH").unwrap_or_default(),
+        install_url,
+        login_command,
+        status,
+    })
+}
+
+/// Invalidate the in-process `which::which` cache for both CLI
+/// providers so the next probe re-walks `$PATH`. Called from the
+/// "Volver a detectar" button in the CLI setup panel.
+#[tauri::command]
+pub async fn redetect_cli_binaries() -> CommandResult<()> {
+    ClaudeCliProvider::refresh_binary_cache();
+    CodexCliProvider::refresh_binary_cache();
+    Ok(())
 }
 
 #[cfg(test)]

@@ -26,6 +26,8 @@ tracing = { workspace = true }
 
 # HTTP client used by every cloud provider implementation.
 reqwest = { workspace = true }
+# `StreamExt` for chunk-by-chunk SSE consumption in openai_oauth.rs.
+futures = { workspace = true }
 # OS-native secret storage (Keychain on macOS, Credential Manager on
 # Windows, libsecret on Linux).
 keyring = { workspace = true }

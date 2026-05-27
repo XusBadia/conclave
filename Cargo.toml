@@ -74,7 +74,7 @@ docx-rs = { version = "0.4", default-features = false }
 html2text = "0.17"
 
 # HTTP + secrets (Phase 2 — provider layer)
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip", "stream"] }
 keyring = "3"
 rpassword = "7"
 url = "2"

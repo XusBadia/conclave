@@ -70,7 +70,7 @@
 //! - Web citations: not surfaced through the CLI's JSON output.
 
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::RwLock;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -134,7 +134,7 @@ impl ClaudeCliProvider {
     /// Cheap: the lookup is memoised process-wide.
     pub fn new() -> Self {
         Self {
-            binary: detect_cached().cloned(),
+            binary: detect_cached(),
             model: DEFAULT_MODEL.to_owned(),
         }
     }
@@ -149,14 +149,25 @@ impl ClaudeCliProvider {
     /// Process-wide cached resolution of the `claude` binary path. We
     /// memoise on first hit because `which::which` walks `$PATH` and
     /// can stat directories repeatedly; the binary's location does not
-    /// change while Conclave is running.
-    pub fn binary_path() -> Option<&'static PathBuf> {
+    /// change while Conclave is running unless the user installs the
+    /// CLI in another window and calls [`refresh_binary_cache`].
+    pub fn binary_path() -> Option<PathBuf> {
         detect_cached()
     }
 
     /// `true` when `claude` is present on `$PATH`.
     pub fn is_installed() -> bool {
         detect_cached().is_some()
+    }
+
+    /// Invalidate the memoised binary path so the next call re-walks
+    /// `$PATH`. Used after the user installs the CLI in a terminal
+    /// while Conclave is running — the Settings panel calls this via
+    /// the `redetect_cli_binaries` Tauri command before re-probing.
+    pub fn refresh_binary_cache() {
+        if let Ok(mut guard) = CACHED.write() {
+            *guard = BinaryCache::Unprobed;
+        }
     }
 
     /// Probe `claude auth status`. Doc: "Show authentication status as
@@ -190,9 +201,33 @@ impl ClaudeCliProvider {
     }
 }
 
-fn detect_cached() -> Option<&'static PathBuf> {
-    static CACHED: OnceLock<Option<PathBuf>> = OnceLock::new();
-    CACHED.get_or_init(|| which::which("claude").ok()).as_ref()
+/// Three states for the memoised `which::which` result:
+/// `Unprobed` (initial / after refresh) → re-walk PATH on next read,
+/// `Missing` (probe ran, binary not found), `Found` (probe ran, has path).
+enum BinaryCache {
+    Unprobed,
+    Missing,
+    Found(PathBuf),
+}
+
+static CACHED: RwLock<BinaryCache> = RwLock::new(BinaryCache::Unprobed);
+
+fn detect_cached() -> Option<PathBuf> {
+    if let Ok(guard) = CACHED.read() {
+        match &*guard {
+            BinaryCache::Unprobed => {}
+            BinaryCache::Missing => return None,
+            BinaryCache::Found(p) => return Some(p.clone()),
+        }
+    }
+    let resolved = which::which("claude").ok();
+    if let Ok(mut guard) = CACHED.write() {
+        *guard = match &resolved {
+            Some(p) => BinaryCache::Found(p.clone()),
+            None => BinaryCache::Missing,
+        };
+    }
+    resolved
 }
 
 #[async_trait]
