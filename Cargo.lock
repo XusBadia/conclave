@@ -1160,6 +1160,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "conclave-core",
+ "futures",
  "keyring",
  "open",
  "rand 0.8.6",

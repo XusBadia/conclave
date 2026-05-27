@@ -126,7 +126,10 @@ export function KnowledgePage({ workspace }: { workspace: Workspace }) {
   useEffect(() => {
     if (providerId) return;
     if (usable.length === 0) return;
-    const ollama = usable.find((p) => p.id === "ollama" && p.available);
+    // `usableProviders` already filters for `status === "ready"`, so
+    // simply preferring Ollama when present is enough — no need to
+    // re-check availability here.
+    const ollama = usable.find((p) => p.id === "ollama");
     setProviderId(ollama?.id ?? usable[0].id);
   }, [usable, providerId]);
 

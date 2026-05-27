@@ -105,6 +105,14 @@ impl Default for PrivacyConfig {
 pub struct ProvidersConfig {
     /// Identifier of the default provider used when none is specified.
     pub default: Option<String>,
+    /// Provider ids the user has explicitly disconnected from inside
+    /// Conclave even though the underlying credential still exists
+    /// (e.g. the Claude / Codex CLI binary is still installed and
+    /// logged in via its own credentials). Treated as
+    /// `not_configured` by `list_providers` so the picker re-appears.
+    /// Cleared when the user picks the same provider tile again.
+    #[serde(default)]
+    pub disabled_provider_ids: Vec<String>,
 }
 
 impl Config {
@@ -224,6 +232,32 @@ mod tests {
         let mut cfg = Config::default();
         cfg.privacy.default_data_boundary = "send_everything".to_owned();
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn disabled_provider_ids_round_trip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("conclave.toml");
+
+        let mut cfg = Config::default();
+        cfg.providers.disabled_provider_ids = vec!["claude-cli".to_owned(), "codex-cli".to_owned()];
+
+        cfg.save(&path).unwrap();
+        let loaded = Config::load(&path).unwrap();
+        assert_eq!(
+            loaded.providers.disabled_provider_ids,
+            vec!["claude-cli".to_owned(), "codex-cli".to_owned()]
+        );
+    }
+
+    #[test]
+    fn disabled_provider_ids_defaults_to_empty_when_missing() {
+        let raw = r#"
+            [providers]
+            default = "anthropic"
+        "#;
+        let cfg: Config = toml::from_str(raw).unwrap();
+        assert!(cfg.providers.disabled_provider_ids.is_empty());
     }
 
     #[test]

@@ -12,10 +12,12 @@ import {
   IconDeviceDesktop,
   IconInfoCircle,
 } from "@tabler/icons-react";
+import { open as openExternal } from "@tauri-apps/plugin-shell";
 
 import { Button } from "../components/Button";
 import { Card, CardBody, CardHeader } from "../components/Card";
 import { Field, Input } from "../components/Field";
+import { ProviderStatusPill } from "../components/ProviderStatusPill";
 import { cn } from "../lib/cn";
 import { getLocale, setLocale, type Locale } from "../i18n";
 import { useTheme } from "../lib/theme";
@@ -23,17 +25,22 @@ import {
   activeProvider,
   connectedSlotProviders,
   ipc,
+  type CliDiagnostics,
   type DataBoundaryMode,
   type ProviderInfo,
 } from "../lib/ipc";
+import { isReady } from "../lib/providerStatus";
 import {
   BRAND_HOVER,
   BRAND_TINT,
+  CLI_INSTALL_URL,
+  CLI_LOGIN_COMMAND,
   buildPickerGroups,
   isLocalCli,
   isSubscriptionOAuth,
   metaFor,
   shouldRecommendCli,
+  type ProviderId,
   type ProviderMeta,
 } from "../lib/providers";
 
@@ -45,7 +52,8 @@ type ConnectFlow =
   | { kind: "idle" }
   | { kind: "api-key"; id: string; draft: string }
   | { kind: "oauth-anthropic"; pasteInstructions: string | null; code: string }
-  | { kind: "oauth-openai"; url: string };
+  | { kind: "oauth-openai"; url: string }
+  | { kind: "cli-setup"; id: "claude-cli" | "codex-cli" };
 
 export function SettingsPage() {
   const { t } = useTranslation();
@@ -77,12 +85,15 @@ export function SettingsPage() {
     [providers],
   );
 
-  const refresh = async () => {
+  const refresh = async (opts?: { force?: boolean }) => {
     setLoading(true);
     setError(null);
     try {
       const [list, privacy] = await Promise.all([
-        ipc.listProviders(),
+        // Force-refresh bypasses the 60s probe cache; we want this
+        // when the user explicitly hits Reload or just finished a
+        // test, so the pill reflects the freshest possible state.
+        ipc.listProviders({ forceRefresh: opts?.force ?? false }),
         ipc.privacySettings().catch(() => null),
       ]);
       setProviders(list);
@@ -104,6 +115,19 @@ export function SettingsPage() {
 
   useEffect(() => {
     refresh();
+  }, []);
+
+  // Refresh when the window regains focus. Covers the common flow of
+  // installing or logging into a CLI in a terminal while Conclave is
+  // open in the background — without this the user has to hit Reload
+  // to see the change. force=true bypasses the 60s probe cache AND
+  // invalidates the binary detection cache on the backend.
+  useEffect(() => {
+    const onFocus = () => {
+      void refresh({ force: true });
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
   }, []);
 
   // ---- Actions ------------------------------------------------------------
@@ -187,7 +211,12 @@ export function SettingsPage() {
         const list = await ipc.listProviders();
         if (cancelled) return;
         setProviders(list);
-        if (list.find((p) => p.id === "openai-oauth")?.configured) {
+        // The OAuth flow lands when the credentials file appears on
+        // disk; the backend then probes immediately and the status
+        // settles to `ready` (or `expired`/`unreachable` if the new
+        // token isn't accepted, which we want to surface either way).
+        const openaiOauth = list.find((p) => p.id === "openai-oauth");
+        if (openaiOauth && openaiOauth.status !== "not_configured") {
           setFlow({ kind: "idle" });
         }
       } catch {
@@ -201,17 +230,39 @@ export function SettingsPage() {
     };
   }, [flow.kind]);
 
-  const pickProvider = (id: string) => {
+  const pickProvider = async (id: string) => {
     const meta = metaFor(id);
     if (id === "anthropic-oauth") return startAnthropicOAuth();
     if (id === "openai-oauth") return startOpenAIOAuth();
     if (isLocalCli(id)) {
-      // CLI providers self-configure when the binary is on $PATH and
-      // the user is signed in via the CLI's own flow. Conclave keeps
-      // no credential of its own — clicking the tile just refreshes
-      // the provider list, which surfaces the CLI as the active
-      // provider on the next render.
-      return refresh();
+      // Two paths for CLI tiles depending on backend state:
+      //
+      //   • status === "ready"  → the binary is on $PATH and the CLI's
+      //     own login is current. Picking the tile activates the
+      //     provider (the backend call also clears the user-disabled
+      //     flag that "Disconnect" sets in `conclave.toml`).
+      //
+      //   • anything else (NotInstalled / LoginRequired / Expired /
+      //     NotConfigured) → open the in-Settings setup panel so the
+      //     user gets actionable copy, an install button, a copy-able
+      //     terminal command, and a Re-detect affordance — instead of
+      //     a dead-end disabled tile.
+      const info = providers.find((p) => p.id === id);
+      if (!info || !isReady(info)) {
+        setFlow({ kind: "cli-setup", id: id as "claude-cli" | "codex-cli" });
+        return;
+      }
+      setBusy(true);
+      setError(null);
+      try {
+        await ipc.setProviderKey(id, "");
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setBusy(false);
+        await refresh();
+      }
+      return;
     }
     if (meta.authLabel === "API key") {
       setFlow({ kind: "api-key", id, draft: "" });
@@ -229,6 +280,11 @@ export function SettingsPage() {
       setError(String(e));
     } finally {
       setBusy(false);
+      // Regardless of outcome, force-refresh the provider list so
+      // the status pill flips to match what the test just observed.
+      // Without this the badges could stay green even after a failed
+      // test — the exact mismatch this whole refactor fixes.
+      await refresh({ force: true });
     }
   };
 
@@ -330,7 +386,9 @@ export function SettingsPage() {
             <Button
               size="sm"
               variant="ghost"
-              onClick={refresh}
+              // Manual refresh: bypass the 60s probe cache so the
+              // user actually gets a fresh upstream check.
+              onClick={() => refresh({ force: true })}
               loading={loading}
             >
               {t("settings.refresh")}
@@ -338,18 +396,31 @@ export function SettingsPage() {
           }
         />
         <CardBody className="space-y-4">
-          {error && (
-            <ProviderErrorBanner
-              error={error}
-              activeProviderId={active?.id ?? null}
-              activeProviderName={active ? metaFor(active.id).name : null}
-            />
-          )}
+          {/* The banner now self-determines whether to render — it
+              fires on `error` OR when the active provider's status
+              is non-`ready`, so a revoked OAuth session surfaces
+              without needing the user to click Test first. */}
+          <ProviderErrorBanner
+            error={error}
+            activeProvider={active}
+            onPickProvider={pickProvider}
+            onRedetectCli={async () => {
+              setBusy(true);
+              try {
+                await ipc.redetectCliBinaries();
+                await refresh({ force: true });
+              } finally {
+                setBusy(false);
+              }
+            }}
+          />
+
 
           {flow.kind !== "idle" ? (
             <ConnectFlowView
               flow={flow}
               busy={busy}
+              providers={providers}
               onCancel={() => setFlow({ kind: "idle" })}
               onSaveApiKey={(draft) =>
                 flow.kind === "api-key" && saveApiKey(flow.id, draft)
@@ -362,12 +433,29 @@ export function SettingsPage() {
               onUpdateApiDraft={(draft) =>
                 flow.kind === "api-key" && setFlow({ ...flow, draft })
               }
+              onCliReady={(id) => {
+                // Status flipped to ready while the panel was open
+                // (e.g. user logged in via terminal and clicked
+                // Re-detect). Close the panel and activate the
+                // provider in the same beat.
+                setFlow({ kind: "idle" });
+                void (async () => {
+                  setBusy(true);
+                  try {
+                    await ipc.setProviderKey(id, "");
+                  } finally {
+                    setBusy(false);
+                    await refresh({ force: true });
+                  }
+                })();
+              }}
+              onRefreshProviders={() => refresh({ force: true })}
             />
           ) : active ? (
             <ActiveProviderView
               provider={active}
               busy={busy}
-              ollamaAvailable={!!ollama?.available}
+              ollamaAvailable={ollama ? isReady(ollama) : false}
               appleIntel={appleIntel}
               onTest={() => testActive(active.id)}
               onTestAppleIntel={() => testActive("apple-intelligence")}
@@ -378,7 +466,7 @@ export function SettingsPage() {
             <ProviderPicker
               providers={providers}
               busy={busy}
-              ollamaAvailable={!!ollama?.available}
+              ollamaAvailable={ollama ? isReady(ollama) : false}
               appleIntel={appleIntel}
               onTestAppleIntel={() => testActive("apple-intelligence")}
               onPick={pickProvider}
@@ -630,13 +718,16 @@ function ProviderPicker({
                       : cliRecommended && meta.recommended
                         ? { ...meta, recommended: false }
                         : meta;
-                const cliDisabled = isLocalCli(id) && !info.available;
+                // CLI tiles used to lock when the binary wasn't ready
+                // — a dead-end for the user. Now they always open the
+                // setup panel (with diagnostics + install/login CTAs)
+                // unless the whole picker is mid-action.
                 return (
                   <PickerTile
                     key={id}
                     provider={info}
                     meta={displayMeta}
-                    disabled={busy || cliDisabled}
+                    disabled={busy}
                     onPick={() => onPick(id)}
                   />
                 );
@@ -752,7 +843,7 @@ function AppleIntelligenceNote({
   // `hint` carries the stable Availability tag ("not_enabled",
   // "downloading", etc.) when the provider isn't fully ready, so the
   // copy can be precise about what the user can do.
-  const stateKey = info.available
+  const stateKey = isReady(info)
     ? "settings.apple_intel_ready"
     : info.hint === "not_enabled"
       ? "settings.apple_intel_unavailable_not_enabled"
@@ -770,7 +861,7 @@ function AppleIntelligenceNote({
         </span>{" "}
         {t(stateKey)}
       </div>
-      {info.available && (
+      {isReady(info) && (
         <Button
           size="sm"
           variant="ghost"
@@ -821,21 +912,11 @@ function ActiveProviderView({
               <div className="text-[16px] font-semibold text-ink">
                 {meta.name}
               </div>
-              <span className="rounded bg-ok/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-ok">
-                {t("settings.status_connected")}
-              </span>
-              <span
-                className={cn(
-                  "rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
-                  provider.available
-                    ? "bg-ok/10 text-ok"
-                    : "bg-warn/15 text-warn",
-                )}
-              >
-                {provider.available
-                  ? t("settings.status_reachable")
-                  : t("settings.status_unreachable")}
-              </span>
+              {/* Single status pill — replaces the old
+                  "CONECTADO" + "ALCANZABLE" pair that could disagree
+                  with the error banner below. One source of truth,
+                  refreshed after every test and OAuth callback. */}
+              <ProviderStatusPill status={provider.status} />
               {unofficial && (
                 <span
                   className="rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-warn"
@@ -925,19 +1006,25 @@ function ActiveProviderView({
 function ConnectFlowView({
   flow,
   busy,
+  providers,
   onCancel,
   onSaveApiKey,
   onSubmitAnthropicCode,
   onUpdateAnthropicCode,
   onUpdateApiDraft,
+  onCliReady,
+  onRefreshProviders,
 }: {
   flow: ConnectFlow;
   busy: boolean;
+  providers: ProviderInfo[];
   onCancel: () => void;
   onSaveApiKey: (draft: string) => void;
   onSubmitAnthropicCode: (code: string) => void;
   onUpdateAnthropicCode: (code: string) => void;
   onUpdateApiDraft: (draft: string) => void;
+  onCliReady: (id: "claude-cli" | "codex-cli") => void;
+  onRefreshProviders: () => Promise<void> | void;
 }) {
   const { t } = useTranslation();
   if (flow.kind === "idle") return null;
@@ -947,7 +1034,9 @@ function ConnectFlowView({
       ? flow.id
       : flow.kind === "oauth-anthropic"
         ? "anthropic-oauth"
-        : "openai-oauth";
+        : flow.kind === "oauth-openai"
+          ? "openai-oauth"
+          : flow.id;
   const meta = metaFor(id);
 
   return (
@@ -1001,6 +1090,15 @@ function ConnectFlowView({
         )}
 
         {flow.kind === "oauth-openai" && <OpenAIOAuthFlow url={flow.url} />}
+
+        {flow.kind === "cli-setup" && (
+          <CliSetupPanel
+            id={flow.id}
+            provider={providers.find((p) => p.id === flow.id) ?? null}
+            onReady={() => onCliReady(flow.id)}
+            onRefreshProviders={onRefreshProviders}
+          />
+        )}
       </div>
     </div>
   );
@@ -1197,6 +1295,252 @@ function OpenAIOAuthFlow({ url }: { url: string }) {
 }
 
 // ===========================================================================
+// CLI setup panel — drives the in-Settings recovery flow for the two
+// local-CLI providers (`claude-cli`, `codex-cli`).
+//
+// Surfaces three variants driven by the live `ProviderInfo.status`:
+//
+//   • `not_installed` — binary missing from `$PATH`. Shows the install
+//     URL with an Open button and a collapsible "PATH seen by Conclave"
+//     debug block so users with custom install dirs can diagnose.
+//   • `login_required` / `expired` — binary found but no session. Shows
+//     the detected path and a copy-able terminal command.
+//   • `ready` — auto-activates: fires `onReady` which closes the panel
+//     and writes the provider to the slot.
+//
+// The Re-detect button invalidates the backend's binary cache and
+// refreshes the provider list. Combined with the parent's `focus`
+// listener it covers the common flow "install/login in another window,
+// come back to Conclave".
+// ===========================================================================
+function CliSetupPanel({
+  id,
+  provider,
+  onReady,
+  onRefreshProviders,
+}: {
+  id: "claude-cli" | "codex-cli";
+  provider: ProviderInfo | null;
+  onReady: () => void;
+  onRefreshProviders: () => Promise<void> | void;
+}) {
+  const { t } = useTranslation();
+  const [diagnostics, setDiagnostics] = useState<CliDiagnostics | null>(null);
+  const [detecting, setDetecting] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [showPath, setShowPath] = useState(false);
+  // Once we've called onReady (status flipped to ready) we suppress
+  // future fires from re-renders that arrive before the parent
+  // re-renders us with `flow.kind === "idle"`.
+  const readyFiredRef = useRef(false);
+
+  const meta = metaFor(id);
+  const binary = id === "claude-cli" ? "claude" : "codex";
+  const loginCommand = CLI_LOGIN_COMMAND[id];
+  const installUrl = CLI_INSTALL_URL[id];
+
+  // Fetch diagnostics on mount and whenever the parent-reported status
+  // changes (after a Re-detect → refresh round-trip, for example).
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const d = await ipc.cliDiagnostics(id);
+        if (!cancelled) setDiagnostics(d);
+      } catch {
+        // best-effort; the panel still renders useful copy without it
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [id, provider?.status]);
+
+  // Auto-activate when status reaches ready. We watch the parent-passed
+  // `provider.status` rather than diagnostics.status so we react to the
+  // exact same payload the rest of Settings is using.
+  useEffect(() => {
+    if (provider?.status === "ready" && !readyFiredRef.current) {
+      readyFiredRef.current = true;
+      onReady();
+    }
+  }, [provider?.status, onReady]);
+
+  const redetect = async () => {
+    setDetecting(true);
+    try {
+      await ipc.redetectCliBinaries();
+      // Pull fresh provider list AND fresh diagnostics so the panel
+      // updates in lock-step. listProviders with force=true also calls
+      // refresh_binary_cache on the backend (belt-and-braces).
+      await onRefreshProviders();
+      const d = await ipc.cliDiagnostics(id);
+      setDiagnostics(d);
+    } finally {
+      setDetecting(false);
+    }
+  };
+
+  const copyCommand = async () => {
+    try {
+      await navigator.clipboard.writeText(loginCommand);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      // clipboard unavailable; the command is visible verbatim already
+    }
+  };
+
+  const openInstallPage = async () => {
+    try {
+      await openExternal(installUrl);
+    } catch {
+      // shell plugin not available (unlikely); fall back to webview
+      window.open(installUrl, "_blank", "noopener,noreferrer");
+    }
+  };
+
+  const status = provider?.status ?? diagnostics?.status ?? "not_installed";
+  const isNotInstalled = status === "not_installed";
+  const isExpired = status === "expired";
+  const binaryPath = diagnostics?.binary_path;
+
+  // While we're transitioning to the active card, show a transient
+  // "Activating…" state instead of the variant copy. Avoids a 1-frame
+  // flash of "you're logged in!" right before the parent unmounts us.
+  if (status === "ready") {
+    return (
+      <div className="space-y-3 animate-in">
+        <div className="flex items-center gap-2 text-[13px] text-ink-dim">
+          <span className="inline-flex items-center gap-1.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-ok animate-pulseDot" />
+            <span className="h-1.5 w-1.5 rounded-full bg-ok animate-pulseDot [animation-delay:120ms]" />
+            <span className="h-1.5 w-1.5 rounded-full bg-ok animate-pulseDot [animation-delay:240ms]" />
+          </span>
+          {t("settings.cli_setup_ready_redirecting")}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4 animate-in">
+      {/* Headline + body copy per variant. We keep the wording terse
+          and action-oriented; the actual CTAs live below. */}
+      <div className="space-y-1.5">
+        <h3 className="text-[14px] font-semibold text-ink">
+          {isNotInstalled
+            ? t("settings.cli_setup_not_installed_title", { binary: `\`${binary}\`` })
+            : isExpired
+              ? t("settings.cli_setup_expired_title", { name: meta.name })
+              : t("settings.cli_setup_login_required_title", { name: meta.name })}
+        </h3>
+        <p className="text-[12.5px] leading-relaxed text-ink-subtle">
+          {isNotInstalled
+            ? t("settings.cli_setup_not_installed_body")
+            : isExpired
+              ? t("settings.cli_setup_expired_body")
+              : t("settings.cli_setup_login_required_body")}
+        </p>
+        {binaryPath && !isNotInstalled && (
+          <p className="text-[11.5px] text-ink-faint">
+            <span className="text-ink-subtle">{t("settings.cli_setup_detected_at")}</span>{" "}
+            <code className="font-mono text-ink-dim">{binaryPath}</code>
+          </p>
+        )}
+      </div>
+
+      {/* Variant-specific main CTA */}
+      {isNotInstalled ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" variant="primary" onClick={openInstallPage}>
+            {t("settings.cli_setup_open_install_page")}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={redetect}
+            loading={detecting}
+          >
+            {detecting
+              ? t("settings.cli_setup_redetecting")
+              : t("settings.cli_setup_redetect")}
+          </Button>
+        </div>
+      ) : (
+        <div
+          className={cn(
+            "rounded-md border bg-bg-subtle p-2.5",
+            isExpired ? "border-warn/40" : "border-border-subtle",
+          )}
+        >
+          <div className="flex items-center gap-2">
+            <code className="block flex-1 truncate rounded bg-bg px-2 py-1.5 font-mono text-[11.5px] text-ink-subtle">
+              {loginCommand}
+            </code>
+            <button
+              type="button"
+              onClick={copyCommand}
+              className={cn(
+                "shrink-0 rounded-md border px-2.5 py-1.5 text-[12px] font-medium transition no-drag",
+                "focus:outline-none focus-visible:ring-conclave",
+                copied
+                  ? "border-ok/40 bg-ok/10 text-ok"
+                  : "border-border bg-surface text-ink-dim hover:bg-surface-hover hover:text-ink",
+              )}
+            >
+              {copied
+                ? t("settings.cli_setup_copy_command_copied")
+                : t("settings.cli_setup_copy_command")}
+            </button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={redetect}
+              loading={detecting}
+            >
+              {detecting
+                ? t("settings.cli_setup_redetecting")
+                : t("settings.cli_setup_redetect")}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Collapsible "what PATH does Conclave see" diagnostic. Only
+          relevant when the binary is missing — for the login flow the
+          PATH is already proven correct by the detected path above. */}
+      {isNotInstalled && diagnostics && (
+        <div className="rounded-md border border-border-subtle bg-bg-subtle p-2.5">
+          <button
+            type="button"
+            onClick={() => setShowPath((v) => !v)}
+            className="text-[11.5px] font-medium text-ink-subtle transition no-drag hover:text-ink focus:outline-none focus-visible:underline"
+          >
+            {showPath
+              ? t("settings.cli_setup_path_seen_hide")
+              : t("settings.cli_setup_path_seen_show")}
+            <span className="ml-1 text-ink-faint">
+              ({t("settings.cli_setup_path_seen_label")})
+            </span>
+          </button>
+          {showPath && (
+            <>
+              <pre className="mt-2 max-h-32 overflow-auto rounded bg-bg px-2 py-1.5 font-mono text-[10.5px] leading-relaxed text-ink-subtle">
+                {diagnostics.path_var.split(":").join("\n")}
+              </pre>
+              <p className="mt-1.5 text-[11px] leading-relaxed text-ink-faint">
+                {t("settings.cli_setup_path_seen_help")}
+              </p>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ===========================================================================
 // Migration dialog
 // ===========================================================================
 function MigrationDialog({
@@ -1315,75 +1659,219 @@ function OAuthDisclaimerBanner() {
   );
 }
 
-// Heuristic match for auth-revoked errors coming back from the Rust
-// provider layer. `ProviderError::Auth` renders as "authentication
-// failed" on the wire today; we also tolerate vendor-side variants in
-// case the message is ever passed through unmodified.
-function isAuthError(message: string): boolean {
-  const m = message.toLowerCase();
+/**
+ * The OAuth subscription path has a vendor-recommended API-key
+ * fallback: the same vendor publishes both. When the OAuth session is
+ * revoked, we surface a CTA that jumps straight into the picker for
+ * the API-key counterpart so the user has a one-click stable path.
+ */
+function apiKeyAlternativeFor(id: string): ProviderId | null {
+  if (id === "openai-oauth") return "openai";
+  if (id === "anthropic-oauth") return "anthropic";
+  return null;
+}
+
+/**
+ * Banner shown when an active CLI provider's session has expired.
+ * Carries both a copy-to-clipboard affordance for the exact terminal
+ * command the user needs to run AND a Re-detect button that bypasses
+ * the backend's probe cache. The OAuth side has a parallel "Switch to
+ * API key" CTA — the CLI side gets parity here.
+ */
+function CliExpiredBanner({
+  name,
+  cliCommand,
+  error,
+  onRedetect,
+}: {
+  name: string;
+  cliCommand: string;
+  error: string | null;
+  onRedetect?: () => Promise<void> | void;
+}) {
+  const { t } = useTranslation();
+  const [copied, setCopied] = useState(false);
+  const [redetecting, setRedetecting] = useState(false);
+
+  const copy = async () => {
+    if (!cliCommand) return;
+    try {
+      await navigator.clipboard.writeText(cliCommand);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      // clipboard unavailable — the command is visible verbatim
+    }
+  };
+
+  const redetect = async () => {
+    if (!onRedetect) return;
+    setRedetecting(true);
+    try {
+      await onRedetect();
+    } finally {
+      setRedetecting(false);
+    }
+  };
+
   return (
-    m.includes("authentication failed") ||
-    m.includes("unauthorized") ||
-    m.includes("401") ||
-    m.includes("403")
+    <div
+      role="alert"
+      className="animate-in space-y-2 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-[13px] text-danger"
+    >
+      <p>
+        {t("settings.cli_error_not_logged_in", {
+          name,
+          command: cliCommand,
+        })}
+      </p>
+      {error && (
+        <p className="font-mono text-[11px] text-danger/80">{error}</p>
+      )}
+      <div className="flex flex-wrap items-center gap-2 pt-0.5">
+        {cliCommand && (
+          <button
+            type="button"
+            onClick={copy}
+            className={cn(
+              "rounded-md border px-2.5 py-1.5 text-[12px] font-medium transition no-drag",
+              "focus:outline-none focus-visible:ring-conclave",
+              copied
+                ? "border-ok/40 bg-ok/10 text-ok"
+                : "border-danger/40 bg-bg text-danger hover:bg-danger/15",
+            )}
+          >
+            {copied
+              ? t("settings.cli_setup_copy_command_copied")
+              : t("settings.cli_error_copy_command")}
+          </button>
+        )}
+        {onRedetect && (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={redetect}
+            loading={redetecting}
+          >
+            {t("settings.cli_error_redetect")}
+          </Button>
+        )}
+      </div>
+    </div>
   );
 }
 
-// Error banner shown in the AI card. When the active provider is one
-// whose failure shape we recognise (CLI proxy that lost auth,
-// unofficial OAuth that was revoked, etc.) and the error looks like
-// an auth failure, we replace the raw error with a friendlier prompt
-// that points the user at the right next step.
+/**
+ * Status-driven banner shown beneath the active-provider card.
+ * Replaces the old substring-sniffing version which matched
+ * "authentication failed" against an opaque error string from
+ * `ProviderError::Display` — that approach broke when the wire shape
+ * changed and silently kept the banner green for non-auth failures.
+ *
+ * The new version is driven by the typed `ProviderInfo.status` from
+ * the backend probe + the (optional) `error` from a recent test/action.
+ * It returns `null` when there's nothing to surface, so it can be
+ * mounted unconditionally without leaving an empty card.
+ */
 function ProviderErrorBanner({
   error,
-  activeProviderId,
-  activeProviderName,
+  activeProvider,
+  onPickProvider,
+  onRedetectCli,
 }: {
-  error: string;
-  activeProviderId: string | null;
-  activeProviderName: string | null;
+  error: string | null;
+  activeProvider: ProviderInfo | null;
+  onPickProvider?: (id: string) => void;
+  onRedetectCli?: () => Promise<void> | void;
 }) {
   const { t } = useTranslation();
-  const isAuth = isAuthError(error);
-  const showOAuthHint =
-    activeProviderId !== null &&
-    activeProviderName !== null &&
-    isSubscriptionOAuth(activeProviderId) &&
-    isAuth;
-  const showCliHint =
-    activeProviderId !== null &&
-    activeProviderName !== null &&
-    isLocalCli(activeProviderId) &&
-    isAuth;
-  const cliCommand =
-    activeProviderId === "claude-cli"
-      ? "claude auth login"
-      : activeProviderId === "codex-cli"
-        ? "codex login"
-        : "";
+
+  // Nothing to say: no active provider AND no error.
+  if (!activeProvider && !error) return null;
+
+  // No active provider but we have an error (rare — usually means
+  // listProviders itself failed). Surface the raw text.
+  if (!activeProvider) {
+    return (
+      <div
+        role="alert"
+        className="animate-in rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-[13px] text-danger"
+      >
+        {error}
+      </div>
+    );
+  }
+
+  const name = metaFor(activeProvider.id).name;
+  const status = activeProvider.status;
+  const isOAuth = isSubscriptionOAuth(activeProvider.id);
+  const isCli = isLocalCli(activeProvider.id);
+  const apiKeyAlt = apiKeyAlternativeFor(activeProvider.id);
+
+  // Status === "expired": OAuth revoked or CLI logged out. Show the
+  // path-specific recovery guidance + the recommended fallback CTA.
+  if (status === "expired" && isOAuth) {
+    return (
+      <div
+        role="alert"
+        className="animate-in space-y-2 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-[13px] text-danger"
+      >
+        <p>{t("settings.oauth_error_revoked", { name })}</p>
+        {error && (
+          <p className="font-mono text-[11px] text-danger/80">{error}</p>
+        )}
+        {apiKeyAlt && onPickProvider && (
+          <div className="pt-1">
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() => onPickProvider(apiKeyAlt)}
+            >
+              {t("settings.switch_to_api_key_cta")}
+            </Button>
+          </div>
+        )}
+      </div>
+    );
+  }
+  if (status === "expired" && isCli) {
+    const cliId = activeProvider.id as "claude-cli" | "codex-cli";
+    const cliCommand = CLI_LOGIN_COMMAND[cliId] ?? "";
+    return (
+      <CliExpiredBanner
+        name={name}
+        cliCommand={cliCommand}
+        error={error}
+        onRedetect={onRedetectCli}
+      />
+    );
+  }
+  // Status === "unreachable": transient transport/timeout. Amber
+  // tone (not danger) — the credential is still good, just the
+  // upstream isn't answering right now.
+  if (status === "unreachable") {
+    return (
+      <div
+        role="alert"
+        className="animate-in space-y-1 rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-[13px] text-warn"
+      >
+        <p>{t("settings.status_unreachable_caption", { name })}</p>
+        {error && (
+          <p className="font-mono text-[11px] text-warn/80">{error}</p>
+        )}
+      </div>
+    );
+  }
+
+  // Status is "ready" (or anything else we don't surface here) — fall
+  // back to plain error rendering if the user just hit something.
+  if (!error) return null;
   return (
     <div
       role="alert"
       className="animate-in rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-[13px] text-danger"
     >
-      {showCliHint ? (
-        <div className="space-y-1">
-          <p>
-            {t("settings.cli_error_not_logged_in", {
-              name: activeProviderName,
-              command: cliCommand,
-            })}
-          </p>
-          <p className="font-mono text-[11px] text-danger/80">{error}</p>
-        </div>
-      ) : showOAuthHint ? (
-        <div className="space-y-1">
-          <p>{t("settings.oauth_error_revoked", { name: activeProviderName })}</p>
-          <p className="font-mono text-[11px] text-danger/80">{error}</p>
-        </div>
-      ) : (
-        error
-      )}
+      {error}
     </div>
   );
 }

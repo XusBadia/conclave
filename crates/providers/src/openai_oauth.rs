@@ -13,7 +13,9 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use tracing::{debug, trace, warn};
 
 use crate::error::ProviderError;
 use crate::types::{
@@ -175,6 +177,64 @@ impl OpenAIOAuthProvider {
         }
         Ok(token)
     }
+
+    /// Lightweight reachability + auth check. Sends a 1-token request to
+    /// the same `/codex/responses` endpoint `complete()` uses, but bails
+    /// out as soon as the HTTP status arrives — we don't care about the
+    /// SSE body. Returns `Ok(())` when the bearer token is accepted,
+    /// `Err(ProviderError::Auth)` on 401/403, `Err(ProviderError::Network)`
+    /// on transport failures.
+    ///
+    /// The cost is one input token of the user's ChatGPT quota; the
+    /// commands-layer cache keeps repeated UI refreshes from spamming
+    /// this. We hit the *real* endpoint (not a hypothetical health
+    /// route) so a green probe directly implies a green committee run.
+    pub async fn probe(&self) -> Result<(), ProviderError> {
+        let token = self.current_token()?;
+        let body = ResponseRequest {
+            model: self.default_model.clone(),
+            instructions: "ping".to_owned(),
+            input: vec![ResponseInput {
+                kind: "message",
+                role: "user",
+                content: vec![ResponseContent {
+                    kind: "input_text".to_owned(),
+                    text: "ping".to_owned(),
+                    annotations: Vec::new(),
+                }],
+            }],
+            store: false,
+            stream: true,
+            tools: Vec::new(),
+        };
+        let url = format!("{}/codex/responses", self.base_url);
+        let resp = self
+            .client
+            .post(&url)
+            .bearer_auth(&token)
+            .header("content-type", "application/json")
+            .header("accept", "text/event-stream")
+            .header("OpenAI-Beta", "responses=v1")
+            .header("originator", ORIGINATOR)
+            .header("session_id", uuid_v4())
+            .header("user-agent", USER_AGENT)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ProviderError::Network(e.to_string()))?;
+        let status = resp.status();
+        if status.as_u16() == 401 || status.as_u16() == 403 {
+            return Err(ProviderError::Auth);
+        }
+        if !status.is_success() {
+            let body_text = resp.text().await.unwrap_or_default();
+            return Err(ProviderError::Other(format!("{status}: {body_text}")));
+        }
+        // Drop the response without consuming the SSE body — the
+        // connection closes cleanly when the handle goes out of scope.
+        drop(resp);
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -309,13 +369,94 @@ impl LlmProvider for OpenAIOAuthProvider {
             return Err(ProviderError::BadRequest(format!("{status}: {body_text}")));
         }
 
-        // Accumulate the SSE stream into a single CompletionResponse.
-        let body_text = resp
-            .text()
-            .await
-            .map_err(|e| ProviderError::Other(format!("openai-oauth read: {e}")))?;
-        let aggregated = aggregate_sse(&body_text)
-            .map_err(|e| ProviderError::Other(format!("openai-oauth parse: {e}")))?;
+        let content_type = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_owned();
+        let content_length = resp.content_length();
+        debug!(
+            target: "conclave_providers::openai_oauth",
+            status = %resp.status(),
+            content_type = %content_type,
+            content_length = ?content_length,
+            "openai-oauth response headers received"
+        );
+
+        // Consume the SSE body chunk-by-chunk via `bytes_stream` instead of
+        // `resp.text().await`. The Codex Responses endpoint can drop the
+        // connection mid-stream on the finalize phase (long output) — when
+        // that happens the raw `text()` call returns reqwest's opaque
+        // "error decoding response body" with no way to tell whether we
+        // already had enough events to answer. Streaming lets us hold on
+        // to whatever arrived, log byte/event counts, and still recover
+        // if the terminal `response.completed` event made it through.
+        let mut byte_buf: Vec<u8> = Vec::with_capacity(8 * 1024);
+        let mut stream = resp.bytes_stream();
+        let mut interrupt_err: Option<reqwest::Error> = None;
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(bytes) => {
+                    byte_buf.extend_from_slice(&bytes);
+                    trace!(
+                        target: "conclave_providers::openai_oauth",
+                        chunk_bytes = bytes.len(),
+                        total_bytes = byte_buf.len(),
+                        "openai-oauth chunk"
+                    );
+                }
+                Err(e) => {
+                    interrupt_err = Some(e);
+                    break;
+                }
+            }
+        }
+
+        // SSE is always UTF-8 per the spec; lossy conversion only kicks in
+        // on truncation at a multi-byte boundary, which we'd flag as an
+        // interrupted stream anyway.
+        let body_text = String::from_utf8_lossy(&byte_buf).into_owned();
+        let parse_result = aggregate_sse(&body_text);
+
+        if let Some(err) = interrupt_err {
+            let events_seen = parse_result.as_ref().map(|a| a.events_seen).unwrap_or(0);
+            let saw_terminal = parse_result.as_ref().is_ok_and(|a| a.saw_terminal_event);
+            if saw_terminal {
+                warn!(
+                    target: "conclave_providers::openai_oauth",
+                    bytes = byte_buf.len(),
+                    events = events_seen,
+                    err = %err,
+                    "openai-oauth stream interrupted after terminal event; returning aggregated response"
+                );
+            } else {
+                warn!(
+                    target: "conclave_providers::openai_oauth",
+                    bytes = byte_buf.len(),
+                    events = events_seen,
+                    err = %err,
+                    "openai-oauth stream interrupted before terminal event"
+                );
+                return Err(ProviderError::Network(format!(
+                    "openai-oauth stream interrupted bytes={} events={}: {}",
+                    byte_buf.len(),
+                    events_seen,
+                    err
+                )));
+            }
+        }
+
+        let aggregated =
+            parse_result.map_err(|e| ProviderError::Other(format!("openai-oauth parse: {e}")))?;
+        debug!(
+            target: "conclave_providers::openai_oauth",
+            bytes = byte_buf.len(),
+            events = aggregated.events_seen,
+            input_tokens = aggregated.input_tokens,
+            output_tokens = aggregated.output_tokens,
+            "openai-oauth response aggregated"
+        );
 
         Ok(CompletionResponse {
             text: aggregated.text,
@@ -340,6 +481,13 @@ struct AggregatedResponse {
     output_tokens: u32,
     model: Option<String>,
     web_citations: Vec<WebCitation>,
+    /// Number of SSE events whose JSON payload was successfully parsed.
+    /// Used by the caller for stream-interruption diagnostics.
+    events_seen: u32,
+    /// `true` if we processed a `response.completed` or `response.done`
+    /// event. When the stream is cut off after this, we still have a
+    /// usable response and can return success.
+    saw_terminal_event: bool,
 }
 
 fn aggregate_sse(body: &str) -> Result<AggregatedResponse, String> {
@@ -349,6 +497,8 @@ fn aggregate_sse(body: &str) -> Result<AggregatedResponse, String> {
     let mut model: Option<String> = None;
     let mut web_citations: Vec<WebCitation> = Vec::new();
     let mut saw_any_event = false;
+    let mut events_seen: u32 = 0;
+    let mut saw_terminal_event = false;
 
     // SSE events are separated by blank lines. Within an event, "data:"
     // lines carry the JSON payload — we ignore "event:" hints because the
@@ -368,8 +518,12 @@ fn aggregate_sse(body: &str) -> Result<AggregatedResponse, String> {
         }
         saw_any_event = true;
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload) else {
+            // Truncated JSON at the tail of an interrupted stream lands
+            // here — `saw_any_event` stays true but we don't bump the
+            // parsed counter.
             continue;
         };
+        events_seen = events_seen.saturating_add(1);
         let ty = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
         match ty {
             "response.output_text.delta" => {
@@ -385,6 +539,7 @@ fn aggregate_sse(body: &str) -> Result<AggregatedResponse, String> {
                 }
             }
             "response.completed" | "response.done" => {
+                saw_terminal_event = true;
                 if let Some(response) = value.get("response") {
                     if let Ok(env) = serde_json::from_value::<ResponseEnvelope>(response.clone()) {
                         let text = env
@@ -431,6 +586,8 @@ fn aggregate_sse(body: &str) -> Result<AggregatedResponse, String> {
         output_tokens: usage.output_tokens,
         model,
         web_citations,
+        events_seen,
+        saw_terminal_event,
     })
 }
 
@@ -731,6 +888,8 @@ data: [DONE]\n\
         assert_eq!(agg.input_tokens, 42);
         assert_eq!(agg.output_tokens, 7);
         assert_eq!(agg.model.as_deref(), Some("gpt-5.5"));
+        assert!(agg.saw_terminal_event);
+        assert_eq!(agg.events_seen, 3);
     }
 
     #[test]
@@ -744,6 +903,27 @@ data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\
         assert_eq!(agg.text, "partial");
         assert_eq!(agg.input_tokens, 0);
         assert!(agg.model.is_none());
+        assert!(!agg.saw_terminal_event);
+        assert_eq!(agg.events_seen, 1);
+    }
+
+    #[test]
+    fn aggregate_sse_handles_truncated_event_at_tail() {
+        // Simulates a stream cut off mid-event: two complete deltas followed
+        // by a third event whose JSON payload is truncated. The caller
+        // (complete()) uses `events_seen` + `saw_terminal_event` to decide
+        // whether the interruption is recoverable.
+        let sse = "\
+data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hel\"}\n\
+\n\
+data: {\"type\":\"response.output_text.delta\",\"delta\":\"lo\"}\n\
+\n\
+data: {\"type\":\"response.output_text.delt";
+        let agg = aggregate_sse(sse).unwrap();
+        assert_eq!(agg.text, "Hello");
+        assert!(!agg.saw_terminal_event);
+        // Two complete events parsed; the truncated tail is skipped.
+        assert_eq!(agg.events_seen, 2);
     }
 
     #[test]

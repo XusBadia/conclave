@@ -171,6 +171,50 @@ impl AnthropicOAuthProvider {
         Ok(credentials.access_token)
     }
 
+    /// Lightweight reachability + auth check. Sends a 1-token request
+    /// to `/v1/messages` and inspects the HTTP status — returns
+    /// `Ok(())` when the bearer is accepted, `Err(Auth)` on 401/403,
+    /// `Err(Network)` on transport failures. We reuse `ensure_token`
+    /// so an expired access token gets refreshed before the probe;
+    /// only a *revoked* refresh token (or a missing credential) ends
+    /// up here as `Auth`.
+    pub async fn probe(&self) -> Result<(), ProviderError> {
+        let access_token = self.ensure_token().await?;
+        let body = OauthRequest {
+            model: self.default_model.clone(),
+            messages: vec![OauthMessage {
+                role: "user",
+                content: OauthContentField::Text("ping".to_owned()),
+            }],
+            system: None,
+            max_tokens: 1,
+            temperature: None,
+        };
+        let url = format!("{}/v1/messages", self.base_url);
+        let resp = self
+            .client
+            .post(&url)
+            .header("authorization", format!("Bearer {access_token}"))
+            .header("anthropic-version", "2023-06-01")
+            .header("anthropic-beta", ANTHROPIC_BETA)
+            .header("user-agent", USER_AGENT)
+            .header("content-type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ProviderError::Network(e.to_string()))?;
+        let status = resp.status();
+        if status.as_u16() == 401 || status.as_u16() == 403 {
+            return Err(ProviderError::Auth);
+        }
+        if !status.is_success() {
+            let body_text = resp.text().await.unwrap_or_default();
+            return Err(ProviderError::Other(format!("{status}: {body_text}")));
+        }
+        drop(resp);
+        Ok(())
+    }
+
     async fn refresh(&self, refresh_token: &str) -> Result<OAuthCredentials, ProviderError> {
         #[derive(Serialize)]
         struct Body<'a> {

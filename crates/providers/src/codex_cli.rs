@@ -62,7 +62,7 @@
 //!   nominal default reported to the UI is `gpt-5`.
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::RwLock;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -118,18 +118,26 @@ impl CodexCliProvider {
     /// Construct with cached resolution of `codex` in `$PATH`.
     pub fn new() -> Self {
         Self {
-            binary: detect_cached().cloned(),
+            binary: detect_cached(),
         }
     }
 
     /// Process-wide cached resolution of the `codex` binary path.
-    pub fn binary_path() -> Option<&'static PathBuf> {
+    pub fn binary_path() -> Option<PathBuf> {
         detect_cached()
     }
 
     /// `true` when `codex` is present on `$PATH`.
     pub fn is_installed() -> bool {
         detect_cached().is_some()
+    }
+
+    /// Invalidate the memoised binary path so the next call re-walks
+    /// `$PATH`. Mirror of [`crate::ClaudeCliProvider::refresh_binary_cache`].
+    pub fn refresh_binary_cache() {
+        if let Ok(mut guard) = CACHED.write() {
+            *guard = BinaryCache::Unprobed;
+        }
     }
 
     /// Best-effort check that the user has run `codex login`. Codex
@@ -150,9 +158,32 @@ impl CodexCliProvider {
     }
 }
 
-fn detect_cached() -> Option<&'static PathBuf> {
-    static CACHED: OnceLock<Option<PathBuf>> = OnceLock::new();
-    CACHED.get_or_init(|| which::which("codex").ok()).as_ref()
+/// Three states for the memoised `which::which` result. Mirror of
+/// [`crate::claude_cli`]; see that module for rationale.
+enum BinaryCache {
+    Unprobed,
+    Missing,
+    Found(PathBuf),
+}
+
+static CACHED: RwLock<BinaryCache> = RwLock::new(BinaryCache::Unprobed);
+
+fn detect_cached() -> Option<PathBuf> {
+    if let Ok(guard) = CACHED.read() {
+        match &*guard {
+            BinaryCache::Unprobed => {}
+            BinaryCache::Missing => return None,
+            BinaryCache::Found(p) => return Some(p.clone()),
+        }
+    }
+    let resolved = which::which("codex").ok();
+    if let Ok(mut guard) = CACHED.write() {
+        *guard = match &resolved {
+            Some(p) => BinaryCache::Found(p.clone()),
+            None => BinaryCache::Missing,
+        };
+    }
+    resolved
 }
 
 fn codex_auth_path() -> Option<PathBuf> {

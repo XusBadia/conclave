@@ -147,22 +147,17 @@ export function isClinicalEligible(id: string): boolean {
 // must filter for clinical-eligibility first when they need that.
 //
 // Preference order:
-//   1. `configured && available` — the user has actively connected this
-//      provider AND its backend is reachable right now. This is what
-//      makes a signed-in OpenAI OAuth account win over an offline
-//      Ollama instance.
-//   2. `available` — anything reachable (e.g. Ollama running without
-//      auth, the developer-mode local-only case).
-//   3. The first entry in the list — pure fallback so the form always
+//   1. `status === "ready"` — the credential is present AND (for
+//      OAuth / Ollama) the probe just succeeded. This is what makes a
+//      signed-in ChatGPT account win over an offline Ollama instance.
+//   2. First entry in the list — pure fallback so the form always
 //      has *some* selection; the user will hit a clean error from
 //      `ensure_provider_ready` when they try to run.
 export function preferredProvider(
-  providers: { id: string; configured?: boolean; available?: boolean }[],
+  providers: { id: string; status?: string }[],
 ): string | null {
-  const ready = providers.find((p) => p.configured && p.available);
+  const ready = providers.find((p) => p.status === "ready");
   if (ready) return ready.id;
-  const avail = providers.find((p) => p.available);
-  if (avail) return avail.id;
   return providers[0]?.id ?? null;
 }
 
@@ -218,8 +213,7 @@ export type PickerGroup = {
 
 type GroupInputProvider = {
   id: string;
-  configured?: boolean;
-  available?: boolean;
+  status?: string;
 };
 
 /**
@@ -229,7 +223,7 @@ type GroupInputProvider = {
  */
 export function buildPickerGroups(providers: GroupInputProvider[]): PickerGroup[] {
   const cliAvailable = providers.some(
-    (p) => isLocalCli(p.id) && p.configured && p.available,
+    (p) => isLocalCli(p.id) && p.status === "ready",
   );
   const cliGroup: PickerGroup = {
     titleKey: "settings.picker_group_cli",
@@ -260,7 +254,7 @@ export function buildPickerGroups(providers: GroupInputProvider[]): PickerGroup[
  * (or sign out) outside of Conclave during the session.
  */
 export function shouldRecommendCli(providers: GroupInputProvider[]): boolean {
-  return providers.some((p) => isLocalCli(p.id) && p.configured && p.available);
+  return providers.some((p) => isLocalCli(p.id) && p.status === "ready");
 }
 
 // Convenience: which provider ids use the (unofficial) subscription
@@ -278,3 +272,20 @@ export function isSubscriptionOAuth(id: string): boolean {
 export function isLocalCli(id: string): boolean {
   return id === "claude-cli" || id === "codex-cli";
 }
+
+/**
+ * Vendor-documented install pages for the two CLI providers. Surfaced
+ * on the "Volver a detectar" panel as the target of the
+ * "Open install page" button. Kept here (instead of i18n) because the
+ * URL is the same across locales and we want a single source of truth.
+ */
+export const CLI_INSTALL_URL: Record<"claude-cli" | "codex-cli", string> = {
+  "claude-cli": "https://docs.claude.com/en/docs/agents/claude-code/overview",
+  "codex-cli": "https://github.com/openai/codex",
+};
+
+/** The exact terminal command to log into each CLI. */
+export const CLI_LOGIN_COMMAND: Record<"claude-cli" | "codex-cli", string> = {
+  "claude-cli": "claude auth login",
+  "codex-cli": "codex login",
+};

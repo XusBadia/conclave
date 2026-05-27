@@ -9,6 +9,9 @@ import {
 
 import { cn } from "../lib/cn";
 import { Logo } from "./Logo";
+import { ProviderStatusPill } from "./ProviderStatusPill";
+import { metaFor } from "../lib/providers";
+import type { ProviderInfo } from "../lib/ipc";
 
 export type Section = "workspaces" | "knowledge" | "cases" | "settings";
 
@@ -25,10 +28,18 @@ export function Sidebar({
   active,
   onSelect,
   workspaceLabel,
+  activeProvider,
+  providersLoaded,
 }: {
   active: Section;
   onSelect: (s: Section) => void;
   workspaceLabel: string | null;
+  activeProvider: ProviderInfo | null;
+  /** `true` once the first `listProviders()` round-trip has resolved.
+   *  Used to decide whether the absence of an active provider means
+   *  "still loading" (don't render the empty-state CTA) or "no provider
+   *  configured" (render the amber CTA). */
+  providersLoaded: boolean;
 }) {
   const { t } = useTranslation();
   return (
@@ -50,6 +61,51 @@ export function Sidebar({
           <span className="h-1.5 w-1.5 rounded-full bg-ok" />
           <span className="truncate">{workspaceLabel}</span>
         </div>
+      )}
+
+      {/* IA status row — separate from the workspace dot above so the
+          existing "workspace active" meaning isn't repurposed silently.
+          New surface that mirrors the title bar; if it doesn't fit
+          we still have the title bar pill as a fallback. */}
+      {activeProvider ? (
+        <div className="mx-3 mb-3 flex items-center gap-2 rounded-md border border-border-subtle bg-bg px-2.5 py-1.5 text-[11.5px] text-ink-dim">
+          <span
+            aria-hidden
+            className="grid h-4 w-4 shrink-0 place-content-center rounded bg-slate-400/10 text-[9px] font-semibold text-ink-dim ring-1 ring-border-subtle"
+          >
+            {metaFor(activeProvider.id).monogram}
+          </span>
+          <span className="min-w-0 flex-1 truncate">
+            {metaFor(activeProvider.id).name}
+          </span>
+          <ProviderStatusPill status={activeProvider.status} size="sm" />
+        </div>
+      ) : (
+        providersLoaded && (
+          // Empty-state CTA. Without this the user can land in
+          // Cases/Knowledge with nothing configured and no signal that
+          // they need to set up a provider — they'd just see "no
+          // results" or generic errors when they try to run anything.
+          // Click routes straight to the only place that fixes it.
+          <button
+            type="button"
+            onClick={() => onSelect("settings")}
+            className={cn(
+              "mx-3 mb-3 flex items-center gap-2 rounded-md border border-warn/40 bg-warn/10 px-2.5 py-1.5 text-left text-[11.5px] text-warn transition no-drag",
+              "hover:bg-warn/15 focus:outline-none focus-visible:ring-conclave",
+              active === "settings" && "ring-1 ring-warn/60",
+            )}
+            aria-label={t("settings.sidebar_no_provider_cta")}
+            title={t("settings.sidebar_no_provider_hint")}
+          >
+            <span className="relative grid h-4 w-4 shrink-0 place-content-center">
+              <span className="absolute inset-0 m-auto h-1.5 w-1.5 rounded-full bg-warn animate-pulseDot" />
+            </span>
+            <span className="min-w-0 flex-1 truncate font-medium">
+              {t("settings.sidebar_no_provider_cta")}
+            </span>
+          </button>
+        )
       )}
 
       <nav className="mt-2 flex flex-1 flex-col gap-0.5 px-2">

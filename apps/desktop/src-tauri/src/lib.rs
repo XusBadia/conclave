@@ -43,6 +43,7 @@
 
 mod batch;
 mod commands;
+mod path_fix;
 mod state;
 
 use tauri::Manager;
@@ -55,6 +56,11 @@ pub fn run() {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .try_init();
+
+    // Must run before any provider construction — `crates/providers`
+    // caches `which::which` results process-wide, so a late PATH fix
+    // would not be observed by the CLI detection in Settings.
+    path_fix::augment_path_for_gui();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -92,6 +98,8 @@ pub fn run() {
             commands::set_provider_key,
             commands::test_provider,
             commands::remove_provider_key,
+            commands::cli_diagnostics,
+            commands::redetect_cli_binaries,
             commands::privacy_settings,
             commands::set_privacy_settings,
             commands::oauth_anthropic_start,
