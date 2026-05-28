@@ -140,21 +140,37 @@ impl CodexCliProvider {
         }
     }
 
-    /// Best-effort check that the user has run `codex login`. Codex
-    /// does not document a `codex auth status` subcommand, so we
-    /// fall back to checking for the credentials file the login
-    /// flow writes. Returns `false` if `$HOME` is not set, the file
-    /// is missing, or it is empty.
+    /// Probe `codex login status` — the vendor-documented way to
+    /// check whether the user has an active session ("Show login
+    /// status"; exits 0 when logged in). Falls back to inspecting
+    /// `~/.codex/auth.json` if the subprocess fails to spawn for any
+    /// reason (very old CLIs, sandboxed exec, etc.).
+    ///
+    /// Replaces an earlier file-only check that broke in the bundled
+    /// `.app` on some hosts — `is_ok_and(|m| m.is_file())` returned
+    /// `false` even when the file existed and was readable from a
+    /// regular shell, which left the user stuck in `LoginRequired`
+    /// after a successful `codex login`.
     pub async fn is_logged_in() -> bool {
-        if !Self::is_installed() {
-            return false;
-        }
-        let Some(path) = codex_auth_path() else {
+        let Some(bin) = detect_cached() else {
             return false;
         };
-        tokio::fs::metadata(&path)
-            .await
-            .is_ok_and(|m| m.is_file() && m.len() > 0)
+        let probe = Command::new(&bin)
+            .args(["login", "status"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .output();
+        match timeout(Duration::from_secs(10), probe).await {
+            Ok(Ok(out)) => out.status.success(),
+            // Subprocess spawn / wait errored — fall back to the
+            // file existence check so we don't regress hosts where
+            // the probe is the broken path.
+            _ => codex_auth_path()
+                .map(|p| std::fs::metadata(&p).is_ok_and(|m| m.is_file() && m.len() > 0))
+                .unwrap_or(false),
+        }
     }
 }
 
