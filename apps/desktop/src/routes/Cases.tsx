@@ -429,6 +429,9 @@ export function CasesPage({
    */
   const [batchTotal, setBatchTotal] = useState<number | null>(null);
   const [batchDone, setBatchDone] = useState(0);
+  /** True while a batch-wide cancel is in flight, so the banner button
+   *  reads "Cancelling batch…" and disables. Cleared on `batch_done`. */
+  const [batchCancelling, setBatchCancelling] = useState(false);
   /** Wall-clock ms when the current batch began — used to render an
    *  elapsed chip in the banner. Set by the first CaseQueued/CaseStarted
    *  event, cleared on BatchDone. */
@@ -477,6 +480,11 @@ export function CasesPage({
     null,
   );
 
+  /** Pending coalesced refresh (see `scheduleRefresh`). A batch cancel
+   *  skips every queued case near-instantly; without coalescing we'd
+   *  fire one `listCases` per skipped case. */
+  const refreshTimerRef = useRef<number | null>(null);
+
   const refresh = async () => {
     setLoading(true);
     setError(null);
@@ -524,6 +532,17 @@ export function CasesPage({
     }
   };
 
+  /** Coalesce a burst of batch events into a single trailing refresh.
+   *  Used by the per-case batch handlers; `batch_done` refreshes
+   *  immediately (and cancels any pending timer). */
+  const scheduleRefresh = () => {
+    if (refreshTimerRef.current !== null) return; // already queued
+    refreshTimerRef.current = window.setTimeout(() => {
+      refreshTimerRef.current = null;
+      void refresh();
+    }, 120);
+  };
+
   useEffect(() => {
     refresh();
     setView("list");
@@ -544,6 +563,7 @@ export function CasesPage({
     setRunningCaseIds(new Set());
     setBatchTotal(null);
     setBatchDone(0);
+    setBatchCancelling(false);
     setBatchStartedAtMs(null);
     setBatchFirstCaseMs(null);
     setCasePhases(new Map());
@@ -699,7 +719,7 @@ export function CasesPage({
             });
             return next;
           });
-          void refresh();
+          scheduleRefresh();
         } else if (ev.kind === "case_failed") {
           setBatchDone((d) => d + 1);
           // Drop phase tracking so the failed row doesn't display a
@@ -708,19 +728,30 @@ export function CasesPage({
             if (prev.size === 0) return prev;
             return new Map();
           });
-          void refresh();
+          scheduleRefresh();
         } else if (ev.kind === "case_cancelled") {
           setBatchDone((d) => d + 1);
           setCasePhases((prev) => {
             if (prev.size === 0) return prev;
             return new Map();
           });
+          // Re-list so the cancelled row reflects its terminal `failed`
+          // status — that's what clears the stuck "Cancelling…" chip
+          // (the event carries no case_id, so we lean on refresh's
+          // status-based `rowBusy` cleanup).
+          scheduleRefresh();
         } else if (ev.kind === "batch_done") {
           setBatchTotal(null);
           setBatchDone(0);
           setBatchStartedAtMs(null);
           setBatchFirstCaseMs(null);
+          setBatchCancelling(false);
           setCasePhases(new Map());
+          // Terminal event — refresh now and drop any coalesced refresh.
+          if (refreshTimerRef.current !== null) {
+            window.clearTimeout(refreshTimerRef.current);
+            refreshTimerRef.current = null;
+          }
           void refresh();
         }
       });
@@ -776,6 +807,10 @@ export function CasesPage({
       unlistenDrafted?.();
       unlistenBatch?.();
       unlistenDelib?.();
+      if (refreshTimerRef.current !== null) {
+        window.clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace.id]);
@@ -919,6 +954,14 @@ export function CasesPage({
       // refresh.
     }
   }, [workspace.id]);
+
+  /** Cancel the entire batch: skips queued cases AND aborts the in-flight
+   *  one (the backend flips every per-case flag). The banner button reads
+   *  "Cancelling batch…" until `batch_done` clears `batchCancelling`. */
+  const onCancelAll = useCallback(() => {
+    setBatchCancelling(true);
+    void ipc.batchCancel().catch(() => setBatchCancelling(false));
+  }, []);
 
   /** Reset a failed row to draft and re-run via the current provider. */
   const onRetryRow = useCallback(
@@ -1100,7 +1143,8 @@ export function CasesPage({
           startedAtMs={batchStartedAtMs}
           firstCaseMs={batchFirstCaseMs}
           tickMs={tickMs}
-          onCancelAll={() => void ipc.batchCancel()}
+          cancelling={batchCancelling}
+          onCancelAll={onCancelAll}
         />
       )}
       <Card>
@@ -4563,6 +4607,7 @@ function BatchProgressBanner({
   startedAtMs,
   firstCaseMs,
   tickMs,
+  cancelling,
   onCancelAll,
 }: {
   done: number;
@@ -4573,6 +4618,8 @@ function BatchProgressBanner({
    *  a re-render). Without it the elapsed chip would stay frozen until
    *  another React update arrived. */
   tickMs: number;
+  /** True while a batch-wide cancel is in flight. */
+  cancelling: boolean;
   onCancelAll: () => void;
 }) {
   void tickMs;
@@ -4601,9 +4648,13 @@ function BatchProgressBanner({
       <button
         type="button"
         onClick={onCancelAll}
-        className="ml-auto rounded-md border border-accent/30 px-2 py-0.5 text-[11.5px] text-accent transition hover:bg-accent/10 focus:outline-none focus-visible:ring-conclave"
+        disabled={cancelling}
+        className={cn(
+          "ml-auto rounded-md border border-accent/30 px-2 py-0.5 text-[11.5px] text-accent transition hover:bg-accent/10 focus:outline-none focus-visible:ring-conclave",
+          cancelling && "cursor-default opacity-60 hover:bg-transparent",
+        )}
       >
-        {t("cases.batch_cancel_all")}
+        {t(cancelling ? "cases.batch_cancelling" : "cases.batch_cancel_all")}
       </button>
     </div>
   );

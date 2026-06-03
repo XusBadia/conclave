@@ -3333,10 +3333,18 @@ pub async fn run_batch_cases(
 }
 
 #[tauri::command]
-pub fn batch_cancel(state: State<'_, AppState>) -> CommandResult<()> {
+pub async fn batch_cancel(state: State<'_, AppState>) -> CommandResult<()> {
     state
         .batch_cancel
         .store(true, std::sync::atomic::Ordering::SeqCst);
+    // The batch flag only short-circuits cases that haven't started yet
+    // (see the `cancel.load()` guard in `run_batch_cases`). Flip every
+    // registered per-case flag too so the in-flight deliberative case
+    // aborts at its next phase boundary — same mechanism as `cancel_case`.
+    let cancels = state.case_cancels.lock().await;
+    for flag in cancels.values() {
+        flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
     Ok(())
 }
 

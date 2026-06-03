@@ -131,6 +131,7 @@
     "batch_progress_eta": "ETA ≈ {{eta}}",
     "batch_progress_elapsed": "{{elapsed}} transcurrido",
     "batch_cancel_all": "Cancelar lote",
+    "batch_cancelling": "Cancelando lote…",
     "running_phase_label": "{{phase}} · {{elapsed}}",
     "row_cancel_running": "Cancelar caso",
     "row_retry_failed": "Reintentar",
