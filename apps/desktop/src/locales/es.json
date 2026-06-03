@@ -194,8 +194,50 @@
     "modify": "Marcar como modificado",
     "reject": "Rechazar",
     "feedback_recorded": "Feedback «{{kind}}» registrado.",
-    "purge_phi": "Purgar PHI",
-    "purge_attachments": "Purgar adjuntos crudos",
+    "purge_phi": "Borrar texto del paciente",
+    "purge_phi_confirm_title": "¿Borrar el texto del paciente?",
+    "purge_phi_removed": "Se elimina: el texto clínico crudo que pegaste al crear el caso.",
+    "purge_phi_kept": "Se conserva: la versión desidentificada usada en la deliberación, el veredicto y las trazas de auditoría.",
+    "purge_phi_irreversible": "Esta acción no se puede deshacer.",
+    "purge_phi_confirm_action": "Borrar texto",
+    "purge_attachments": "Borrar copias de adjuntos",
+    "purge_attachments_confirm_title": "¿Borrar las copias de los adjuntos?",
+    "purge_attachments_removed": "Se elimina: el archivo binario guardado en el espacio del caso.",
+    "purge_attachments_kept": "Se conserva: nombre, hash, texto extraído desidentificado y trazas del veredicto.",
+    "purge_attachments_original_safe": "Tu archivo original en disco: intacto.",
+    "purge_attachments_confirm_action": "Borrar copias",
+    "export_pdf": "Exportar PDF",
+    "export_pdf_saved": "PDF guardado en {{path}}",
+    "pdf": {
+      "title": "Resolución del caso clínico",
+      "filename_prefix": "Conclave",
+      "metadata": {
+        "case_date": "Fecha del caso",
+        "case_id": "ID del caso",
+        "model": "Modelo",
+        "status": "Estado"
+      },
+      "status": {
+        "draft": "Borrador",
+        "review_ready": "Pendiente de revisión",
+        "finalized": "Finalizado",
+        "finalized_legacy": "Finalizado (legado)",
+        "failed": "Erróneo"
+      },
+      "certainty": {
+        "high": "Confianza alta",
+        "medium": "Confianza media",
+        "low": "Confianza baja"
+      },
+      "review": "Revisión humana",
+      "review_decision": {
+        "accept": "Aceptada",
+        "modify": "Modificada",
+        "reject": "Rechazada"
+      },
+      "footer_generated": "Generado el {{date}}",
+      "footer_page": "Página {{page}} de {{total}}"
+    },
     "review_finalized": "Revisión finalizada: {{decision}} · {{date}}",
     "audit_title": "Trazabilidad",
     "audit_mode": "Frontera",
@@ -275,6 +317,8 @@
     "attachment_no_text_explanation": "No se extrajo texto. El archivo se conserva y los modelos con visión (Claude, GPT-4o) podrán interpretarlo directamente.",
     "attachments_section_title": "Adjuntos del caso",
     "attachments_section_subtitle": "Archivos aportados específicamente para este paciente",
+    "attachments_storage_hint": "Conclave guarda una copia dentro del espacio del caso. El archivo original en tu equipo no se modifica ni se mueve.",
+    "attachment_purged_badge": "Copia eliminada",
     "attachments_loading": "Cargando adjuntos…",
     "attachments_empty": "Este caso no tiene adjuntos.",
     "drop_overlay_title": "Suelta los archivos para adjuntarlos al caso",

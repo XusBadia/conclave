@@ -194,8 +194,50 @@
     "modify": "Mark modified",
     "reject": "Reject",
     "feedback_recorded": "Feedback \"{{kind}}\" recorded.",
-    "purge_phi": "Purge PHI",
-    "purge_attachments": "Purge raw attachments",
+    "purge_phi": "Delete patient text",
+    "purge_phi_confirm_title": "Delete the patient text?",
+    "purge_phi_removed": "Removed: the raw clinical text you pasted when creating the case.",
+    "purge_phi_kept": "Kept: the de-identified version used in deliberation, the verdict and the audit traces.",
+    "purge_phi_irreversible": "This cannot be undone.",
+    "purge_phi_confirm_action": "Delete text",
+    "purge_attachments": "Delete attachment copies",
+    "purge_attachments_confirm_title": "Delete the attachment copies?",
+    "purge_attachments_removed": "Removed: the binary file stored in the case workspace.",
+    "purge_attachments_kept": "Kept: filename, hash, de-identified extracted text and verdict traces.",
+    "purge_attachments_original_safe": "Your original file on disk: untouched.",
+    "purge_attachments_confirm_action": "Delete copies",
+    "export_pdf": "Export PDF",
+    "export_pdf_saved": "PDF saved to {{path}}",
+    "pdf": {
+      "title": "Clinical case resolution",
+      "filename_prefix": "Conclave",
+      "metadata": {
+        "case_date": "Case date",
+        "case_id": "Case ID",
+        "model": "Model",
+        "status": "Status"
+      },
+      "status": {
+        "draft": "Draft",
+        "review_ready": "Review ready",
+        "finalized": "Finalized",
+        "finalized_legacy": "Finalized (legacy)",
+        "failed": "Failed"
+      },
+      "certainty": {
+        "high": "High confidence",
+        "medium": "Medium confidence",
+        "low": "Low confidence"
+      },
+      "review": "Human review",
+      "review_decision": {
+        "accept": "Accepted",
+        "modify": "Modified",
+        "reject": "Rejected"
+      },
+      "footer_generated": "Generated on {{date}}",
+      "footer_page": "Page {{page}} of {{total}}"
+    },
     "review_finalized": "Review finalized: {{decision}} · {{date}}",
     "audit_title": "Traceability",
     "audit_mode": "Boundary",
@@ -275,6 +317,8 @@
     "attachment_no_text_explanation": "No text was extracted. The file is preserved and vision-capable LLMs (Claude, GPT-4o) will be able to interpret it directly.",
     "attachments_section_title": "Case attachments",
     "attachments_section_subtitle": "Files supplied specifically for this patient",
+    "attachments_storage_hint": "Conclave keeps a copy inside the case workspace. The original file on your device is never modified or moved.",
+    "attachment_purged_badge": "Copy deleted",
     "attachments_loading": "Loading attachments…",
     "attachments_empty": "This case has no attachments.",
     "drop_overlay_title": "Drop the files to attach them to the case",

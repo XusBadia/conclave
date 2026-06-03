@@ -14,6 +14,7 @@ import {
   IconChevronRight,
   IconClipboardCheck,
   IconCopy,
+  IconFileTypePdf,
   IconGripVertical,
   IconLock,
   IconPencil,
@@ -23,6 +24,8 @@ import {
   IconTrash,
   IconX,
 } from "@tabler/icons-react";
+
+import { exportCaseVerdictToPDF } from "../pdf/exportCaseVerdict";
 
 import { Button } from "../components/Button";
 import { Card, CardBody, CardHeader } from "../components/Card";
@@ -1675,6 +1678,69 @@ function ConfirmDeletePopover({
   );
 }
 
+function ConfirmPurgePopover({
+  open,
+  onOpenChange,
+  anchor,
+  busy,
+  error,
+  title,
+  lines,
+  confirmLabel,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (next: boolean) => void;
+  anchor: HTMLElement | null;
+  busy: boolean;
+  error: string | null;
+  title: string;
+  lines: string[];
+  confirmLabel: string;
+  onConfirm: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Popover
+      open={open}
+      onOpenChange={onOpenChange}
+      anchor={anchor}
+      side="bottom"
+      align="end"
+      width={360}
+      ariaLabel={title}
+    >
+      <div className="space-y-3 p-4">
+        <h3 className="text-[13px] font-semibold text-ink">{title}</h3>
+        {error && (
+          <div className="rounded-md border border-danger/40 bg-danger/10 px-2.5 py-1.5 text-[12px] text-danger">
+            {error}
+          </div>
+        )}
+        <ul className="space-y-1.5 text-[12.5px] leading-relaxed text-ink-dim">
+          {lines.map((line, i) => (
+            <li key={i} className="flex gap-2">
+              <span
+                aria-hidden
+                className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-ink-faint"
+              />
+              <span>{line}</span>
+            </li>
+          ))}
+        </ul>
+        <div className="flex justify-end gap-2 pt-1">
+          <Button size="sm" variant="ghost" onClick={() => onOpenChange(false)}>
+            {t("common.cancel")}
+          </Button>
+          <Button size="sm" variant="danger" loading={busy} onClick={onConfirm}>
+            {confirmLabel}
+          </Button>
+        </div>
+      </div>
+    </Popover>
+  );
+}
+
 function NewCase({
   workspace,
   onCancel,
@@ -2383,10 +2449,16 @@ function ShowCase({
   detail: CaseDetail | null;
   onBack: () => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
   const [localDetail, setLocalDetail] = useState<CaseDetail | null>(initialDetail);
+  const [purgePhiAnchor, setPurgePhiAnchor] = useState<HTMLElement | null>(null);
+  const [purgePhiError, setPurgePhiError] = useState<string | null>(null);
+  const [purgeAttachmentsAnchor, setPurgeAttachmentsAnchor] =
+    useState<HTMLElement | null>(null);
+  const [purgeAttachmentsError, setPurgeAttachmentsError] = useState<string | null>(null);
 
   useEffect(() => {
     setLocalDetail(initialDetail);
@@ -2417,12 +2489,13 @@ function ShowCase({
     const current = localDetail;
     if (!current) return;
     setBusy(true);
-    setError(null);
+    setPurgePhiError(null);
     try {
       const purged = await ipc.purgeCasePhi(workspace.id, current.case.id);
       setLocalDetail({ ...current, case: purged });
+      setPurgePhiAnchor(null);
     } catch (e) {
-      setError(String(e));
+      setPurgePhiError(String(e));
     } finally {
       setBusy(false);
     }
@@ -2432,15 +2505,30 @@ function ShowCase({
     const current = localDetail;
     if (!current) return;
     setBusy(true);
-    setError(null);
+    setPurgeAttachmentsError(null);
     try {
       await ipc.purgeCaseAttachments(workspace.id, current.case.id);
       const refreshed = await ipc.showCase(workspace.id, current.case.id);
       if (refreshed) setLocalDetail(refreshed);
+      setPurgeAttachmentsAnchor(null);
+    } catch (e) {
+      setPurgeAttachmentsError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const exportPdf = async () => {
+    const current = localDetail;
+    if (!current?.verdict) return;
+    setExporting(true);
+    setError(null);
+    try {
+      await exportCaseVerdictToPDF(current, t, i18n.language);
     } catch (e) {
       setError(String(e));
     } finally {
-      setBusy(false);
+      setExporting(false);
     }
   };
 
@@ -2458,13 +2546,39 @@ function ShowCase({
         </Button>
         {detail.verdict && (
           <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={exportPdf}
+              loading={exporting}
+              disabled={busy}
+            >
+              <IconFileTypePdf size={14} className="mr-1" />
+              {t("cases.export_pdf")}
+            </Button>
             {detail.case.raw_text_retention !== "discarded" && (
-              <Button size="sm" variant="ghost" onClick={purgePhi} loading={busy}>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={(e) => {
+                  setPurgePhiError(null);
+                  setPurgePhiAnchor(e.currentTarget);
+                }}
+                loading={busy && purgePhiAnchor !== null}
+              >
                 {t("cases.purge_phi")}
               </Button>
             )}
             {detail.attachments.some((a) => a.stored_path) && (
-              <Button size="sm" variant="ghost" onClick={purgeAttachments} loading={busy}>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={(e) => {
+                  setPurgeAttachmentsError(null);
+                  setPurgeAttachmentsAnchor(e.currentTarget);
+                }}
+                loading={busy && purgeAttachmentsAnchor !== null}
+              >
                 {t("cases.purge_attachments")}
               </Button>
             )}
@@ -2480,6 +2594,48 @@ function ShowCase({
           </div>
         )}
       </div>
+
+      <ConfirmPurgePopover
+        open={purgePhiAnchor !== null}
+        onOpenChange={(next) => {
+          if (!next) {
+            setPurgePhiAnchor(null);
+            setPurgePhiError(null);
+          }
+        }}
+        anchor={purgePhiAnchor}
+        busy={busy && purgePhiAnchor !== null}
+        error={purgePhiError}
+        title={t("cases.purge_phi_confirm_title")}
+        lines={[
+          t("cases.purge_phi_removed"),
+          t("cases.purge_phi_kept"),
+          t("cases.purge_phi_irreversible"),
+        ]}
+        confirmLabel={t("cases.purge_phi_confirm_action")}
+        onConfirm={purgePhi}
+      />
+
+      <ConfirmPurgePopover
+        open={purgeAttachmentsAnchor !== null}
+        onOpenChange={(next) => {
+          if (!next) {
+            setPurgeAttachmentsAnchor(null);
+            setPurgeAttachmentsError(null);
+          }
+        }}
+        anchor={purgeAttachmentsAnchor}
+        busy={busy && purgeAttachmentsAnchor !== null}
+        error={purgeAttachmentsError}
+        title={t("cases.purge_attachments_confirm_title")}
+        lines={[
+          t("cases.purge_attachments_removed"),
+          t("cases.purge_attachments_kept"),
+          t("cases.purge_attachments_original_safe"),
+        ]}
+        confirmLabel={t("cases.purge_attachments_confirm_action")}
+        onConfirm={purgeAttachments}
+      />
 
       {error && (
         <div className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-[13px] text-danger">
@@ -2576,6 +2732,9 @@ function ShowCase({
           subtitle={t("cases.attachments_section_subtitle")}
         />
         <CardBody>
+          <p className="mb-3 text-[12px] leading-relaxed text-ink-faint">
+            {t("cases.attachments_storage_hint")}
+          </p>
           <CaseAttachmentsSection
             workspaceId={workspace.id}
             caseId={detail.case.id}
@@ -2772,9 +2931,18 @@ function CaseAttachmentsSection({
               <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">
                 {a.original_filename}
               </span>
-              <span className="shrink-0 text-[11px] text-ink-faint">
-                {formatBytes(a.byte_size)}
-              </span>
+              {a.stored_path ? (
+                <span className="shrink-0 text-[11px] text-ink-faint">
+                  {formatBytes(a.byte_size)}
+                </span>
+              ) : (
+                <span
+                  className="shrink-0 rounded bg-surface px-1.5 py-0.5 text-[10px] font-medium text-ink-subtle"
+                  title={t("cases.purge_attachments_kept")}
+                >
+                  {t("cases.attachment_purged_badge")}
+                </span>
+              )}
               {a.needs_ocr && (
                 <span
                   className="shrink-0 rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-medium text-warn"
