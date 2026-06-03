@@ -17,8 +17,8 @@ use conclave_providers::{
     open_in_browser, persist_tokens, secrets, AnthropicLoginFlow, AnthropicOAuthProvider,
     AnthropicProvider, AppleIntelligenceAvailability, AppleIntelligenceProvider, ClaudeCliProvider,
     CodexCliProvider, CompletionRequest, ImageInput, LlmProvider, Message, OllamaProvider,
-    OpenAILoginFlow, OpenAIOAuthProvider, OpenAiProvider, OpenRouterProvider, ProviderScope,
-    APPLE_INTELLIGENCE_MODEL_LABEL, CLAUDE_CLI_DEFAULT_MODEL, CLI_PROVIDERS,
+    OpenAILoginFlow, OpenAIOAuthProvider, OpenAiProvider, OpenRouterProvider, ProbeDetails,
+    ProviderScope, APPLE_INTELLIGENCE_MODEL_LABEL, CLAUDE_CLI_DEFAULT_MODEL, CLI_PROVIDERS,
     CODEX_CLI_DEFAULT_MODEL, KNOWN_PROVIDERS, OAUTH_PROVIDERS,
 };
 use conclave_rag::{
@@ -492,8 +492,15 @@ pub async fn ask_documents(
     let workspace = workspace_manager(&state)
         .load(&request.workspace_id)
         .map_err(|e| e.to_string())?;
+    // Local CLI providers (`claude-cli`, `codex-cli`) authenticate via
+    // the user's own CLI install — no Conclave-side keychain entry to
+    // look up. Treat them like the OAuth providers and pass an empty
+    // key to `build_provider`. Without this branch the request fails
+    // up-front with "no API key for codex-cli" before the deliberation
+    // ever starts, which to the user looks like a silent no-op.
     let api_key = match request.provider_id.as_str() {
-        "ollama" | "apple-intelligence" | "anthropic-oauth" | "openai-oauth" => String::new(),
+        "ollama" | "apple-intelligence" | "anthropic-oauth" | "openai-oauth" | "claude-cli"
+        | "codex-cli" => String::new(),
         other => secrets::load(other)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("no API key for {other}"))?,
@@ -869,13 +876,13 @@ pub async fn list_providers(
     // is still installed + logged in via its own credentials — that's
     // what "Disconnect" must mean for a provider Conclave does not
     // own credentials for. Re-picking the tile clears the flag.
-    let disabled_ids: Vec<String> = state
-        .config
-        .lock()
-        .map_err(|_| "config poisoned")?
-        .providers
-        .disabled_provider_ids
-        .clone();
+    let (disabled_ids, cli_overrides): (Vec<String>, std::collections::HashMap<String, bool>) = {
+        let guard = state.config.lock().map_err(|_| "config poisoned")?;
+        (
+            guard.providers.disabled_provider_ids.clone(),
+            guard.providers.cli_local_overrides.clone(),
+        )
+    };
     // Force-refresh on Reload (or after the frontend's redetect button)
     // invalidates the binary path cache so the very next probe re-walks
     // `$PATH`. Without this the user would have to relaunch Conclave to
@@ -920,19 +927,30 @@ pub async fn list_providers(
             }
             _ => continue,
         };
+        // Manual override: when the user told us "I'm logged in, trust
+        // me", upgrade `LoginRequired` to `Ready` as long as the binary
+        // is still on PATH. We never override `NotInstalled` — that
+        // would just mask a real problem.
+        let user_override = matches!(cli_overrides.get(*id), Some(true));
+        let promoted_status = if user_override && matches!(status, ProviderStatus::LoginRequired) {
+            ProviderStatus::Ready
+        } else {
+            status
+        };
         let user_disabled = disabled_ids.iter().any(|d| d == *id);
         // Override only when the user disconnected from inside Conclave
         // AND the CLI is otherwise usable — leave `NotInstalled` /
         // `LoginRequired` alone so the picker still surfaces the
         // actionable install/login hint.
-        let final_status = if user_disabled && matches!(status, ProviderStatus::Ready) {
+        let final_status = if user_disabled && matches!(promoted_status, ProviderStatus::Ready) {
             ProviderStatus::NotConfigured
         } else {
-            status
+            promoted_status
         };
         let hint = match final_status {
             ProviderStatus::NotInstalled => Some("not_installed".into()),
             ProviderStatus::LoginRequired => Some("login_required".into()),
+            ProviderStatus::Ready if user_override => Some("user_marked_ready".into()),
             _ => None,
         };
         out.push(ProviderInfo {
@@ -2133,9 +2151,12 @@ pub(crate) async fn run_case_impl(
     // AND triggers a Security framework call that deadlocks when fired
     // from N concurrent tokio tasks (the per-case workers in the batch
     // runner). Skip the keychain for every provider that doesn't use
-    // it — mirrors the pattern at the Knowledge Q&A path above.
+    // it — mirrors the pattern at the Knowledge Q&A path above. CLI
+    // providers (`claude-cli`, `codex-cli`) also live outside the
+    // Conclave keychain — auth is the user's own CLI session.
     let api_key = match request.provider_id.as_str() {
-        "ollama" | "apple-intelligence" | "anthropic-oauth" | "openai-oauth" => String::new(),
+        "ollama" | "apple-intelligence" | "anthropic-oauth" | "openai-oauth" | "claude-cli"
+        | "codex-cli" => String::new(),
         other => secrets::load(other)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("no API key for `{other}`"))?,
@@ -2490,9 +2511,11 @@ pub async fn run_draft_case(
 
     // Provider + pipeline setup mirrors run_case_impl. OAuth providers
     // use disk-stored tokens, not the macOS keychain — skip secrets::load
-    // for them.
+    // for them. Same applies to the local CLI providers (`claude-cli`,
+    // `codex-cli`): auth lives in the user's own CLI session.
     let api_key = match request.provider_id.as_str() {
-        "ollama" | "apple-intelligence" | "anthropic-oauth" | "openai-oauth" => String::new(),
+        "ollama" | "apple-intelligence" | "anthropic-oauth" | "openai-oauth" | "claude-cli"
+        | "codex-cli" => String::new(),
         other => secrets::load(other)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("no API key for `{other}`"))?,
@@ -2669,9 +2692,12 @@ pub(crate) async fn run_case_deliberated_impl(
         .load(&request.workspace_id)
         .map_err(|e| e.to_string())?;
     // OAuth providers use disk-stored tokens, not the macOS keychain.
-    // See run_case_impl for the concurrent-deadlock rationale.
+    // See run_case_impl for the concurrent-deadlock rationale. CLI
+    // providers (`claude-cli`, `codex-cli`) similarly have no Conclave
+    // keychain entry — their auth lives in the user's own CLI session.
     let api_key = match request.provider_id.as_str() {
-        "ollama" | "apple-intelligence" | "anthropic-oauth" | "openai-oauth" => String::new(),
+        "ollama" | "apple-intelligence" | "anthropic-oauth" | "openai-oauth" | "claude-cli"
+        | "codex-cli" => String::new(),
         other => secrets::load(other)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("no API key for `{other}`"))?,
@@ -3706,63 +3732,84 @@ pub struct CliDiagnostics {
     /// it to decide which variant copy to show (not_installed,
     /// login_required, expired, ready).
     pub status: ProviderStatus,
+    /// Raw probe payload (command run, exit code, duration, stderr
+    /// excerpt, fallback used). Rendered under the "Diagnóstico
+    /// técnico" disclosure so the next "no detecta" report ships with
+    /// enough detail to diagnose in one screenshot.
+    pub probe: ProbeDetails,
+    /// `true` when the user clicked "Marcar como conectado" for this
+    /// provider — the manual override safety net. Mirrors
+    /// `Config.providers.cli_local_overrides[id]`.
+    pub user_marked_ready: bool,
 }
 
 /// Return diagnostic info for one of the CLI providers. Rejects any
 /// non-CLI id so the frontend can't accidentally fan this command out.
 #[tauri::command]
-pub async fn cli_diagnostics(id: String) -> CommandResult<CliDiagnostics> {
-    let (binary_path, status, install_url, login_command) = match id.as_str() {
+pub async fn cli_diagnostics(
+    state: State<'_, AppState>,
+    id: String,
+) -> CommandResult<CliDiagnostics> {
+    let user_marked_ready = state
+        .config
+        .lock()
+        .map_err(|_| "config poisoned")?
+        .providers
+        .cli_local_overrides
+        .get(&id)
+        .copied()
+        .unwrap_or(false);
+
+    let (binary_path, probe, install_url, login_command) = match id.as_str() {
         "claude-cli" => {
             let installed = ClaudeCliProvider::is_installed();
-            let logged_in = if installed {
-                ClaudeCliProvider::is_logged_in().await
+            let probe = if installed {
+                ClaudeCliProvider::probe_login_detailed().await
             } else {
-                false
-            };
-            let status = if !installed {
-                ProviderStatus::NotInstalled
-            } else if !logged_in {
-                ProviderStatus::LoginRequired
-            } else {
-                ProviderStatus::Ready
+                ProbeDetails::unresolved_binary()
             };
             (
                 ClaudeCliProvider::binary_path().map(|p| p.display().to_string()),
-                status,
+                probe,
                 "https://docs.claude.com/en/docs/agents/claude-code/overview".to_owned(),
                 "claude auth login".to_owned(),
             )
         }
         "codex-cli" => {
             let installed = CodexCliProvider::is_installed();
-            let logged_in = if installed {
-                CodexCliProvider::is_logged_in().await
+            let probe = if installed {
+                CodexCliProvider::probe_login_detailed().await
             } else {
-                false
-            };
-            let status = if !installed {
-                ProviderStatus::NotInstalled
-            } else if !logged_in {
-                ProviderStatus::LoginRequired
-            } else {
-                ProviderStatus::Ready
+                ProbeDetails::unresolved_binary()
             };
             (
                 CodexCliProvider::binary_path().map(|p| p.display().to_string()),
-                status,
+                probe,
                 "https://github.com/openai/codex".to_owned(),
                 "codex login".to_owned(),
             )
         }
         _ => return Err(format!("cli_diagnostics: unsupported provider id `{id}`")),
     };
+
+    let installed = binary_path.is_some();
+    let logged_in = probe.logged_in || (installed && user_marked_ready);
+    let status = if !installed {
+        ProviderStatus::NotInstalled
+    } else if !logged_in {
+        ProviderStatus::LoginRequired
+    } else {
+        ProviderStatus::Ready
+    };
+
     Ok(CliDiagnostics {
         binary_path,
         path_var: std::env::var("PATH").unwrap_or_default(),
         install_url,
         login_command,
         status,
+        probe,
+        user_marked_ready,
     })
 }
 
@@ -3773,6 +3820,47 @@ pub async fn cli_diagnostics(id: String) -> CommandResult<CliDiagnostics> {
 pub async fn redetect_cli_binaries() -> CommandResult<()> {
     ClaudeCliProvider::refresh_binary_cache();
     CodexCliProvider::refresh_binary_cache();
+    Ok(())
+}
+
+/// Toggle the manual "I'm logged in, trust me" override for one CLI
+/// provider id. Persisted to `conclave.toml` so the user only needs to
+/// declare it once. `value: false` (or absent) removes the entry — we
+/// don't keep negative entries because their meaning is identical to
+/// "no override at all".
+///
+/// When enabling the override we also clear any stale entry in
+/// `disabled_provider_ids` for the same id — the two flags would
+/// otherwise fight each other (`disabled` wins, demoting the override
+/// back to `NotConfigured`). Disabling the override is left alone so
+/// the user can still "Disconnect" + un-override + reconnect later.
+///
+/// Only accepts the two CLI provider ids; everything else 400s so the
+/// frontend can't accidentally write garbage keys.
+#[tauri::command]
+pub async fn set_cli_login_override(
+    state: State<'_, AppState>,
+    id: String,
+    value: bool,
+) -> CommandResult<()> {
+    if !matches!(id.as_str(), "claude-cli" | "codex-cli") {
+        return Err(format!(
+            "set_cli_login_override: unsupported provider id `{id}`"
+        ));
+    }
+    let mut cfg = state.config.lock().map_err(|_| "config poisoned")?.clone();
+    if value {
+        cfg.providers.cli_local_overrides.insert(id.clone(), true);
+        // Enabling the override implies "I want this provider usable."
+        // Clear any stale disable entry so list_providers doesn't
+        // demote it back to NotConfigured.
+        cfg.providers.disabled_provider_ids.retain(|d| d != &id);
+    } else {
+        cfg.providers.cli_local_overrides.remove(&id);
+    }
+    cfg.save(state.paths.config_file())
+        .map_err(|e| e.to_string())?;
+    *state.config.lock().map_err(|_| "config poisoned")? = cfg;
     Ok(())
 }
 

@@ -112,6 +112,30 @@ export interface ProviderInfo {
 }
 
 /**
+ * Snapshot of the login-status probe (what command we ran, how it
+ * exited, whether we trusted a fallback artifact). Surfaced under the
+ * "Diagnóstico técnico" disclosure of the CLI setup panel so the next
+ * "no detecta" report ships with enough detail to diagnose in a single
+ * screenshot.
+ */
+export interface CliProbeDetails {
+  logged_in: boolean;
+  command: string | null;
+  exit_code: number | null;
+  stderr_excerpt: string;
+  duration_ms: number | null;
+  timed_out: boolean;
+  /** When non-null, the artifact we trusted instead of the probe's exit
+   * code (e.g. `~/.codex/auth.json`, `keychain`). */
+  fallback_used: string | null;
+  /** Names (NOT values) of environment variables that were set when we
+   * spawned the probe. Helps debug launchd-vs-shell divergence. */
+  env_keys_seen: string[];
+  binary_mtime: number | null;
+  binary_size: number | null;
+}
+
+/**
  * Diagnostic payload returned by the `cli_diagnostics` Tauri command.
  * Drives the in-Settings CLI setup panel. Includes the process `$PATH`
  * verbatim so the user can verify whether their unusual install dir is
@@ -125,6 +149,11 @@ export interface CliDiagnostics {
   install_url: string;
   login_command: string;
   status: ProviderStatus;
+  probe: CliProbeDetails;
+  /** `true` when the user clicked "Marcar como conectado" for this
+   * provider — Conclave then treats the binary as logged in regardless
+   * of what the probe returned. */
+  user_marked_ready: boolean;
 }
 
 export interface Verdict {
@@ -452,6 +481,15 @@ export const ipc = {
    *  after the user installs the CLI in a terminal while Conclave is
    *  open — they shouldn't have to restart the app to be detected. */
   redetectCliBinaries: () => invoke<void>("redetect_cli_binaries"),
+  /** Toggle the manual "I'm logged in, trust me" override for one CLI
+   *  provider. Use when auto-detection fails despite the user being
+   *  logged in (Keychain ACL quirks, launchd env divergence). The flag
+   *  persists in `conclave.toml` so the user only needs to declare it
+   *  once; passing `value: false` removes the override. */
+  setCliLoginOverride: (
+    id: "claude-cli" | "codex-cli",
+    value: boolean,
+  ) => invoke<void>("set_cli_login_override", { id, value }),
   privacySettings: () => invoke<PrivacySettings>("privacy_settings"),
   setPrivacySettings: (settings: PrivacySettings) =>
     invoke<PrivacySettings>("set_privacy_settings", { settings }),

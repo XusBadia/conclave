@@ -69,9 +69,9 @@
 //!   silently dropped.
 //! - Web citations: not surfaced through the CLI's JSON output.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::RwLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -79,6 +79,10 @@ use tempfile::TempDir;
 use tokio::process::Command;
 use tokio::time::timeout;
 
+use crate::cli_local::{
+    binary_stats, stderr_excerpt, tracked_env_keys_present, ProbeDetails, FALLBACK_TIMEOUT,
+    PROBE_TIMEOUT,
+};
 use crate::error::ProviderError;
 use crate::types::{
     CompletionRequest, CompletionResponse, MessageRole, ProviderCapabilities, ProviderScope, Usage,
@@ -170,34 +174,125 @@ impl ClaudeCliProvider {
         }
     }
 
-    /// Probe `claude auth status`. Doc: "Show authentication status as
-    /// JSON. … Exits with code 0 if logged in, 1 if not." This is the
-    /// authoritative signal — checking `~/.claude/.credentials.json`
-    /// directly does not work because the new Claude Code keeps tokens
-    /// in the OS keychain on macOS by default.
-    ///
-    /// Returns `false` if the binary is missing, the status probe
-    /// fails to spawn, or the probe exits non-zero. Best-effort with a
-    /// short timeout — used only to decorate the Settings tile.
+    /// `true` when the user has an active Claude session. Thin bool
+    /// wrapper around [`Self::probe_login_detailed`] for callers
+    /// (`list_providers`) that don't need the diagnostic payload.
     pub async fn is_logged_in() -> bool {
+        Self::probe_login_detailed().await.logged_in
+    }
+
+    /// Probe `claude auth status` and assemble a [`ProbeDetails`] for
+    /// the Settings panel.
+    ///
+    /// Decision flow:
+    /// 1. Binary missing → `unresolved_binary()` snapshot.
+    /// 2. Run `claude auth status` with `HOME` / `USER` / `LOGNAME`
+    ///    re-set defensively from the parent process. The Tauri parent
+    ///    *should* be propagating them via the usual launchd inherit,
+    ///    but we explicitly forward them so a stripped child env can't
+    ///    silently make the CLI miss its credentials.
+    /// 3. Exit 0 → logged in, no fallback.
+    /// 4. Non-zero / timeout / spawn error → try the macOS Keychain
+    ///    item directly with `/usr/bin/security find-generic-password`
+    ///    (no `-w` / `-g`, so it returns metadata only and never
+    ///    triggers a Keychain ACL prompt). Exit 0 from that command
+    ///    means the credential record exists → treat as logged in.
+    /// 5. Last resort: check `~/.claude/.credentials.json` for legacy
+    ///    installs that haven't moved to the Keychain yet.
+    ///
+    /// We never read the secret value — only check for presence —
+    /// which keeps the Keychain ACL silent.
+    pub async fn probe_login_detailed() -> ProbeDetails {
         let Some(bin) = detect_cached() else {
-            return false;
+            return ProbeDetails::unresolved_binary();
         };
-        let probe = Command::new(bin)
+        let (binary_mtime, binary_size) = binary_stats(&bin);
+        let env_keys_seen = tracked_env_keys_present();
+
+        let started = Instant::now();
+        let mut probe_cmd = Command::new(&bin);
+        probe_cmd
             .args(["auth", "status"])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .kill_on_drop(true)
-            .output();
-        // Cap the probe at 10 seconds. The status check is meant to be
-        // instant — anything slower likely means the CLI is hung on
-        // a network call or stuck waiting for input, and we'd rather
-        // fall back to "not logged in" than block the Settings panel.
-        match timeout(Duration::from_secs(10), probe).await {
-            Ok(Ok(out)) => out.status.success(),
-            _ => false,
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+        // Defensive env hygiene: re-forward the keychain-context vars
+        // that some CLIs require to read their stored credentials. If
+        // the parent already has them set, this is a no-op; if launchd
+        // or a Tauri plugin scrubbed any, we restore them.
+        if let Some(home) = std::env::var_os("HOME") {
+            probe_cmd.env("HOME", home);
         }
+        if let Some(user) = std::env::var_os("USER") {
+            probe_cmd.env("USER", user);
+        }
+        if let Some(logname) = std::env::var_os("LOGNAME") {
+            probe_cmd.env("LOGNAME", logname);
+        } else if let Some(user) = std::env::var_os("USER") {
+            // Some launchd contexts set USER but not LOGNAME. Mirror
+            // USER so any CLI that reads LOGNAME finds a value.
+            probe_cmd.env("LOGNAME", user);
+        }
+
+        let outcome = timeout(PROBE_TIMEOUT, probe_cmd.output()).await;
+        let duration_ms = started.elapsed().as_millis() as u64;
+
+        let mut details = ProbeDetails {
+            logged_in: false,
+            command: Some("claude auth status".to_owned()),
+            exit_code: None,
+            stderr_excerpt: String::new(),
+            duration_ms: Some(duration_ms),
+            timed_out: false,
+            fallback_used: None,
+            env_keys_seen,
+            binary_mtime,
+            binary_size,
+        };
+
+        let probe_succeeded = match outcome {
+            Ok(Ok(out)) => {
+                details.exit_code = out.status.code();
+                details.stderr_excerpt = stderr_excerpt(&out.stderr);
+                out.status.success()
+            }
+            Ok(Err(e)) => {
+                details.stderr_excerpt = format!("spawn error: {e}");
+                false
+            }
+            Err(_) => {
+                details.timed_out = true;
+                false
+            }
+        };
+
+        if probe_succeeded {
+            details.logged_in = true;
+            return details;
+        }
+
+        // Fallback 1: macOS Keychain. Exits 0 if the credential record
+        // exists. We do NOT pass `-w` or `-g`, so no secret is read and
+        // no ACL prompt fires — we just observe metadata presence.
+        if cfg!(target_os = "macos") && keychain_credential_present().await {
+            details.logged_in = true;
+            details.fallback_used = Some("keychain".to_owned());
+            return details;
+        }
+
+        // Fallback 2: legacy credentials file. Some hosts (pre-2025
+        // installs that never migrated to the Keychain) still keep the
+        // OAuth tokens here. Non-empty file is enough — we don't parse.
+        if let Some(p) = claude_legacy_credentials_path() {
+            if std::fs::metadata(&p).is_ok_and(|m| m.is_file() && m.len() > 0) {
+                details.logged_in = true;
+                details.fallback_used = Some("~/.claude/.credentials.json".to_owned());
+                return details;
+            }
+        }
+
+        details
     }
 }
 
@@ -228,6 +323,51 @@ fn detect_cached() -> Option<PathBuf> {
         };
     }
     resolved
+}
+
+/// Legacy on-disk credentials path used by older Claude Code installs
+/// before the Keychain migration. `None` when `HOME` is unset.
+fn claude_legacy_credentials_path() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    Some(Path::new(&home).join(".claude").join(".credentials.json"))
+}
+
+/// `true` when the macOS Login Keychain has a generic-password record
+/// for the service name Claude Code uses (`"Claude Code-credentials"`).
+/// We invoke `/usr/bin/security` rather than linking the Security
+/// framework directly — same effect, smaller binary, and the system
+/// tool is universally available.
+///
+/// Critically: we do NOT pass `-w` (extract password to stdout) or
+/// `-g` (extract to stderr). With neither flag the tool reads only the
+/// item's metadata, which does not require ACL approval and never
+/// triggers the "claude wants to access this item" dialog.
+#[cfg(target_os = "macos")]
+async fn keychain_credential_present() -> bool {
+    let user = match std::env::var("USER") {
+        Ok(u) if !u.is_empty() => u,
+        _ => return false,
+    };
+    let probe = Command::new("/usr/bin/security")
+        .arg("find-generic-password")
+        .arg("-a")
+        .arg(&user)
+        .arg("-s")
+        .arg("Claude Code-credentials")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    matches!(
+        timeout(FALLBACK_TIMEOUT, probe).await,
+        Ok(Ok(out)) if out.status.success()
+    )
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn keychain_credential_present() -> bool {
+    false
 }
 
 #[async_trait]
@@ -585,5 +725,42 @@ mod tests {
         let u = parsed.usage.unwrap();
         assert_eq!(u.input_tokens.unwrap(), 12);
         assert_eq!(u.output_tokens.unwrap(), 34);
+    }
+
+    #[test]
+    fn legacy_credentials_path_uses_home() {
+        // HOME is process-wide; guard against parallel test races.
+        use std::sync::Mutex;
+        static HOME_LOCK: Mutex<()> = Mutex::new(());
+        let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let original = std::env::var_os("HOME");
+        std::env::set_var("HOME", "/tmp/conclave-test-home");
+        let p = claude_legacy_credentials_path().unwrap();
+        assert_eq!(
+            p.to_string_lossy(),
+            "/tmp/conclave-test-home/.claude/.credentials.json"
+        );
+        if let Some(h) = original {
+            std::env::set_var("HOME", h);
+        } else {
+            std::env::remove_var("HOME");
+        }
+    }
+
+    #[tokio::test]
+    async fn probe_details_for_missing_binary() {
+        // Force the cache into Missing so probe_login_detailed short-circuits.
+        if let Ok(mut guard) = CACHED.write() {
+            *guard = BinaryCache::Missing;
+        }
+        let details = ClaudeCliProvider::probe_login_detailed().await;
+        assert!(!details.logged_in);
+        assert!(details.command.is_none());
+        assert!(details.exit_code.is_none());
+        // Restore Unprobed so other tests can re-detect from a clean state.
+        if let Ok(mut guard) = CACHED.write() {
+            *guard = BinaryCache::Unprobed;
+        }
     }
 }

@@ -57,19 +57,26 @@
 //!   itself adds OpenAI's standard Codex prompting on top of that.
 //! - Vision: not supported in `exec` mode per the docs.
 //! - Web citations: not surfaced.
-//! - Model selection: the `--model` flag's behaviour in `exec` is not
-//!   documented; we let Codex pick from `~/.codex/config.toml`. The
-//!   nominal default reported to the UI is `gpt-5`.
+//! - Model selection: we pass neither `--model` nor the user's
+//!   `~/.codex/config.toml` (we run with `--ignore-user-config`), so
+//!   the model is whatever the installed `codex` binary picks as its
+//!   built-in default. The id reported to the UI ([`DEFAULT_MODEL`],
+//!   `gpt-5.5`) is therefore a nominal label, not a binding request —
+//!   it tracks Codex's default at the time of writing but can drift
+//!   from the real model if a future CLI release changes that default.
 
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use tempfile::TempDir;
 use tokio::process::Command;
 use tokio::time::timeout;
 
+use crate::cli_local::{
+    binary_stats, stderr_excerpt, tracked_env_keys_present, ProbeDetails, PROBE_TIMEOUT,
+};
 use crate::error::ProviderError;
 use crate::types::{
     CompletionRequest, CompletionResponse, MessageRole, ProviderCapabilities, ProviderScope, Usage,
@@ -140,37 +147,89 @@ impl CodexCliProvider {
         }
     }
 
-    /// Probe `codex login status` — the vendor-documented way to
-    /// check whether the user has an active session ("Show login
-    /// status"; exits 0 when logged in). Falls back to inspecting
-    /// `~/.codex/auth.json` if the subprocess fails to spawn for any
-    /// reason (very old CLIs, sandboxed exec, etc.).
-    ///
-    /// Replaces an earlier file-only check that broke in the bundled
-    /// `.app` on some hosts — `is_ok_and(|m| m.is_file())` returned
-    /// `false` even when the file existed and was readable from a
-    /// regular shell, which left the user stuck in `LoginRequired`
-    /// after a successful `codex login`.
+    /// `true` when the user has an active Codex session. Thin bool
+    /// wrapper around [`Self::probe_login_detailed`] for callers
+    /// (`list_providers`) that don't need the diagnostic payload.
     pub async fn is_logged_in() -> bool {
+        Self::probe_login_detailed().await.logged_in
+    }
+
+    /// Probe `codex login status` and assemble a [`ProbeDetails`] for
+    /// the Settings panel.
+    ///
+    /// Decision flow:
+    /// 1. If `which::which("codex")` returned `None`, return the
+    ///    `unresolved_binary()` snapshot — there's nothing to probe.
+    /// 2. Run `codex login status` with stdio nulled, capturing
+    ///    stderr to surface back to the user.
+    /// 3. Trust an exit-0 outcome as logged in.
+    /// 4. **Otherwise consult `~/.codex/auth.json`.** This is the key
+    ///    change vs. the previous version, which only fell back when
+    ///    the subprocess failed to *spawn*. Empirically the probe
+    ///    exits non-zero from the `.app` even when the user is fully
+    ///    logged in via the same `auth.json` the subprocess reads, so
+    ///    treat the artifact as authoritative whenever the probe
+    ///    isn't a clean success. `codex logout` deletes `auth.json`,
+    ///    so this can't produce a false positive after logout.
+    pub async fn probe_login_detailed() -> ProbeDetails {
         let Some(bin) = detect_cached() else {
-            return false;
+            return ProbeDetails::unresolved_binary();
         };
+        let (binary_mtime, binary_size) = binary_stats(&bin);
+        let env_keys_seen = tracked_env_keys_present();
+
+        let started = Instant::now();
         let probe = Command::new(&bin)
             .args(["login", "status"])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
             .kill_on_drop(true)
             .output();
-        match timeout(Duration::from_secs(10), probe).await {
-            Ok(Ok(out)) => out.status.success(),
-            // Subprocess spawn / wait errored — fall back to the
-            // file existence check so we don't regress hosts where
-            // the probe is the broken path.
-            _ => codex_auth_path()
-                .map(|p| std::fs::metadata(&p).is_ok_and(|m| m.is_file() && m.len() > 0))
-                .unwrap_or(false),
+        let outcome = timeout(PROBE_TIMEOUT, probe).await;
+        let duration_ms = started.elapsed().as_millis() as u64;
+
+        let mut details = ProbeDetails {
+            logged_in: false,
+            command: Some("codex login status".to_owned()),
+            exit_code: None,
+            stderr_excerpt: String::new(),
+            duration_ms: Some(duration_ms),
+            timed_out: false,
+            fallback_used: None,
+            env_keys_seen,
+            binary_mtime,
+            binary_size,
+        };
+
+        match outcome {
+            Ok(Ok(out)) => {
+                details.exit_code = out.status.code();
+                details.stderr_excerpt = stderr_excerpt(&out.stderr);
+                if out.status.success() {
+                    details.logged_in = true;
+                } else if codex_auth_artifact_present() {
+                    details.logged_in = true;
+                    details.fallback_used = Some("~/.codex/auth.json".to_owned());
+                }
+            }
+            Ok(Err(e)) => {
+                details.stderr_excerpt = format!("spawn error: {e}");
+                if codex_auth_artifact_present() {
+                    details.logged_in = true;
+                    details.fallback_used = Some("~/.codex/auth.json".to_owned());
+                }
+            }
+            Err(_) => {
+                details.timed_out = true;
+                if codex_auth_artifact_present() {
+                    details.logged_in = true;
+                    details.fallback_used = Some("~/.codex/auth.json".to_owned());
+                }
+            }
         }
+
+        details
     }
 }
 
@@ -205,6 +264,16 @@ fn detect_cached() -> Option<PathBuf> {
 fn codex_auth_path() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
     Some(Path::new(&home).join(".codex").join("auth.json"))
+}
+
+/// `true` when `~/.codex/auth.json` exists and is non-empty. The Codex
+/// CLI writes this file on successful `codex login` and deletes it on
+/// `codex logout`, so it doubles as the persistent "is logged in?"
+/// signal when the subprocess probe is unavailable or misbehaving.
+fn codex_auth_artifact_present() -> bool {
+    codex_auth_path()
+        .map(|p| std::fs::metadata(&p).is_ok_and(|m| m.is_file() && m.len() > 0))
+        .unwrap_or(false)
 }
 
 #[async_trait]
@@ -448,5 +517,49 @@ mod tests {
         let p = CodexCliProvider::new();
         assert_eq!(p.capabilities().scope, ProviderScope::General);
         assert!(!p.capabilities().vision);
+    }
+
+    /// `cargo test` runs tests in parallel by default; `HOME` is
+    /// process-wide, so manipulating it from multiple threads races.
+    /// We serialise the three cases through one test guarded by a
+    /// mutex (covers env-poisoning if any previous test panicked).
+    #[test]
+    fn codex_auth_artifact_recognises_only_non_empty_file() {
+        use std::sync::Mutex;
+        static HOME_LOCK: Mutex<()> = Mutex::new(());
+        let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let original = std::env::var_os("HOME");
+
+        // (a) HOME unset → helper returns false.
+        std::env::remove_var("HOME");
+        assert!(!codex_auth_artifact_present(), "no HOME → not present");
+
+        // (b) HOME points at a dir with a non-empty auth.json → true.
+        let tmp_full = tempfile::tempdir().unwrap();
+        std::env::set_var("HOME", tmp_full.path());
+        std::fs::create_dir_all(tmp_full.path().join(".codex")).unwrap();
+        std::fs::write(tmp_full.path().join(".codex/auth.json"), "{\"x\":1}").unwrap();
+        assert!(
+            codex_auth_artifact_present(),
+            "non-empty auth.json → present"
+        );
+
+        // (c) HOME points at a dir with an empty auth.json → false.
+        let tmp_empty = tempfile::tempdir().unwrap();
+        std::env::set_var("HOME", tmp_empty.path());
+        std::fs::create_dir_all(tmp_empty.path().join(".codex")).unwrap();
+        std::fs::write(tmp_empty.path().join(".codex/auth.json"), "").unwrap();
+        assert!(
+            !codex_auth_artifact_present(),
+            "empty auth.json → not present"
+        );
+
+        // Restore HOME so other tests see their original env.
+        if let Some(h) = original {
+            std::env::set_var("HOME", h);
+        } else {
+            std::env::remove_var("HOME");
+        }
     }
 }
