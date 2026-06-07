@@ -8,12 +8,14 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  IconAdjustments,
   IconAlertTriangle,
   IconCheck,
   IconChevronDown,
   IconChevronRight,
   IconClipboardCheck,
   IconCopy,
+  IconFileTypePdf,
   IconGripVertical,
   IconLock,
   IconPencil,
@@ -23,6 +25,14 @@ import {
   IconTrash,
   IconX,
 } from "@tabler/icons-react";
+
+import { exportCaseVerdictToPDF } from "../pdf/exportCaseVerdict";
+import {
+  exportCasesToFolder,
+  type BatchExportResult,
+} from "../pdf/exportCasesBatch";
+import { loadPdfExportOptions } from "../pdf/exportOptions";
+import { PdfOptionsSheet } from "../pdf/PdfOptionsSheet";
 
 import { Button } from "../components/Button";
 import { Card, CardBody, CardHeader } from "../components/Card";
@@ -429,6 +439,9 @@ export function CasesPage({
    */
   const [batchTotal, setBatchTotal] = useState<number | null>(null);
   const [batchDone, setBatchDone] = useState(0);
+  /** True while a batch-wide cancel is in flight, so the banner button
+   *  reads "Cancelling batch…" and disables. Cleared on `batch_done`. */
+  const [batchCancelling, setBatchCancelling] = useState(false);
   /** Wall-clock ms when the current batch began — used to render an
    *  elapsed chip in the banner. Set by the first CaseQueued/CaseStarted
    *  event, cleared on BatchDone. */
@@ -463,6 +476,16 @@ export function CasesPage({
   const [editingDate, setEditingDate] = useState(false);
   const [editDateError, setEditDateError] = useState<string | null>(null);
   const [editDateBusy, setEditDateBusy] = useState(false);
+  // Multi-case PDF export. `pdfExporting` drives the progress banner;
+  // `pdfExportSummary` the dismissible result banner once it finishes. The
+  // abort controller lets the banner's Cancel stop the run between cases.
+  const [pdfOptionsOpen, setPdfOptionsOpen] = useState(false);
+  const [pdfExporting, setPdfExporting] = useState(false);
+  const [pdfExportDone, setPdfExportDone] = useState(0);
+  const [pdfExportTotal, setPdfExportTotal] = useState(0);
+  const [pdfExportSummary, setPdfExportSummary] = useState<BatchExportResult | null>(null);
+  const [pdfExportError, setPdfExportError] = useState<string | null>(null);
+  const pdfAbortRef = useRef<AbortController | null>(null);
   // When non-null, the delete-confirmation popover is open for this
   // set of ids. Used both by the per-row hover trash button (length 1)
   // and by the batch toolbar (length N). `deleteAnchor` is the element
@@ -476,6 +499,11 @@ export function CasesPage({
   const [deleteSource, setDeleteSource] = useState<"row" | "bulk" | null>(
     null,
   );
+
+  /** Pending coalesced refresh (see `scheduleRefresh`). A batch cancel
+   *  skips every queued case near-instantly; without coalescing we'd
+   *  fire one `listCases` per skipped case. */
+  const refreshTimerRef = useRef<number | null>(null);
 
   const refresh = async () => {
     setLoading(true);
@@ -524,6 +552,17 @@ export function CasesPage({
     }
   };
 
+  /** Coalesce a burst of batch events into a single trailing refresh.
+   *  Used by the per-case batch handlers; `batch_done` refreshes
+   *  immediately (and cancels any pending timer). */
+  const scheduleRefresh = () => {
+    if (refreshTimerRef.current !== null) return; // already queued
+    refreshTimerRef.current = window.setTimeout(() => {
+      refreshTimerRef.current = null;
+      void refresh();
+    }, 120);
+  };
+
   useEffect(() => {
     refresh();
     setView("list");
@@ -544,6 +583,7 @@ export function CasesPage({
     setRunningCaseIds(new Set());
     setBatchTotal(null);
     setBatchDone(0);
+    setBatchCancelling(false);
     setBatchStartedAtMs(null);
     setBatchFirstCaseMs(null);
     setCasePhases(new Map());
@@ -699,7 +739,7 @@ export function CasesPage({
             });
             return next;
           });
-          void refresh();
+          scheduleRefresh();
         } else if (ev.kind === "case_failed") {
           setBatchDone((d) => d + 1);
           // Drop phase tracking so the failed row doesn't display a
@@ -708,19 +748,30 @@ export function CasesPage({
             if (prev.size === 0) return prev;
             return new Map();
           });
-          void refresh();
+          scheduleRefresh();
         } else if (ev.kind === "case_cancelled") {
           setBatchDone((d) => d + 1);
           setCasePhases((prev) => {
             if (prev.size === 0) return prev;
             return new Map();
           });
+          // Re-list so the cancelled row reflects its terminal `failed`
+          // status — that's what clears the stuck "Cancelling…" chip
+          // (the event carries no case_id, so we lean on refresh's
+          // status-based `rowBusy` cleanup).
+          scheduleRefresh();
         } else if (ev.kind === "batch_done") {
           setBatchTotal(null);
           setBatchDone(0);
           setBatchStartedAtMs(null);
           setBatchFirstCaseMs(null);
+          setBatchCancelling(false);
           setCasePhases(new Map());
+          // Terminal event — refresh now and drop any coalesced refresh.
+          if (refreshTimerRef.current !== null) {
+            window.clearTimeout(refreshTimerRef.current);
+            refreshTimerRef.current = null;
+          }
           void refresh();
         }
       });
@@ -776,6 +827,10 @@ export function CasesPage({
       unlistenDrafted?.();
       unlistenBatch?.();
       unlistenDelib?.();
+      if (refreshTimerRef.current !== null) {
+        window.clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace.id]);
@@ -839,6 +894,51 @@ export function CasesPage({
     setSelectionMode(false);
     setSelectedIds(new Set());
   };
+
+  /** Export the selected cases to a folder, one PDF per case. Reads the
+   *  persisted PDF options fresh at click time so a change made in the
+   *  single-case view is honoured here too. Verdict-less cases are skipped
+   *  and reported in the result banner. */
+  const onBatchExportPdf = useCallback(async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0 || pdfExporting) return;
+    const controller = new AbortController();
+    pdfAbortRef.current = controller;
+    setPdfExporting(true);
+    setPdfExportError(null);
+    setPdfExportSummary(null);
+    setPdfExportDone(0);
+    setPdfExportTotal(ids.length);
+    try {
+      const result = await exportCasesToFolder(
+        workspace.id,
+        ids,
+        t,
+        i18n.language,
+        loadPdfExportOptions(),
+        ({ done, total }) => {
+          setPdfExportDone(done);
+          setPdfExportTotal(total);
+        },
+        controller.signal,
+      );
+      // A dismissed folder picker leaves nothing to report. Anything else
+      // (full run, partial abort) gets a summary banner.
+      if (!result.cancelled) {
+        setPdfExportSummary(result);
+        exitSelection();
+      }
+    } catch (e) {
+      setPdfExportError(String(e));
+    } finally {
+      setPdfExporting(false);
+      pdfAbortRef.current = null;
+    }
+  }, [selectedIds, pdfExporting, workspace.id, t, i18n.language]);
+
+  const onCancelPdfExport = useCallback(() => {
+    pdfAbortRef.current?.abort();
+  }, []);
 
   const onApplyDate = async (localValue: string) => {
     if (selectedIds.size === 0) return;
@@ -919,6 +1019,14 @@ export function CasesPage({
       // refresh.
     }
   }, [workspace.id]);
+
+  /** Cancel the entire batch: skips queued cases AND aborts the in-flight
+   *  one (the backend flips every per-case flag). The banner button reads
+   *  "Cancelling batch…" until `batch_done` clears `batchCancelling`. */
+  const onCancelAll = useCallback(() => {
+    setBatchCancelling(true);
+    void ipc.batchCancel().catch(() => setBatchCancelling(false));
+  }, []);
 
   /** Reset a failed row to draft and re-run via the current provider. */
   const onRetryRow = useCallback(
@@ -1100,8 +1208,37 @@ export function CasesPage({
           startedAtMs={batchStartedAtMs}
           firstCaseMs={batchFirstCaseMs}
           tickMs={tickMs}
-          onCancelAll={() => void ipc.batchCancel()}
+          cancelling={batchCancelling}
+          onCancelAll={onCancelAll}
         />
+      )}
+      {pdfExporting && (
+        <PdfExportBanner
+          done={pdfExportDone}
+          total={pdfExportTotal}
+          onCancel={onCancelPdfExport}
+        />
+      )}
+      {pdfExportSummary && !pdfExporting && (
+        <PdfExportResultBanner
+          result={pdfExportSummary}
+          onDismiss={() => setPdfExportSummary(null)}
+        />
+      )}
+      {pdfExportError && (
+        <div className="flex items-start justify-between gap-3 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-[13px] text-danger">
+          <span className="break-words">
+            {t("cases.batch_export_error", { error: pdfExportError })}
+          </span>
+          <button
+            type="button"
+            onClick={() => setPdfExportError(null)}
+            aria-label={t("common.dismiss")}
+            className="shrink-0 rounded p-0.5 text-danger/70 transition hover:bg-danger/10 hover:text-danger"
+          >
+            <IconX size={14} stroke={1.7} aria-hidden />
+          </button>
+        </div>
       )}
       <Card>
         <CardHeader
@@ -1420,6 +1557,24 @@ export function CasesPage({
               </Button>
               <Button
                 size="sm"
+                variant="ghost"
+                onClick={() => setPdfOptionsOpen(true)}
+                aria-label={t("cases.export_options")}
+                title={t("cases.export_options")}
+              >
+                <IconAdjustments size={15} stroke={1.6} />
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={onBatchExportPdf}
+                loading={pdfExporting}
+                leftIcon={<IconFileTypePdf size={14} stroke={1.6} />}
+              >
+                {t("cases.export_pdf_action")}
+              </Button>
+              <Button
+                size="sm"
                 variant="danger"
                 onClick={(e) => {
                   setDeleteError(null);
@@ -1457,6 +1612,8 @@ export function CasesPage({
         error={editDateError}
         onApply={onApplyDate}
       />
+
+      <PdfOptionsSheet open={pdfOptionsOpen} onOpenChange={setPdfOptionsOpen} />
 
       <ConfirmDeletePopover
         open={deletingIds !== null}
@@ -1624,6 +1781,69 @@ function ConfirmDeletePopover({
           </Button>
           <Button size="sm" variant="danger" loading={busy} onClick={onConfirm}>
             {t("cases.delete_confirm_apply")}
+          </Button>
+        </div>
+      </div>
+    </Popover>
+  );
+}
+
+function ConfirmPurgePopover({
+  open,
+  onOpenChange,
+  anchor,
+  busy,
+  error,
+  title,
+  lines,
+  confirmLabel,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (next: boolean) => void;
+  anchor: HTMLElement | null;
+  busy: boolean;
+  error: string | null;
+  title: string;
+  lines: string[];
+  confirmLabel: string;
+  onConfirm: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Popover
+      open={open}
+      onOpenChange={onOpenChange}
+      anchor={anchor}
+      side="bottom"
+      align="end"
+      width={360}
+      ariaLabel={title}
+    >
+      <div className="space-y-3 p-4">
+        <h3 className="text-[13px] font-semibold text-ink">{title}</h3>
+        {error && (
+          <div className="rounded-md border border-danger/40 bg-danger/10 px-2.5 py-1.5 text-[12px] text-danger">
+            {error}
+          </div>
+        )}
+        <ul className="space-y-1.5 text-[12.5px] leading-relaxed text-ink-dim">
+          {lines.map((line, i) => (
+            <li key={i} className="flex gap-2">
+              <span
+                aria-hidden
+                className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-ink-faint"
+              />
+              <span>{line}</span>
+            </li>
+          ))}
+        </ul>
+        <div className="flex justify-end gap-2 pt-1">
+          <Button size="sm" variant="ghost" onClick={() => onOpenChange(false)}>
+            {t("common.cancel")}
+          </Button>
+          <Button size="sm" variant="danger" loading={busy} onClick={onConfirm}>
+            {confirmLabel}
           </Button>
         </div>
       </div>
@@ -2339,10 +2559,17 @@ function ShowCase({
   detail: CaseDetail | null;
   onBack: () => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [pdfOptionsOpen, setPdfOptionsOpen] = useState(false);
   const [localDetail, setLocalDetail] = useState<CaseDetail | null>(initialDetail);
+  const [purgePhiAnchor, setPurgePhiAnchor] = useState<HTMLElement | null>(null);
+  const [purgePhiError, setPurgePhiError] = useState<string | null>(null);
+  const [purgeAttachmentsAnchor, setPurgeAttachmentsAnchor] =
+    useState<HTMLElement | null>(null);
+  const [purgeAttachmentsError, setPurgeAttachmentsError] = useState<string | null>(null);
 
   useEffect(() => {
     setLocalDetail(initialDetail);
@@ -2373,12 +2600,13 @@ function ShowCase({
     const current = localDetail;
     if (!current) return;
     setBusy(true);
-    setError(null);
+    setPurgePhiError(null);
     try {
       const purged = await ipc.purgeCasePhi(workspace.id, current.case.id);
       setLocalDetail({ ...current, case: purged });
+      setPurgePhiAnchor(null);
     } catch (e) {
-      setError(String(e));
+      setPurgePhiError(String(e));
     } finally {
       setBusy(false);
     }
@@ -2388,15 +2616,30 @@ function ShowCase({
     const current = localDetail;
     if (!current) return;
     setBusy(true);
-    setError(null);
+    setPurgeAttachmentsError(null);
     try {
       await ipc.purgeCaseAttachments(workspace.id, current.case.id);
       const refreshed = await ipc.showCase(workspace.id, current.case.id);
       if (refreshed) setLocalDetail(refreshed);
+      setPurgeAttachmentsAnchor(null);
+    } catch (e) {
+      setPurgeAttachmentsError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const exportPdf = async () => {
+    const current = localDetail;
+    if (!current?.verdict) return;
+    setExporting(true);
+    setError(null);
+    try {
+      await exportCaseVerdictToPDF(current, t, i18n.language, loadPdfExportOptions());
     } catch (e) {
       setError(String(e));
     } finally {
-      setBusy(false);
+      setExporting(false);
     }
   };
 
@@ -2414,13 +2657,49 @@ function ShowCase({
         </Button>
         {detail.verdict && (
           <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setPdfOptionsOpen(true)}
+              disabled={busy}
+              aria-label={t("cases.export_options")}
+              title={t("cases.export_options")}
+            >
+              <IconAdjustments size={15} stroke={1.6} />
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={exportPdf}
+              loading={exporting}
+              disabled={busy}
+            >
+              <IconFileTypePdf size={14} className="mr-1" />
+              {t("cases.export_pdf")}
+            </Button>
             {detail.case.raw_text_retention !== "discarded" && (
-              <Button size="sm" variant="ghost" onClick={purgePhi} loading={busy}>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={(e) => {
+                  setPurgePhiError(null);
+                  setPurgePhiAnchor(e.currentTarget);
+                }}
+                loading={busy && purgePhiAnchor !== null}
+              >
                 {t("cases.purge_phi")}
               </Button>
             )}
             {detail.attachments.some((a) => a.stored_path) && (
-              <Button size="sm" variant="ghost" onClick={purgeAttachments} loading={busy}>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={(e) => {
+                  setPurgeAttachmentsError(null);
+                  setPurgeAttachmentsAnchor(e.currentTarget);
+                }}
+                loading={busy && purgeAttachmentsAnchor !== null}
+              >
                 {t("cases.purge_attachments")}
               </Button>
             )}
@@ -2436,6 +2715,50 @@ function ShowCase({
           </div>
         )}
       </div>
+
+      <ConfirmPurgePopover
+        open={purgePhiAnchor !== null}
+        onOpenChange={(next) => {
+          if (!next) {
+            setPurgePhiAnchor(null);
+            setPurgePhiError(null);
+          }
+        }}
+        anchor={purgePhiAnchor}
+        busy={busy && purgePhiAnchor !== null}
+        error={purgePhiError}
+        title={t("cases.purge_phi_confirm_title")}
+        lines={[
+          t("cases.purge_phi_removed"),
+          t("cases.purge_phi_kept"),
+          t("cases.purge_phi_irreversible"),
+        ]}
+        confirmLabel={t("cases.purge_phi_confirm_action")}
+        onConfirm={purgePhi}
+      />
+
+      <ConfirmPurgePopover
+        open={purgeAttachmentsAnchor !== null}
+        onOpenChange={(next) => {
+          if (!next) {
+            setPurgeAttachmentsAnchor(null);
+            setPurgeAttachmentsError(null);
+          }
+        }}
+        anchor={purgeAttachmentsAnchor}
+        busy={busy && purgeAttachmentsAnchor !== null}
+        error={purgeAttachmentsError}
+        title={t("cases.purge_attachments_confirm_title")}
+        lines={[
+          t("cases.purge_attachments_removed"),
+          t("cases.purge_attachments_kept"),
+          t("cases.purge_attachments_original_safe"),
+        ]}
+        confirmLabel={t("cases.purge_attachments_confirm_action")}
+        onConfirm={purgeAttachments}
+      />
+
+      <PdfOptionsSheet open={pdfOptionsOpen} onOpenChange={setPdfOptionsOpen} />
 
       {error && (
         <div className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-[13px] text-danger">
@@ -2532,6 +2855,9 @@ function ShowCase({
           subtitle={t("cases.attachments_section_subtitle")}
         />
         <CardBody>
+          <p className="mb-3 text-[12px] leading-relaxed text-ink-faint">
+            {t("cases.attachments_storage_hint")}
+          </p>
           <CaseAttachmentsSection
             workspaceId={workspace.id}
             caseId={detail.case.id}
@@ -2728,9 +3054,18 @@ function CaseAttachmentsSection({
               <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">
                 {a.original_filename}
               </span>
-              <span className="shrink-0 text-[11px] text-ink-faint">
-                {formatBytes(a.byte_size)}
-              </span>
+              {a.stored_path ? (
+                <span className="shrink-0 text-[11px] text-ink-faint">
+                  {formatBytes(a.byte_size)}
+                </span>
+              ) : (
+                <span
+                  className="shrink-0 rounded bg-surface px-1.5 py-0.5 text-[10px] font-medium text-ink-subtle"
+                  title={t("cases.purge_attachments_kept")}
+                >
+                  {t("cases.attachment_purged_badge")}
+                </span>
+              )}
               {a.needs_ocr && (
                 <span
                   className="shrink-0 rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-medium text-warn"
@@ -4563,6 +4898,7 @@ function BatchProgressBanner({
   startedAtMs,
   firstCaseMs,
   tickMs,
+  cancelling,
   onCancelAll,
 }: {
   done: number;
@@ -4573,6 +4909,8 @@ function BatchProgressBanner({
    *  a re-render). Without it the elapsed chip would stay frozen until
    *  another React update arrived. */
   tickMs: number;
+  /** True while a batch-wide cancel is in flight. */
+  cancelling: boolean;
   onCancelAll: () => void;
 }) {
   void tickMs;
@@ -4601,9 +4939,106 @@ function BatchProgressBanner({
       <button
         type="button"
         onClick={onCancelAll}
+        disabled={cancelling}
+        className={cn(
+          "ml-auto rounded-md border border-accent/30 px-2 py-0.5 text-[11.5px] text-accent transition hover:bg-accent/10 focus:outline-none focus-visible:ring-conclave",
+          cancelling && "cursor-default opacity-60 hover:bg-transparent",
+        )}
+      >
+        {t(cancelling ? "cases.batch_cancelling" : "cases.batch_cancel_all")}
+      </button>
+    </div>
+  );
+}
+
+/** Progress banner for a multi-case PDF export. Mirrors the deliberation
+ *  BatchProgressBanner styling so the two read as the same family. The Cancel
+ *  button aborts the run between cases (PDFs already written stay on disk). */
+function PdfExportBanner({
+  done,
+  total,
+  onCancel,
+}: {
+  done: number;
+  total: number;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-md border border-accent/40 bg-accent/5 px-3 py-2 text-[13px] text-accent">
+      <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+      <span>{t("cases.batch_export_progress", { done, total })}</span>
+      <button
+        type="button"
+        onClick={onCancel}
         className="ml-auto rounded-md border border-accent/30 px-2 py-0.5 text-[11.5px] text-accent transition hover:bg-accent/10 focus:outline-none focus-visible:ring-conclave"
       >
-        {t("cases.batch_cancel_all")}
+        {t("common.cancel")}
+      </button>
+    </div>
+  );
+}
+
+/** Dismissible summary shown after a multi-case PDF export settles: how many
+ *  PDFs landed where, plus any skipped (verdict-less) or aborted note. Green
+ *  when something was written, amber when nothing was. */
+function PdfExportResultBanner({
+  result,
+  onDismiss,
+}: {
+  result: BatchExportResult;
+  onDismiss: () => void;
+}) {
+  const { t } = useTranslation();
+  const none = result.saved === 0;
+  const parts: string[] = [];
+  if (none) {
+    parts.push(t("cases.batch_export_none"));
+  } else {
+    parts.push(
+      t(
+        result.saved === 1
+          ? "cases.batch_export_done"
+          : "cases.batch_export_done_plural",
+        { count: result.saved, dir: result.dir ?? "" },
+      ),
+    );
+  }
+  if (result.skipped.length > 0) {
+    parts.push(
+      t(
+        result.skipped.length === 1
+          ? "cases.batch_export_skipped"
+          : "cases.batch_export_skipped_plural",
+        { count: result.skipped.length },
+      ),
+    );
+  }
+  if (result.aborted) {
+    parts.push(t("cases.batch_export_aborted"));
+  }
+  return (
+    <div
+      className={cn(
+        "flex items-start justify-between gap-3 rounded-md border px-3 py-2 text-[13px]",
+        none
+          ? "border-warn/40 bg-warn/10 text-warn"
+          : "border-ok/30 bg-ok/5 text-ok",
+      )}
+    >
+      <span className="break-words">{parts.join(" · ")}</span>
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label={t("common.dismiss")}
+        className={cn(
+          "shrink-0 rounded p-0.5 transition",
+          none
+            ? "text-warn/70 hover:bg-warn/10 hover:text-warn"
+            : "text-ok/70 hover:bg-ok/10 hover:text-ok",
+        )}
+      >
+        <IconX size={14} stroke={1.7} aria-hidden />
       </button>
     </div>
   );

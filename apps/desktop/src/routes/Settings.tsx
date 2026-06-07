@@ -248,19 +248,31 @@ export function SettingsPage() {
       //     terminal command, and a Re-detect affordance — instead of
       //     a dead-end disabled tile.
       const info = providers.find((p) => p.id === id);
+      // Always clear the user-disabled flag on a CLI tile click,
+      // regardless of probe state. The user pressing the tile is an
+      // explicit "I want this provider" signal — leaving the disabled
+      // flag set would leave them stuck in `NotConfigured` (which
+      // currently falls through to the LoginRequired UI in the setup
+      // panel) even after they fix the underlying CLI login. We don't
+      // surface errors here because the worst case is a no-op write.
+      try {
+        await ipc.setProviderKey(id, "");
+      } catch {
+        // best-effort; the setup panel still renders correctly
+      }
       if (!info || !isReady(info)) {
         setFlow({ kind: "cli-setup", id: id as "claude-cli" | "codex-cli" });
+        // Refresh providers in the background so the panel sees the
+        // freshly-cleared flag on its next listProviders pull.
+        void refresh();
         return;
       }
       setBusy(true);
       setError(null);
       try {
-        await ipc.setProviderKey(id, "");
-      } catch (e) {
-        setError(String(e));
+        await refresh();
       } finally {
         setBusy(false);
-        await refresh();
       }
       return;
     }
@@ -1327,8 +1339,10 @@ function CliSetupPanel({
   const { t } = useTranslation();
   const [diagnostics, setDiagnostics] = useState<CliDiagnostics | null>(null);
   const [detecting, setDetecting] = useState(false);
+  const [marking, setMarking] = useState(false);
   const [copied, setCopied] = useState(false);
   const [showPath, setShowPath] = useState(false);
+  const [showProbe, setShowProbe] = useState(false);
   // Once we've called onReady (status flipped to ready) we suppress
   // future fires from re-renders that arrive before the parent
   // re-renders us with `flow.kind === "idle"`.
@@ -1378,6 +1392,23 @@ function CliSetupPanel({
       setDiagnostics(d);
     } finally {
       setDetecting(false);
+    }
+  };
+
+  // Manual override toggle: persists `cli_local_overrides[id]` in
+  // conclave.toml. We refresh the parent provider list afterwards so
+  // the chip animates from "Inicia sesión en el CLI" to "Listo"
+  // immediately. Clearing the override (true → false) is the same
+  // command with `value: false`.
+  const setOverride = async (value: boolean) => {
+    setMarking(true);
+    try {
+      await ipc.setCliLoginOverride(id, value);
+      await onRefreshProviders();
+      const d = await ipc.cliDiagnostics(id);
+      setDiagnostics(d);
+    } finally {
+      setMarking(false);
     }
   };
 
@@ -1536,6 +1567,128 @@ function CliSetupPanel({
           )}
         </div>
       )}
+
+      {/* Manual override safety net — only shown when the binary IS on
+          PATH but auto-detection couldn't confirm login. Honest copy:
+          the user takes responsibility for declaring their state, and
+          Conclave trusts it until the binary disappears. */}
+      {!isNotInstalled && diagnostics && (
+        <div className="rounded-md border border-border-subtle bg-bg-subtle p-2.5">
+          {diagnostics.user_marked_ready ? (
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[11.5px] leading-relaxed text-ink-subtle">
+                {t("settings.cli_setup_marked_ready_caption", {
+                  binary: `\`${binary}\``,
+                })}
+              </p>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setOverride(false)}
+                loading={marking}
+              >
+                {t("settings.cli_setup_unmark_connected")}
+              </Button>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[11.5px] leading-relaxed text-ink-subtle">
+                {t("settings.cli_setup_mark_connected_caption", {
+                  binary: `\`${binary}\``,
+                })}
+              </p>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => setOverride(true)}
+                loading={marking}
+              >
+                {t("settings.cli_setup_mark_connected")}
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Technical diagnostics — what the probe actually returned. We
+          surface command, exit code, duration, stderr excerpt, fallback
+          used, env keys seen, and binary mtime/size so the next "no
+          detecta" report ships with one screenshot's worth of detail.
+          Collapsed by default so the panel stays calm. */}
+      {!isNotInstalled && diagnostics && (
+        <div className="rounded-md border border-border-subtle bg-bg-subtle p-2.5">
+          <button
+            type="button"
+            onClick={() => setShowProbe((v) => !v)}
+            className="text-[11.5px] font-medium text-ink-subtle transition no-drag hover:text-ink focus:outline-none focus-visible:underline"
+          >
+            {showProbe
+              ? t("settings.cli_setup_probe_hide")
+              : t("settings.cli_setup_probe_show")}
+            <span className="ml-1 text-ink-faint">
+              ({t("settings.cli_setup_probe_label")})
+            </span>
+          </button>
+          {showProbe && <ProbeDetailsBlock diagnostics={diagnostics} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Render the raw login-probe payload for the CLI setup panel. Pure
+ * read-out — no actions live here; the "Marcar como conectado" button
+ * is rendered separately above so it's reachable without scrolling
+ * past the debug block.
+ */
+function ProbeDetailsBlock({ diagnostics }: { diagnostics: CliDiagnostics }) {
+  const { t } = useTranslation();
+  const { probe } = diagnostics;
+  const row = (label: string, value: ReactNode) => (
+    <div className="flex gap-2 py-0.5">
+      <span className="shrink-0 text-ink-faint">{label}</span>
+      <span className="min-w-0 flex-1 break-words font-mono text-ink-subtle">
+        {value}
+      </span>
+    </div>
+  );
+  return (
+    <div className="mt-2 space-y-0 rounded bg-bg px-2 py-1.5 font-mono text-[10.5px] leading-relaxed">
+      {probe.command && row(t("settings.cli_setup_probe_command"), probe.command)}
+      {row(
+        t("settings.cli_setup_probe_exit_code"),
+        probe.exit_code === null ? "—" : String(probe.exit_code),
+      )}
+      {row(
+        t("settings.cli_setup_probe_duration"),
+        probe.duration_ms === null ? "—" : `${probe.duration_ms} ms`,
+      )}
+      {probe.timed_out && row(t("settings.cli_setup_probe_timeout"), "true")}
+      {row(
+        t("settings.cli_setup_probe_logged_in"),
+        probe.logged_in ? "true" : "false",
+      )}
+      {probe.fallback_used &&
+        row(t("settings.cli_setup_probe_fallback"), probe.fallback_used)}
+      {probe.env_keys_seen.length > 0 &&
+        row(
+          t("settings.cli_setup_probe_env"),
+          probe.env_keys_seen.join(", "),
+        )}
+      {probe.binary_size !== null &&
+        row(
+          t("settings.cli_setup_probe_binary"),
+          `${probe.binary_size} bytes` +
+            (probe.binary_mtime !== null
+              ? ` · mtime ${new Date(probe.binary_mtime * 1000).toISOString()}`
+              : ""),
+        )}
+      {probe.stderr_excerpt &&
+        row(
+          t("settings.cli_setup_probe_stderr"),
+          <span className="whitespace-pre-wrap">{probe.stderr_excerpt}</span>,
+        )}
     </div>
   );
 }

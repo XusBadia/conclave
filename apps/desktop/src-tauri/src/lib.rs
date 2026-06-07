@@ -100,6 +100,7 @@ pub fn run() {
             commands::remove_provider_key,
             commands::cli_diagnostics,
             commands::redetect_cli_binaries,
+            commands::set_cli_login_override,
             commands::privacy_settings,
             commands::set_privacy_settings,
             commands::oauth_anthropic_start,

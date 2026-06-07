@@ -4,6 +4,7 @@
 //! [`Paths::config_dir`](crate::paths::Paths::config_dir). It is loaded with
 //! [`Config::load`] and persisted with [`Config::save`].
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -113,6 +114,17 @@ pub struct ProvidersConfig {
     /// Cleared when the user picks the same provider tile again.
     #[serde(default)]
     pub disabled_provider_ids: Vec<String>,
+    /// Per-CLI-provider manual override. When the user has the CLI
+    /// installed and logged in but our auto-detection can't confirm
+    /// it (Keychain ACL quirks, launchd-vs-shell env divergence, …),
+    /// the Settings panel exposes a "Marcar como conectado" button
+    /// that flips this map entry to `true`. `list_providers` then
+    /// treats the provider as `Ready` whenever the binary is on
+    /// `$PATH`, regardless of what the login probe returned. The
+    /// entry persists across restarts; the user clears it via the
+    /// same panel.
+    #[serde(default)]
+    pub cli_local_overrides: HashMap<String, bool>,
 }
 
 impl Config {
@@ -258,6 +270,41 @@ mod tests {
         "#;
         let cfg: Config = toml::from_str(raw).unwrap();
         assert!(cfg.providers.disabled_provider_ids.is_empty());
+    }
+
+    #[test]
+    fn cli_local_overrides_round_trip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("conclave.toml");
+
+        let mut cfg = Config::default();
+        cfg.providers
+            .cli_local_overrides
+            .insert("claude-cli".to_owned(), true);
+        cfg.providers
+            .cli_local_overrides
+            .insert("codex-cli".to_owned(), false);
+
+        cfg.save(&path).unwrap();
+        let loaded = Config::load(&path).unwrap();
+        assert_eq!(
+            loaded.providers.cli_local_overrides.get("claude-cli"),
+            Some(&true)
+        );
+        assert_eq!(
+            loaded.providers.cli_local_overrides.get("codex-cli"),
+            Some(&false)
+        );
+    }
+
+    #[test]
+    fn cli_local_overrides_defaults_to_empty_when_missing() {
+        let raw = r#"
+            [providers]
+            default = "anthropic"
+        "#;
+        let cfg: Config = toml::from_str(raw).unwrap();
+        assert!(cfg.providers.cli_local_overrides.is_empty());
     }
 
     #[test]

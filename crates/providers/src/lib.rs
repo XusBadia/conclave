@@ -58,6 +58,7 @@ mod anthropic_api;
 mod anthropic_oauth;
 mod apple_intelligence;
 mod claude_cli;
+mod cli_local;
 mod codex_cli;
 mod error;
 mod mock;
@@ -80,6 +81,7 @@ pub use claude_cli::{
     ClaudeCliProvider, DEFAULT_MODEL as CLAUDE_CLI_DEFAULT_MODEL,
     PROVIDER_ID as CLAUDE_CLI_PROVIDER_ID,
 };
+pub use cli_local::ProbeDetails;
 pub use codex_cli::{
     CodexCliProvider, DEFAULT_MODEL as CODEX_CLI_DEFAULT_MODEL,
     PROVIDER_ID as CODEX_CLI_PROVIDER_ID,
