@@ -8,6 +8,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  IconAdjustments,
   IconAlertTriangle,
   IconCheck,
   IconChevronDown,
@@ -26,6 +27,12 @@ import {
 } from "@tabler/icons-react";
 
 import { exportCaseVerdictToPDF } from "../pdf/exportCaseVerdict";
+import {
+  exportCasesToFolder,
+  type BatchExportResult,
+} from "../pdf/exportCasesBatch";
+import { loadPdfExportOptions } from "../pdf/exportOptions";
+import { PdfOptionsSheet } from "../pdf/PdfOptionsSheet";
 
 import { Button } from "../components/Button";
 import { Card, CardBody, CardHeader } from "../components/Card";
@@ -469,6 +476,16 @@ export function CasesPage({
   const [editingDate, setEditingDate] = useState(false);
   const [editDateError, setEditDateError] = useState<string | null>(null);
   const [editDateBusy, setEditDateBusy] = useState(false);
+  // Multi-case PDF export. `pdfExporting` drives the progress banner;
+  // `pdfExportSummary` the dismissible result banner once it finishes. The
+  // abort controller lets the banner's Cancel stop the run between cases.
+  const [pdfOptionsOpen, setPdfOptionsOpen] = useState(false);
+  const [pdfExporting, setPdfExporting] = useState(false);
+  const [pdfExportDone, setPdfExportDone] = useState(0);
+  const [pdfExportTotal, setPdfExportTotal] = useState(0);
+  const [pdfExportSummary, setPdfExportSummary] = useState<BatchExportResult | null>(null);
+  const [pdfExportError, setPdfExportError] = useState<string | null>(null);
+  const pdfAbortRef = useRef<AbortController | null>(null);
   // When non-null, the delete-confirmation popover is open for this
   // set of ids. Used both by the per-row hover trash button (length 1)
   // and by the batch toolbar (length N). `deleteAnchor` is the element
@@ -878,6 +895,51 @@ export function CasesPage({
     setSelectedIds(new Set());
   };
 
+  /** Export the selected cases to a folder, one PDF per case. Reads the
+   *  persisted PDF options fresh at click time so a change made in the
+   *  single-case view is honoured here too. Verdict-less cases are skipped
+   *  and reported in the result banner. */
+  const onBatchExportPdf = useCallback(async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0 || pdfExporting) return;
+    const controller = new AbortController();
+    pdfAbortRef.current = controller;
+    setPdfExporting(true);
+    setPdfExportError(null);
+    setPdfExportSummary(null);
+    setPdfExportDone(0);
+    setPdfExportTotal(ids.length);
+    try {
+      const result = await exportCasesToFolder(
+        workspace.id,
+        ids,
+        t,
+        i18n.language,
+        loadPdfExportOptions(),
+        ({ done, total }) => {
+          setPdfExportDone(done);
+          setPdfExportTotal(total);
+        },
+        controller.signal,
+      );
+      // A dismissed folder picker leaves nothing to report. Anything else
+      // (full run, partial abort) gets a summary banner.
+      if (!result.cancelled) {
+        setPdfExportSummary(result);
+        exitSelection();
+      }
+    } catch (e) {
+      setPdfExportError(String(e));
+    } finally {
+      setPdfExporting(false);
+      pdfAbortRef.current = null;
+    }
+  }, [selectedIds, pdfExporting, workspace.id, t, i18n.language]);
+
+  const onCancelPdfExport = useCallback(() => {
+    pdfAbortRef.current?.abort();
+  }, []);
+
   const onApplyDate = async (localValue: string) => {
     if (selectedIds.size === 0) return;
     setEditDateBusy(true);
@@ -1149,6 +1211,34 @@ export function CasesPage({
           cancelling={batchCancelling}
           onCancelAll={onCancelAll}
         />
+      )}
+      {pdfExporting && (
+        <PdfExportBanner
+          done={pdfExportDone}
+          total={pdfExportTotal}
+          onCancel={onCancelPdfExport}
+        />
+      )}
+      {pdfExportSummary && !pdfExporting && (
+        <PdfExportResultBanner
+          result={pdfExportSummary}
+          onDismiss={() => setPdfExportSummary(null)}
+        />
+      )}
+      {pdfExportError && (
+        <div className="flex items-start justify-between gap-3 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-[13px] text-danger">
+          <span className="break-words">
+            {t("cases.batch_export_error", { error: pdfExportError })}
+          </span>
+          <button
+            type="button"
+            onClick={() => setPdfExportError(null)}
+            aria-label={t("common.dismiss")}
+            className="shrink-0 rounded p-0.5 text-danger/70 transition hover:bg-danger/10 hover:text-danger"
+          >
+            <IconX size={14} stroke={1.7} aria-hidden />
+          </button>
+        </div>
       )}
       <Card>
         <CardHeader
@@ -1467,6 +1557,24 @@ export function CasesPage({
               </Button>
               <Button
                 size="sm"
+                variant="ghost"
+                onClick={() => setPdfOptionsOpen(true)}
+                aria-label={t("cases.export_options")}
+                title={t("cases.export_options")}
+              >
+                <IconAdjustments size={15} stroke={1.6} />
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={onBatchExportPdf}
+                loading={pdfExporting}
+                leftIcon={<IconFileTypePdf size={14} stroke={1.6} />}
+              >
+                {t("cases.export_pdf_action")}
+              </Button>
+              <Button
+                size="sm"
                 variant="danger"
                 onClick={(e) => {
                   setDeleteError(null);
@@ -1504,6 +1612,8 @@ export function CasesPage({
         error={editDateError}
         onApply={onApplyDate}
       />
+
+      <PdfOptionsSheet open={pdfOptionsOpen} onOpenChange={setPdfOptionsOpen} />
 
       <ConfirmDeletePopover
         open={deletingIds !== null}
@@ -2453,6 +2563,7 @@ function ShowCase({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [pdfOptionsOpen, setPdfOptionsOpen] = useState(false);
   const [localDetail, setLocalDetail] = useState<CaseDetail | null>(initialDetail);
   const [purgePhiAnchor, setPurgePhiAnchor] = useState<HTMLElement | null>(null);
   const [purgePhiError, setPurgePhiError] = useState<string | null>(null);
@@ -2524,7 +2635,7 @@ function ShowCase({
     setExporting(true);
     setError(null);
     try {
-      await exportCaseVerdictToPDF(current, t, i18n.language);
+      await exportCaseVerdictToPDF(current, t, i18n.language, loadPdfExportOptions());
     } catch (e) {
       setError(String(e));
     } finally {
@@ -2546,6 +2657,16 @@ function ShowCase({
         </Button>
         {detail.verdict && (
           <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setPdfOptionsOpen(true)}
+              disabled={busy}
+              aria-label={t("cases.export_options")}
+              title={t("cases.export_options")}
+            >
+              <IconAdjustments size={15} stroke={1.6} />
+            </Button>
             <Button
               size="sm"
               variant="ghost"
@@ -2636,6 +2757,8 @@ function ShowCase({
         confirmLabel={t("cases.purge_attachments_confirm_action")}
         onConfirm={purgeAttachments}
       />
+
+      <PdfOptionsSheet open={pdfOptionsOpen} onOpenChange={setPdfOptionsOpen} />
 
       {error && (
         <div className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-[13px] text-danger">
@@ -4823,6 +4946,99 @@ function BatchProgressBanner({
         )}
       >
         {t(cancelling ? "cases.batch_cancelling" : "cases.batch_cancel_all")}
+      </button>
+    </div>
+  );
+}
+
+/** Progress banner for a multi-case PDF export. Mirrors the deliberation
+ *  BatchProgressBanner styling so the two read as the same family. The Cancel
+ *  button aborts the run between cases (PDFs already written stay on disk). */
+function PdfExportBanner({
+  done,
+  total,
+  onCancel,
+}: {
+  done: number;
+  total: number;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-md border border-accent/40 bg-accent/5 px-3 py-2 text-[13px] text-accent">
+      <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+      <span>{t("cases.batch_export_progress", { done, total })}</span>
+      <button
+        type="button"
+        onClick={onCancel}
+        className="ml-auto rounded-md border border-accent/30 px-2 py-0.5 text-[11.5px] text-accent transition hover:bg-accent/10 focus:outline-none focus-visible:ring-conclave"
+      >
+        {t("common.cancel")}
+      </button>
+    </div>
+  );
+}
+
+/** Dismissible summary shown after a multi-case PDF export settles: how many
+ *  PDFs landed where, plus any skipped (verdict-less) or aborted note. Green
+ *  when something was written, amber when nothing was. */
+function PdfExportResultBanner({
+  result,
+  onDismiss,
+}: {
+  result: BatchExportResult;
+  onDismiss: () => void;
+}) {
+  const { t } = useTranslation();
+  const none = result.saved === 0;
+  const parts: string[] = [];
+  if (none) {
+    parts.push(t("cases.batch_export_none"));
+  } else {
+    parts.push(
+      t(
+        result.saved === 1
+          ? "cases.batch_export_done"
+          : "cases.batch_export_done_plural",
+        { count: result.saved, dir: result.dir ?? "" },
+      ),
+    );
+  }
+  if (result.skipped.length > 0) {
+    parts.push(
+      t(
+        result.skipped.length === 1
+          ? "cases.batch_export_skipped"
+          : "cases.batch_export_skipped_plural",
+        { count: result.skipped.length },
+      ),
+    );
+  }
+  if (result.aborted) {
+    parts.push(t("cases.batch_export_aborted"));
+  }
+  return (
+    <div
+      className={cn(
+        "flex items-start justify-between gap-3 rounded-md border px-3 py-2 text-[13px]",
+        none
+          ? "border-warn/40 bg-warn/10 text-warn"
+          : "border-ok/30 bg-ok/5 text-ok",
+      )}
+    >
+      <span className="break-words">{parts.join(" · ")}</span>
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label={t("common.dismiss")}
+        className={cn(
+          "shrink-0 rounded p-0.5 transition",
+          none
+            ? "text-warn/70 hover:bg-warn/10 hover:text-warn"
+            : "text-ok/70 hover:bg-ok/10 hover:text-ok",
+        )}
+      >
+        <IconX size={14} stroke={1.7} aria-hidden />
       </button>
     </div>
   );

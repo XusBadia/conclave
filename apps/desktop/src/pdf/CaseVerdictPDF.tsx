@@ -9,12 +9,17 @@ import {
 import type { ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type {
+  CaseAttachment,
   CaseDetail,
   CaseRecord,
   ReviewMetadataRecord,
   Verdict,
   VerdictRecord,
 } from "../lib/ipc";
+import {
+  DEFAULT_PDF_EXPORT_OPTIONS,
+  type PdfExportOptions,
+} from "./exportOptions";
 
 /* ------------------------------------------------------------------ */
 /* Fonts                                                              */
@@ -77,68 +82,62 @@ const styles = StyleSheet.create({
     paddingBottom: 56,
     paddingHorizontal: 52,
     fontFamily: "Helvetica",
-    fontSize: 10.5,
+    fontSize: 9.5,
     color: color.inkDim,
-    lineHeight: 1.5,
+    lineHeight: 1.35,
   },
 
-  /* Header */
-  header: { marginBottom: 24 },
-  headerRow: { flexDirection: "row", alignItems: "flex-start" },
-  headerLeft: { flexGrow: 1, paddingRight: 16 },
-  headerRight: { width: 200, alignItems: "flex-end" },
+  /* Header — vertical stack: wordmark, title, full-width label, meta strip.
+   * The old two-column layout (fixed 200pt right column) let long patient
+   * labels overprint the metadata; stacking gives the label the full width. */
+  header: { marginBottom: 18 },
   wordmark: {
     fontFamily: "Helvetica-Bold",
-    fontSize: 11,
+    fontSize: 10,
     color: color.ink,
-    letterSpacing: 1.2,
+    letterSpacing: 0.8,
     textTransform: "uppercase",
     marginBottom: 10,
   },
   h1: {
     fontFamily: "Helvetica-Bold",
-    fontSize: 18,
+    fontSize: 15,
     color: color.ink,
     lineHeight: 1.25,
   },
   patientLabel: {
     fontFamily: "Helvetica-Bold",
-    fontSize: 11,
+    fontSize: 10,
     color: color.inkDim,
     marginTop: 6,
   },
-  metaPair: { flexDirection: "row", marginBottom: 4 },
-  metaLabel: {
+  /* Metadata strip: a wrapping row of LABEL·value items below the title. */
+  metaStrip: { flexDirection: "row", flexWrap: "wrap", marginTop: 10 },
+  metaItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginRight: 16,
+    marginBottom: 2,
+  },
+  metaItemLabel: {
     fontFamily: "Helvetica",
-    fontSize: 8.5,
+    fontSize: 8,
     color: color.inkSubtle,
     textTransform: "uppercase",
     letterSpacing: 0.5,
-    width: 70,
-    textAlign: "right",
-    marginRight: 8,
+    marginRight: 5,
   },
-  metaValue: {
-    fontFamily: "Helvetica",
-    fontSize: 9.5,
-    color: color.ink,
-    textAlign: "right",
-  },
-  metaValueMono: {
-    fontFamily: "Courier",
-    fontSize: 9,
-    color: color.ink,
-    textAlign: "right",
-  },
+  metaItemValue: { fontFamily: "Helvetica", fontSize: 9, color: color.ink },
+  metaItemValueMono: { fontFamily: "Courier", fontSize: 8.5, color: color.ink },
   headerRule: {
-    marginTop: 16,
+    marginTop: 14,
     borderBottomWidth: 0.5,
     borderBottomColor: color.hairlineStrong,
   },
 
   /* Section primitives */
-  section: { marginBottom: 20 },
-  sectionHeader: { marginBottom: 8 },
+  section: { marginBottom: 14 },
+  sectionHeader: { marginBottom: 6 },
   eyebrow: {
     fontFamily: "Helvetica-Bold",
     fontSize: 9,
@@ -150,13 +149,13 @@ const styles = StyleSheet.create({
   eyebrowDanger: { color: color.danger },
   body: {
     fontFamily: "Helvetica",
-    fontSize: 10.5,
+    fontSize: 9.5,
     color: color.inkDim,
-    lineHeight: 1.5,
+    lineHeight: 1.35,
   },
   bodyStrong: {
     fontFamily: "Helvetica-Bold",
-    fontSize: 10.5,
+    fontSize: 9.5,
     color: color.ink,
   },
   paragraphSpacing: { marginBottom: 6 },
@@ -166,21 +165,21 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     borderBottomWidth: 0.5,
     borderBottomColor: color.hairline,
-    paddingVertical: 8,
+    paddingVertical: 5,
     paddingHorizontal: 4,
   },
   tableRowZebra: { backgroundColor: color.surfaceSoft },
   tableLabel: {
-    width: "35%",
+    width: "32%",
     fontFamily: "Helvetica-Bold",
-    fontSize: 10,
+    fontSize: 9.5,
     color: color.ink,
     paddingRight: 10,
   },
   tableValue: {
-    width: "65%",
+    width: "68%",
     fontFamily: "Helvetica",
-    fontSize: 10,
+    fontSize: 9.5,
     color: color.inkDim,
   },
 
@@ -194,7 +193,7 @@ const styles = StyleSheet.create({
   },
   primaryAction: {
     fontFamily: "Helvetica-Bold",
-    fontSize: 13,
+    fontSize: 11,
     color: color.ink,
     marginTop: 6,
     marginBottom: 8,
@@ -206,7 +205,7 @@ const styles = StyleSheet.create({
   altIndex: {
     width: 18,
     fontFamily: "Courier",
-    fontSize: 10,
+    fontSize: 9.5,
     color: color.inkSubtle,
   },
   altBody: { flex: 1 },
@@ -259,7 +258,44 @@ const styles = StyleSheet.create({
     fontSize: 9,
     color: color.accent,
   },
-  evidenceClaim: { flex: 1, fontSize: 10, color: color.inkDim },
+  evidenceClaim: { flex: 1, fontSize: 9.5, color: color.inkDim },
+
+  /* Header note (optional letterhead line) */
+  headerNote: {
+    fontFamily: "Helvetica-Oblique",
+    fontSize: 9.5,
+    color: color.inkSubtle,
+    marginTop: -8,
+    marginBottom: 18,
+  },
+
+  /* Source documents */
+  sourceRow: {
+    flexDirection: "row",
+    paddingVertical: 5,
+    borderBottomWidth: 0.5,
+    borderBottomColor: color.hairline,
+  },
+  sourceRef: {
+    width: 36,
+    fontFamily: "Courier",
+    fontSize: 9,
+    color: color.accent,
+  },
+  sourceName: { flex: 1, fontSize: 9.5, color: color.inkDim },
+  sourceMeta: { fontFamily: "Helvetica", fontSize: 8.5, color: color.inkFaint },
+
+  /* Generation details */
+  genRow: { flexDirection: "row", marginBottom: 4 },
+  genLabel: {
+    width: 120,
+    fontFamily: "Helvetica",
+    fontSize: 8.5,
+    color: color.inkSubtle,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  genValue: { flex: 1, fontFamily: "Helvetica", fontSize: 9.5, color: color.ink },
 
   /* Review */
   reviewBox: {
@@ -274,7 +310,7 @@ const styles = StyleSheet.create({
   },
   reviewNote: {
     fontFamily: "Helvetica-Oblique",
-    fontSize: 10,
+    fontSize: 9.5,
     color: color.inkDim,
     marginTop: 6,
   },
@@ -292,10 +328,12 @@ const styles = StyleSheet.create({
     textAlign: "justify",
   },
 
-  /* Footer */
+  /* Footer — text styles live on the <Text> children (not the View) so the
+   * ink reliably paints; the View is just the fixed, absolutely-positioned
+   * bar. Color darkened from inkFaint so page numbers are actually legible. */
   footer: {
     position: "absolute",
-    bottom: 28,
+    bottom: 24,
     left: 52,
     right: 52,
     borderTopWidth: 0.5,
@@ -303,14 +341,21 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     flexDirection: "row",
     justifyContent: "space-between",
+  },
+  footerText: {
     fontFamily: "Helvetica",
     fontSize: 8.5,
-    color: color.inkFaint,
+    color: color.inkSubtle,
+  },
+  footerId: {
+    fontFamily: "Courier",
+    fontSize: 8.5,
+    color: color.inkSubtle,
   },
   footerWordmark: {
     fontFamily: "Helvetica-Bold",
     fontSize: 8.5,
-    color: color.inkFaint,
+    color: color.inkSubtle,
     letterSpacing: 0.8,
     textTransform: "uppercase",
   },
@@ -362,6 +407,20 @@ function splitParagraphs(text: string): string[] {
     .filter((p) => p.length > 0);
 }
 
+/** Human-readable file size (B / KB / MB / GB). Integers for bytes, one
+ *  decimal otherwise. Used by the optional "Source documents" section. */
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const i = Math.min(
+    units.length - 1,
+    Math.floor(Math.log(bytes) / Math.log(1024)),
+  );
+  const value = bytes / 1024 ** i;
+  const rounded = i === 0 ? Math.round(value) : Math.round(value * 10) / 10;
+  return `${rounded} ${units[i]}`;
+}
+
 /* ------------------------------------------------------------------ */
 /* Section building blocks                                            */
 /* ------------------------------------------------------------------ */
@@ -410,6 +469,10 @@ export interface CaseVerdictPDFProps {
   detail: CaseDetail;
   t: TFunction;
   locale: string;
+  /** Optional content extras (source documents, header note, generation
+   *  details). Defaults to "everything off", so an export with no options
+   *  passed is identical to the baseline document. */
+  options?: PdfExportOptions;
   /** Override the "generated at" timestamp — defaults to now. Tests pass an
    *  explicit value so snapshots stay stable. */
   generatedAt?: Date;
@@ -419,6 +482,7 @@ export default function CaseVerdictPDF({
   detail,
   t,
   locale,
+  options = DEFAULT_PDF_EXPORT_OPTIONS,
   generatedAt = new Date(),
 }: CaseVerdictPDFProps) {
   const verdict = detail.verdict;
@@ -453,6 +517,10 @@ export default function CaseVerdictPDF({
           locale={locale}
         />
 
+        {nonEmptyText(options.headerNote) && (
+          <Text style={styles.headerNote}>{options.headerNote.trim()}</Text>
+        )}
+
         <Summary verdict={verdict} t={t} />
         <KeyClinicalData verdict={verdict} t={t} />
         <PrimaryRecommendation verdict={verdict} t={t} />
@@ -461,10 +529,28 @@ export default function CaseVerdictPDF({
         <RedFlags verdict={verdict} t={t} />
         <FollowUp verdict={verdict} t={t} />
         <AppliedEvidence verdict={verdict} t={t} />
+        {options.includeSourceFiles && (
+          <SourceDocuments
+            attachments={detail.attachments}
+            showMeta={options.includeAttachmentMeta}
+            t={t}
+          />
+        )}
+        {options.includeGenerationMeta && verdictRecord && (
+          <GenerationDetails
+            verdictRecord={verdictRecord}
+            t={t}
+            locale={locale}
+          />
+        )}
         {review && <Review review={review} t={t} locale={locale} />}
         <Disclaimer verdict={verdict} t={t} />
 
-        <Footer t={t} generatedAtText={generatedAtText} />
+        <Footer
+          t={t}
+          generatedAtText={generatedAtText}
+          caseId={detail.case.id.slice(0, 8)}
+        />
       </Page>
     </Document>
   );
@@ -496,45 +582,43 @@ function Header({
 
   return (
     <View style={styles.header} wrap={false}>
-      <View style={styles.headerRow}>
-        <View style={styles.headerLeft}>
-          <Text style={styles.wordmark}>Conclave</Text>
-          <Text style={styles.h1}>{t("cases.pdf.title")}</Text>
-          <Text style={styles.patientLabel}>{patientLabel}</Text>
-        </View>
-        <View style={styles.headerRight}>
-          <MetaPair
-            label={t("cases.pdf.metadata.case_date")}
-            value={formatDate(caseRecord.case_date || caseRecord.created_at, locale)}
-          />
-          <MetaPair
-            label={t("cases.pdf.metadata.case_id")}
-            value={caseRecord.id.slice(0, 8)}
-            mono
-          />
-          <MetaPair label={t("cases.pdf.metadata.model")} value={modelLine} />
-          <View style={styles.metaPair}>
-            <Text style={styles.metaLabel}>{t("cases.pdf.metadata.status")}</Text>
-            <View
+      <Text style={styles.wordmark}>Conclave</Text>
+      <Text style={styles.h1}>{t("cases.pdf.title")}</Text>
+      <Text style={styles.patientLabel}>{patientLabel}</Text>
+      <View style={styles.metaStrip}>
+        <MetaItem
+          label={t("cases.pdf.metadata.case_date")}
+          value={formatDate(caseRecord.case_date || caseRecord.created_at, locale)}
+        />
+        <MetaItem
+          label={t("cases.pdf.metadata.case_id")}
+          value={caseRecord.id.slice(0, 8)}
+          mono
+        />
+        <MetaItem label={t("cases.pdf.metadata.model")} value={modelLine} />
+        <View style={styles.metaItem}>
+          <Text style={styles.metaItemLabel}>
+            {t("cases.pdf.metadata.status")}
+          </Text>
+          <View
+            style={{
+              backgroundColor: statusStyle.bg,
+              paddingVertical: 2,
+              paddingHorizontal: 6,
+              borderRadius: 3,
+            }}
+          >
+            <Text
               style={{
-                backgroundColor: statusStyle.bg,
-                paddingVertical: 2,
-                paddingHorizontal: 6,
-                borderRadius: 3,
+                fontFamily: "Helvetica-Bold",
+                fontSize: 8,
+                color: statusStyle.text,
+                textTransform: "uppercase",
+                letterSpacing: 0.4,
               }}
             >
-              <Text
-                style={{
-                  fontFamily: "Helvetica-Bold",
-                  fontSize: 8,
-                  color: statusStyle.text,
-                  textTransform: "uppercase",
-                  letterSpacing: 0.4,
-                }}
-              >
-                {statusLabel(t, statusKey)}
-              </Text>
-            </View>
+              {statusLabel(t, statusKey)}
+            </Text>
           </View>
         </View>
       </View>
@@ -543,7 +627,7 @@ function Header({
   );
 }
 
-function MetaPair({
+function MetaItem({
   label,
   value,
   mono,
@@ -553,9 +637,11 @@ function MetaPair({
   mono?: boolean;
 }) {
   return (
-    <View style={styles.metaPair}>
-      <Text style={styles.metaLabel}>{label}</Text>
-      <Text style={mono ? styles.metaValueMono : styles.metaValue}>{value}</Text>
+    <View style={styles.metaItem}>
+      <Text style={styles.metaItemLabel}>{label}</Text>
+      <Text style={mono ? styles.metaItemValueMono : styles.metaItemValue}>
+        {value}
+      </Text>
     </View>
   );
 }
@@ -729,6 +815,82 @@ function AppliedEvidence({ verdict, t }: { verdict: Verdict; t: TFunction }) {
   );
 }
 
+/** Optional appendix: lists the case attachments by their original filename,
+ *  keyed by the same `[A{position}]` ref the verdict cites in its applied
+ *  evidence. Gated behind the `includeSourceFiles` export option. */
+function SourceDocuments({
+  attachments,
+  showMeta,
+  t,
+}: {
+  attachments: CaseAttachment[];
+  showMeta: boolean;
+  t: TFunction;
+}) {
+  if (attachments.length === 0) return null;
+  const ordered = [...attachments].sort((a, b) => a.position - b.position);
+  return (
+    <Section>
+      <Eyebrow>{t("cases.pdf.source_documents")}</Eyebrow>
+      {ordered.map((a) => (
+        <View key={a.id} style={styles.sourceRow} wrap={false}>
+          <Text style={styles.sourceRef}>[A{a.position}]</Text>
+          <Text style={styles.sourceName}>
+            {a.original_filename}
+            {showMeta && (
+              <Text style={styles.sourceMeta}>
+                {`   ${a.doc_type.toUpperCase()} · ${formatBytes(a.byte_size)}`}
+              </Text>
+            )}
+          </Text>
+        </View>
+      ))}
+    </Section>
+  );
+}
+
+/** Optional appendix: provider/model and run telemetry from the verdict
+ *  record. Gated behind the `includeGenerationMeta` export option. */
+function GenerationDetails({
+  verdictRecord,
+  t,
+  locale,
+}: {
+  verdictRecord: VerdictRecord;
+  t: TFunction;
+  locale: string;
+}) {
+  const rows: { label: string; value: string }[] = [
+    {
+      label: t("cases.pdf.metadata.model"),
+      value: `${verdictRecord.provider_id} · ${verdictRecord.model}`,
+    },
+    {
+      label: t("cases.pdf.gen_tokens"),
+      value: `${verdictRecord.input_tokens} / ${verdictRecord.output_tokens}`,
+    },
+    {
+      label: t("cases.pdf.gen_latency"),
+      value: `${(verdictRecord.latency_ms / 1000).toFixed(1)} s`,
+    },
+    {
+      label: t("cases.pdf.gen_generated"),
+      value: formatDateTime(verdictRecord.created_at, locale),
+    },
+  ];
+  return (
+    <Section wrap={false}>
+      <Eyebrow>{t("cases.pdf.generation_details")}</Eyebrow>
+      {rows.map((r, i) => (
+        <View key={i} style={styles.genRow}>
+          <Text style={styles.genLabel}>{r.label}</Text>
+          <Text style={styles.genValue}>{r.value}</Text>
+        </View>
+      ))}
+    </Section>
+  );
+}
+
 function Review({
   review,
   t,
@@ -790,24 +952,28 @@ function Disclaimer({ verdict, t }: { verdict: Verdict; t: TFunction }) {
 /* Footer                                                             */
 /* ------------------------------------------------------------------ */
 
+// NOTE: the footer is intentionally 100% static. @react-pdf 4.5.1 silently
+// drops any `fixed` element that uses a `render` callback once the page
+// content flows across pages (verified by isolated repro) — that is exactly
+// why the old `render`-based "Página X de Y" never painted. A static bar
+// renders reliably on every page, so we show provenance + the case id (a
+// stable per-page identifier) instead of a live page number.
 function Footer({
   t,
   generatedAtText,
+  caseId,
 }: {
   t: TFunction;
   generatedAtText: string;
+  caseId: string;
 }) {
   return (
     <View style={styles.footer} fixed>
-      <Text>
+      <Text style={styles.footerText}>
         <Text style={styles.footerWordmark}>Conclave</Text>
-        <Text> · {t("cases.pdf.footer_generated", { date: generatedAtText })}</Text>
+        {` · ${t("cases.pdf.footer_generated", { date: generatedAtText })}`}
       </Text>
-      <Text
-        render={({ pageNumber, totalPages }) =>
-          t("cases.pdf.footer_page", { page: pageNumber, total: totalPages })
-        }
-      />
+      <Text style={styles.footerId}>{caseId}</Text>
     </View>
   );
 }
