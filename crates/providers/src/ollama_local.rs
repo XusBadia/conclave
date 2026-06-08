@@ -41,7 +41,7 @@ impl OllamaProvider {
         Self {
             base_url: DEFAULT_BASE_URL.to_owned(),
             default_model: DEFAULT_MODEL.to_owned(),
-            client: reqwest::Client::new(),
+            client: crate::cli_local::http_client_local(),
         }
     }
 

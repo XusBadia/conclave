@@ -133,6 +133,71 @@ pub const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 /// instant — anything slower is almost certainly a hang.
 pub const FALLBACK_TIMEOUT: Duration = Duration::from_secs(2);
 
+// ---------------------------------------------------------------------------
+// HTTP completion clients
+//
+// The CLI providers above cap their subprocess with `COMPLETION_TIMEOUT`
+// (180s) so a wedged login can't freeze a batch. The HTTP providers
+// (`anthropic_api`, `openai_api`, `openrouter_api`, the two OAuth
+// variants, and `ollama_local`) used to build a bare
+// `reqwest::Client::new()` — which has NO request or connect timeout. A
+// provider that stalls a connection (rate-limit throttling that holds
+// the socket open without responding, or a wedged local model) made
+// `.send().await` hang forever; with `run_batch_cases`' `buffer_unordered`
+// stream a single hung case froze the whole batch and `batch_done` never
+// fired. These helpers give every HTTP client a bounded budget so a
+// stalled request fails (and flows through the normal retry / fail-fast
+// path) instead of wedging the batch.
+// ---------------------------------------------------------------------------
+
+/// Connect timeout for cloud HTTP providers. A handshake that can't
+/// complete this fast is a dead/blocked endpoint, not a slow model.
+pub const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Total request budget for a single cloud completion call. Matches the
+/// CLI providers' `COMPLETION_TIMEOUT` so HTTP and CLI cap consistently;
+/// a legitimate completion (even a large deliberative phase) finishes
+/// well under this, while a stalled connection fails instead of hanging.
+pub const HTTP_COMPLETION_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// Connect timeout for the local Ollama server. It's loopback, so a
+/// reachable server connects near-instantly; a refused/dead socket fails
+/// fast (and `ensure_provider_ready` already pings it before a batch).
+pub const OLLAMA_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Total request budget for a local Ollama completion. More generous
+/// than cloud: on slow CPU-only hardware the first request after a cold
+/// model load can take minutes, and a tight cap would turn legitimately
+/// slow local inference into spurious failures.
+pub const OLLAMA_COMPLETION_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// Bounded `reqwest::Client` for cloud HTTP providers. Use this instead
+/// of `reqwest::Client::new()` so a stalled request can't hang a batch.
+#[must_use]
+pub(crate) fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(HTTP_CONNECT_TIMEOUT)
+        .timeout(HTTP_COMPLETION_TIMEOUT)
+        .build()
+        // The builder only sets two static `Duration`s; `.build()` can
+        // realistically fail only if the TLS backend won't initialize —
+        // the same condition that already panics `reqwest::Client::new()`
+        // internally. We surface it explicitly rather than silently
+        // falling back to an unbounded client.
+        .expect("static reqwest client config is valid")
+}
+
+/// Bounded `reqwest::Client` for the local Ollama provider, with a more
+/// generous total budget than [`http_client`].
+#[must_use]
+pub(crate) fn http_client_local() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(OLLAMA_CONNECT_TIMEOUT)
+        .timeout(OLLAMA_COMPLETION_TIMEOUT)
+        .build()
+        .expect("static reqwest client config is valid")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
