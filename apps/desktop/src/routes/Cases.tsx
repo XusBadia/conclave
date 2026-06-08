@@ -895,6 +895,19 @@ export function CasesPage({
     setSelectedIds(new Set());
   };
 
+  // True when every loaded case is already selected. Drives the
+  // "Select all" ↔ "Deselect all" toggle label. The `cases.length > 0`
+  // guard stops an empty list from reporting "all selected".
+  const allSelected =
+    cases.length > 0 && cases.every((c) => selectedIds.has(c.id));
+
+  /** Select every loaded case, or clear the selection if they're all
+   *  already selected. Operates over `cases` — the up-to-50 rows the
+   *  list actually shows — so it matches exactly what the user sees. */
+  const toggleSelectAll = () => {
+    setSelectedIds(allSelected ? new Set() : new Set(cases.map((c) => c.id)));
+  };
+
   /** Export the selected cases to a folder, one PDF per case. Reads the
    *  persisted PDF options fresh at click time so a change made in the
    *  single-case view is honoured here too. Verdict-less cases are skipped
@@ -1331,7 +1344,7 @@ export function CasesPage({
                   </select>
                 </label>
               )}
-              <div className="ml-auto">
+              <div className="ml-auto flex items-center gap-2">
                 {!selectionMode ? (
                   <Button
                     size="sm"
@@ -1341,9 +1354,20 @@ export function CasesPage({
                     {t("cases.select")}
                   </Button>
                 ) : (
-                  <Button size="sm" variant="ghost" onClick={exitSelection}>
-                    {t("cases.cancel_selection")}
-                  </Button>
+                  <>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={toggleSelectAll}
+                    >
+                      {allSelected
+                        ? t("cases.deselect_all")
+                        : t("cases.select_all")}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={exitSelection}>
+                      {t("cases.cancel_selection")}
+                    </Button>
+                  </>
                 )}
               </div>
             </div>

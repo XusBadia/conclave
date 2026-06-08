@@ -315,6 +315,8 @@
     },
     "select": "Select",
     "cancel_selection": "Cancel selection",
+    "select_all": "Select all",
+    "deselect_all": "Deselect all",
     "selected_count": "{{count}} case selected",
     "selected_count_plural": "{{count}} cases selected",
     "edit_date_action": "Edit date…",
