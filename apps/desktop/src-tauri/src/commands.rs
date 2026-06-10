@@ -3202,6 +3202,7 @@ pub async fn run_batch_cases(
     let permits = if request.deliberative { 1 } else { 2 };
 
     use futures::stream::{self, StreamExt};
+    use futures::FutureExt;
 
     // Reference borrows from the outer fn — captured by every async block
     // below. `buffer_unordered` keeps the futures alive on the same
@@ -3221,7 +3222,15 @@ pub async fn run_batch_cases(
             let model = model.clone();
             let app_in_task = app_ref.clone();
             let cancel = Arc::clone(&cancel_ref);
-            async move {
+            // A panic anywhere in the per-case pipeline (extractor,
+            // de-identifier, provider) must not kill this whole command
+            // future — that would freeze the batch banner forever with
+            // no failed row and no `batch_done`. The per-case future is
+            // wrapped in `catch_unwind` below so a panic degrades to a
+            // visible CaseFailed and the batch moves on.
+            let panic_label = case.patient_label.clone();
+            let app_on_panic = app_ref.clone();
+            let per_case = async move {
                 if cancel.load(std::sync::atomic::Ordering::SeqCst) {
                     let _ = app_in_task.emit(
                         "batch:progress",
@@ -3298,6 +3307,28 @@ pub async fn run_batch_cases(
                                 index: idx,
                                 patient_label: case.patient_label.clone(),
                                 error: e,
+                            },
+                        );
+                        BatchOutcome::Failed
+                    }
+                }
+            };
+            async move {
+                match std::panic::AssertUnwindSafe(per_case).catch_unwind().await {
+                    Ok(outcome) => outcome,
+                    Err(panic) => {
+                        let msg = panic
+                            .downcast_ref::<&str>()
+                            .map(|s| (*s).to_owned())
+                            .or_else(|| panic.downcast_ref::<String>().cloned())
+                            .unwrap_or_else(|| "panicked".to_owned());
+                        tracing::error!(index = idx, error = %msg, "batch case panicked");
+                        let _ = app_on_panic.emit(
+                            "batch:progress",
+                            BatchEventDto::CaseFailed {
+                                index: idx,
+                                patient_label: panic_label,
+                                error: format!("internal error: {msg}"),
                             },
                         );
                         BatchOutcome::Failed

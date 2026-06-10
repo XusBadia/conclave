@@ -340,7 +340,13 @@ mod heuristics {
             // Reject phrases that immediately follow a honorific (already
             // captured above with higher confidence).
             let head_end = m.start();
-            let lookback_start = head_end.saturating_sub(8);
+            // The 8-byte lookback is byte arithmetic over UTF-8 text, so
+            // it can land inside a multibyte char (the `ó` in "Sessió")
+            // — walk back to the nearest boundary or slicing panics.
+            let mut lookback_start = head_end.saturating_sub(8);
+            while !text.is_char_boundary(lookback_start) {
+                lookback_start -= 1;
+            }
             let prefix = &text[lookback_start..head_end];
             if prefix.contains("Dr.") || prefix.contains("Dra.") {
                 continue;
@@ -623,6 +629,25 @@ mod tests {
             "{}",
             out.masked_text
         );
+    }
+
+    #[test]
+    fn name_lookback_survives_multibyte_chars() {
+        // Regression: the name-like heuristic looks back 8 BYTES from
+        // each match to skip honorific-prefixed names. On accented text
+        // (Catalan/Spanish clinical notes — "Sessió:…") that byte offset
+        // can land inside a multibyte char and the slice panicked,
+        // killing the whole batch command. Sweep the gap between the
+        // accented char and the name so the lookback start hits every
+        // alignment around the `ó`, including its interior byte.
+        let p = pipeline();
+        for gap in 0..=8 {
+            let text = format!("Sessió:{} Marta Soler Vives", "x".repeat(gap));
+            let out = p.run(&text).unwrap_or_else(|e| {
+                panic!("deidentify failed at gap={gap}: {e}");
+            });
+            assert!(!out.masked_text.is_empty(), "gap={gap}");
+        }
     }
 
     #[test]
