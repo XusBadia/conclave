@@ -15,13 +15,13 @@
 //! 1. **Shell snoop** — spawn the user's login shell with `-ilc 'printenv
 //!    PATH'`. This loads `.zshrc` / `.zprofile` / `.bashrc` the same way
 //!    a Terminal window would and prints the resulting PATH on stdout.
-//!    A 1 s timeout caps pathological rc files. If we get a non-empty
+//!    A 2 s timeout caps pathological rc files. If we get a non-empty
 //!    answer we replace the process PATH with it.
 //! 2. **Curated prepend** — fall back to a list of well-known macOS
 //!    install locations (`~/.local/bin`, `/opt/homebrew/bin`,
-//!    `/usr/local/bin`, `~/.cargo/bin`, `~/.bun/bin`) plus the most
-//!    recent nvm node version, prepended to whatever PATH is already
-//!    set. Best-effort safety net for when the shell snoop fails.
+//!    `/usr/local/bin`, `~/.cargo/bin`, `~/.bun/bin`) plus *every* nvm
+//!    node version's `bin`, prepended to whatever PATH is already set.
+//!    Best-effort safety net for when the shell snoop fails.
 //!
 //! `augment_path_for_gui` must run **before** any provider construction,
 //! because `crates/providers/src/{claude_cli,codex_cli}.rs` cache the
@@ -85,11 +85,15 @@ fn snoop_shell_path() -> Option<String> {
         .spawn()
         .ok()?;
 
-    // Poll for completion up to the 1 s budget. Anything slower
-    // probably means the shell is hanging on a network call from an
-    // rc file (corporate VPN scripts, etc.) — we'd rather fall back
-    // to the curated list than block the app window.
-    let deadline = Instant::now() + Duration::from_secs(1);
+    // Poll for completion up to the budget below. A heavy-but-honest
+    // interactive zsh (nvm + pnpm + rbenv + assorted rc tooling) can
+    // legitimately take well over a second to finish sourcing, so the
+    // old 1 s cap kicked such users onto the curated fallback — which
+    // then had to guess their nvm layout and got it wrong. 2 s covers a
+    // real shell while still bounding a genuinely hung rc file (a
+    // corporate VPN script blocking on the network) so startup can't
+    // wedge.
+    let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => {
@@ -125,9 +129,11 @@ fn prepend_well_known(current: &str) -> String {
     if let Some(h) = &home {
         additions.push(h.join(".cargo/bin"));
         additions.push(h.join(".bun/bin"));
-        if let Some(node_bin) = newest_nvm_node_bin(h) {
-            additions.push(node_bin);
-        }
+        // A globally-installed CLI (`npm i -g codex`) lives under exactly
+        // one nvm node version, and which one is invisible from out here.
+        // Add every version's `bin` so `which` can find the tool wherever
+        // it actually sits, rather than guessing a single one.
+        additions.extend(all_nvm_node_bins(h));
     }
 
     // Only add entries that (a) exist on disk and (b) aren't already in
@@ -157,11 +163,27 @@ fn prepend_well_known(current: &str) -> String {
     format!("{}:{}", prepend.join(":"), current)
 }
 
+/// Every nvm-managed node version's `bin` directory, ordered newest
+/// mtime first.
+///
+/// A globally-installed CLI (`npm i -g codex`) lands in exactly one node
+/// version's `bin`, and which one is invisible from outside the shell:
+/// nvm rewrites PATH at shell-init time, which is precisely the signal
+/// we've lost when the snoop fails. An earlier version of this code
+/// picked a single version by directory mtime and routinely guessed
+/// wrong — the most-recently-*touched* node version is rarely the one a
+/// given tool was installed under (e.g. `codex` under v25.2.0 while a
+/// later `npm i -g` under v22 bumped v22's mtime). So we surface every
+/// version's `bin` and let `which::which` find the tool wherever it
+/// actually lives. Newest-first keeps `node` / `npm` resolution biased
+/// toward the most recent install when several versions provide them.
 #[cfg(target_os = "macos")]
-fn newest_nvm_node_bin(home: &std::path::Path) -> Option<std::path::PathBuf> {
+fn all_nvm_node_bins(home: &std::path::Path) -> Vec<std::path::PathBuf> {
     use std::fs;
     let versions_dir = home.join(".nvm/versions/node");
-    let entries = fs::read_dir(&versions_dir).ok()?;
+    let Ok(entries) = fs::read_dir(&versions_dir) else {
+        return Vec::new();
+    };
     let mut candidates: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
     for entry in entries.flatten() {
         let bin = entry.path().join("bin");
@@ -175,7 +197,7 @@ fn newest_nvm_node_bin(home: &std::path::Path) -> Option<std::path::PathBuf> {
         candidates.push((mtime, bin));
     }
     candidates.sort_by_key(|c| std::cmp::Reverse(c.0));
-    candidates.into_iter().next().map(|(_, p)| p)
+    candidates.into_iter().map(|(_, p)| p).collect()
 }
 
 #[cfg(all(test, target_os = "macos"))]
@@ -214,5 +236,40 @@ mod tests {
         for entry in saturated.split(':').filter(|s| !s.is_empty()) {
             assert!(out.contains(entry), "lost entry {entry} in {out}");
         }
+    }
+
+    #[test]
+    fn all_nvm_bins_returns_every_version_with_a_bin() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join(".nvm/versions/node");
+        for v in ["v20.19.6", "v22.21.1", "v25.2.0"] {
+            std::fs::create_dir_all(base.join(v).join("bin")).unwrap();
+        }
+        // A stray file (not a dir) and a version dir missing `bin/` must
+        // both be ignored — regression guard for the `is_dir` filter.
+        std::fs::write(base.join("not-a-version"), "x").unwrap();
+        std::fs::create_dir_all(base.join("v18.0.0")).unwrap();
+
+        let bins = all_nvm_node_bins(tmp.path());
+        assert_eq!(
+            bins.len(),
+            3,
+            "only versions with a bin/ dir count: {bins:?}"
+        );
+        // The regression we actually fixed: a version that is NOT the
+        // newest by mtime (here, where `codex` would live) is still
+        // surfaced instead of being dropped in favour of one bin.
+        for v in ["v20.19.6", "v22.21.1", "v25.2.0"] {
+            assert!(
+                bins.iter().any(|p| p.ends_with(format!("{v}/bin"))),
+                "missing {v} in {bins:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn all_nvm_bins_empty_without_nvm_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(all_nvm_node_bins(tmp.path()).is_empty());
     }
 }
