@@ -27,23 +27,27 @@ conclave/
 ├── .editorconfig
 ├── .github/
 │   └── workflows/
-│       └── ci.yml          # fmt + clippy + test + build, 3 OS matrix
+│       └── release.yml     # release bundles on v* tags (no push CI — see §CI)
+├── .githooks/
+│   └── pre-commit          # runs scripts/verify.sh before every commit
+├── scripts/
+│   └── verify.sh           # fmt + clippy + tests + frontend build + vitest
 ├── crates/
 │   ├── core/               # shared types, errors, config, logging
 │   ├── providers/          # LlmProvider trait + implementations
 │   ├── rag/                # ingestion, chunking, embeddings, retrieval
 │   ├── deident/            # PII detection and masking
-│   ├── evidence/           # PubMed / Europe PMC adapters (later phase)
+│   ├── verdict/            # verdict engine: pipeline, deliberation, persistence, skills
+│   ├── evidence/           # PubMed / Europe PMC adapters + SQLite cache
 │   └── cli/                # conclave-cli binary
 ├── apps/
-│   └── desktop/            # Tauri app (added when we have a Mac)
-├── docs/
-│   ├── README.md           # this lives at repo root, copy here too
-│   ├── ARCHITECTURE.md     # this file
-│   ├── PLAN.md             # phased roadmap
-│   ├── PROMPTING.md        # prompt templates and rationale
-│   └── DISCLAIMER.md       # full legal disclaimer text
-└── test-fixtures/          # gitignored, sample documents for local testing
+│   ├── desktop/            # Tauri 2 app (React frontend + src-tauri commands)
+│   └── web/                # Next.js marketing site
+├── plans/                  # advisor-written implementation plans + status index
+├── ARCHITECTURE.md         # this file (docs live at the repo root)
+├── PLAN.md                 # phased roadmap
+├── PROMPTING.md            # prompt templates and rationale
+└── DISCLAIMER.md           # full legal disclaimer text
 ```
 
 ## Crate responsibilities
@@ -122,7 +126,9 @@ conclave/
   - `workspace create|list|switch|delete`
   - `ingest <path>` — add document(s) to current workspace
   - `documents list|show|remove`
-  - `rules add|list|remove`
+  - `rules add|list|remove` *(not yet implemented — workspace rules have
+    no management surface today; `VerdictOptions.rules_block` exists but
+    nothing populates it. See plans/README.md § Direction findings.)*
   - `case new` — accepts text via stdin or `--file`, runs full pipeline
   - `case list|show <id>`
   - `feedback accept|modify|reject <case-id>`
@@ -180,18 +186,26 @@ Conclave/
 - Golden cases (Phase 4+): canonical input → expected verdict structure.
   Stored as JSON fixtures.
 
-## CI
+## CI / verification
 
-GitHub Actions matrix: `ubuntu-latest`, `macos-latest`, `windows-latest`.
+**No CI runs on push or PR.** Day-to-day verification is local-first,
+enforced by the versioned pre-commit hook. Activate it once per clone:
 
-Each job:
+```sh
+git config core.hooksPath .githooks
+```
 
-1. Checkout
-1. Restore cargo cache
-1. `cargo fmt --check`
-1. `cargo clippy --all-targets --all-features -- -D warnings`
-1. `cargo test --all-features`
-1. `cargo build --release` (smoke check)
+Every `git commit` then runs `./scripts/verify.sh` (also runnable on
+demand):
+
+1. `cargo fmt --all --check`
+1. `cargo clippy --workspace --all-targets --locked -- -D warnings`
+1. `cargo test --workspace --locked --quiet`
+1. `pnpm --dir apps/desktop build` (`tsc -b && vite build`)
+1. `pnpm --dir apps/desktop test` (vitest)
+
+GitHub Actions fires only on `v*` release tags (`release.yml`), building
+the macOS-arm64 / Linux / Windows bundles as a draft Release.
 
 ## Privacy invariants
 

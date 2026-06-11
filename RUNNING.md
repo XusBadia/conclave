@@ -110,19 +110,20 @@ Each workspace lives under `workspaces/<id>/` with `workspace.toml`,
   `~/Library/Application Support/me.badia.conclave/disclaimer-accepted-v1`;
   delete it to reset.
 
-## What's deferred
+## Phase status
 
-These two phases land in follow-up PRs. The app is fully usable
-without them:
+Phases 5 and 6 — listed as deferred in earlier revisions of this file —
+are now implemented and wired:
 
-- **Phase 5 — Learning loop (partial).** The feedback table is wired
-  and the CLI persists `accept/modify/reject` rows, but the case-memory
-  embedding + past-cases retrieval in the verdict prompt is not yet
-  hooked up. To finish: embed `case_summary` into a `case_memory`
-  LanceDB table on verdict completion, then surface the top-3 similar
-  past cases in the prompt's `PAST_CASES` block (the placeholder is
-  already in the template).
-- **Phase 6 — Online evidence.** PubMed + Europe PMC adapters are not
-  built. The verdict prompt already reserves the `[X*]` citation
-  space; wiring is purely additive.
-EOF
+- **Phase 5 — Learning loop: complete.** Every verdict upserts the case
+  summary embedding into case memory (`crates/verdict/src/pipeline.rs`,
+  `upsert_case_memory`), and the top similar past cases are retrieved
+  and rendered into the prompt in BOTH run modes — quick
+  (`pipeline.rs` → `prompt.rs::render_past_cases`) and deliberated
+  (`commands.rs::similar_past_cases` → `DeliberationInputs.past_cases`).
+  Feedback (`accept/modify/reject`) persists via CLI and desktop.
+- **Phase 6 — Online evidence: complete.** PubMed + Europe PMC adapters
+  live in `crates/evidence` with a SQLite cache; runs expose a
+  user-facing "search external literature" toggle (de-identified query
+  only, disabled in `local_only` mode) and the CLI has an `evidence`
+  subcommand. External hits land as `[X*]` citations in the verdict.
