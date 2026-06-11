@@ -110,6 +110,7 @@ tesseract-rs = "0.2"
 
 # Testing
 tempfile = "3"
+proptest = "1"
 
 [workspace.lints.rust]
 # `deny` instead of `forbid` so individual modules can opt in with

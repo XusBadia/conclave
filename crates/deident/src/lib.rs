@@ -675,3 +675,65 @@ mod tests {
         assert_eq!(out.masked_text, "");
     }
 }
+
+#[cfg(test)]
+mod prop_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// Mix arbitrary printable unicode with clinically-shaped fragments so
+    /// the name/date/ID heuristics actually fire — pure random unicode
+    /// rarely trips them. Sizes stay small so the 64 cases per property
+    /// don't inflate the pre-commit hook.
+    fn arb_clinical_text() -> impl Strategy<Value = String> {
+        let fragment = prop_oneof![
+            "\\PC{0,64}", // any printable unicode, incl. multibyte + emoji
+            Just("Sessió:".to_owned()),
+            Just("García Pérez".to_owned()),
+            Just("Dra. Marta Soler Vives".to_owned()),
+            Just("DNI 12345678Z".to_owned()),
+            Just("12/03/2026".to_owned()),
+            Just("☎ 612 345 678 — 👩‍⚕️ niño".to_owned()),
+        ];
+        proptest::collection::vec(fragment, 0..12).prop_map(|parts| parts.join(" "))
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 64, ..ProptestConfig::default() })]
+
+        /// The masking pipeline must never panic or error on ANY input —
+        /// a char-boundary slice panic in this crate once froze whole
+        /// production batches (fixed at 4ecaaea; this pins the class).
+        #[test]
+        fn never_panics_on_arbitrary_utf8(text in arb_clinical_text()) {
+            let out = PipelineDeidentifier::new().run(&text);
+            prop_assert!(out.is_ok(), "deident errored: {:?}", out.err());
+        }
+
+        /// Same input → same output. Mask determinism is part of the
+        /// audit-trail contract: prompt fingerprints must be reproducible.
+        #[test]
+        fn masking_is_deterministic(text in arb_clinical_text()) {
+            let p = PipelineDeidentifier::new();
+            let a = p.run(&text).unwrap();
+            let b = p.run(&text).unwrap();
+            prop_assert_eq!(a.masked_text, b.masked_text);
+            prop_assert_eq!(a.spans.len(), b.spans.len());
+        }
+
+        /// Every reported span must lie on char boundaries of the original
+        /// text and its `original` field must match the slice it claims —
+        /// the exact invariant whose violation caused the production panic.
+        #[test]
+        fn spans_lie_on_char_boundaries(text in arb_clinical_text()) {
+            let out = PipelineDeidentifier::new().run(&text).unwrap();
+            for s in &out.spans {
+                prop_assert!(s.start < s.end, "empty span {s:?}");
+                prop_assert!(s.end <= text.len(), "span past end {s:?}");
+                prop_assert!(text.is_char_boundary(s.start), "start mid-char {s:?}");
+                prop_assert!(text.is_char_boundary(s.end), "end mid-char {s:?}");
+                prop_assert_eq!(&text[s.start..s.end], s.original.as_str());
+            }
+        }
+    }
+}
