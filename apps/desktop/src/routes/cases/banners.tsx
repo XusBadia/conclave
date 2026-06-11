@@ -11,7 +11,9 @@ import type { BatchExportResult } from "../../pdf/exportCasesBatch";
 import { Button } from "../../components/Button";
 import { Card, CardBody, CardHeader } from "../../components/Card";
 import { cn } from "../../lib/cn";
-import type { CaseRecord } from "../../lib/ipc";
+import type { CaseRecord, ProviderInfo } from "../../lib/ipc";
+import { isReady } from "../../lib/providerStatus";
+import { metaFor } from "../../lib/providers";
 import { formatElapsed, type LiveCasePhase } from "./helpers";
 
 /**
@@ -336,6 +338,84 @@ export function ShowCaseSkeleton({ onBack }: { onBack: () => void }) {
           <div className="h-16 w-full animate-pulse rounded bg-surface" />
         </CardBody>
       </Card>
+    </div>
+  );
+}
+
+export function ModeSelector({
+  checked,
+  onChange,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  const { t } = useTranslation();
+  const baseBtn =
+    "flex-1 rounded-md px-3 py-1.5 text-[12.5px] font-medium transition focus:outline-none focus-visible:ring-conclave";
+  return (
+    <div
+      role="radiogroup"
+      aria-label={t("cases.mode_selector_label")}
+      className="inline-flex w-full gap-1 rounded-lg border border-border-subtle bg-bg-subtle p-1"
+    >
+      <button
+        type="button"
+        role="radio"
+        aria-checked={checked}
+        onClick={() => onChange(true)}
+        className={cn(
+          baseBtn,
+          checked
+            ? "bg-accent text-white"
+            : "text-ink-dim hover:text-ink",
+        )}
+      >
+        {t("cases.mode_deliberate")}
+      </button>
+      <button
+        type="button"
+        role="radio"
+        aria-checked={!checked}
+        onClick={() => onChange(false)}
+        className={cn(
+          baseBtn,
+          !checked
+            ? "bg-accent text-white"
+            : "text-ink-dim hover:text-ink",
+        )}
+      >
+        {t("cases.mode_fast")}
+      </button>
+    </div>
+  );
+}
+
+// Warning banner shown when the currently-picked provider isn't
+// `ready`. The copy adapts per status so the user knows whether to
+// reconnect (expired), retry (unreachable), or just connect at all
+// (not_configured). When the provider is `ready` it renders nothing.
+export function ProviderOfflineBanner({
+  providers,
+  providerId,
+}: {
+  providers: ProviderInfo[];
+  providerId: string;
+}) {
+  const { t } = useTranslation();
+  const current = providers.find((p) => p.id === providerId);
+  if (!current || isReady(current)) return null;
+  const name = metaFor(current.id).name;
+  let copy: string;
+  if (current.status === "expired") {
+    copy = t("cases.provider_expired_warning", { name });
+  } else if (current.status === "not_configured") {
+    copy = t("cases.provider_not_configured_warning", { name });
+  } else {
+    copy = t("cases.provider_offline_warning", { name });
+  }
+  return (
+    <div className="rounded-md border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-[12px] text-amber-200">
+      {copy}
     </div>
   );
 }
