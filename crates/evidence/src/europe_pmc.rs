@@ -164,7 +164,7 @@ impl EvidenceSource for EuropePmcSource {
         }
         if let Some(cache) = &self.cache {
             if let Some(hit) = cache.lookup("europepmc", trimmed)? {
-                tracing::debug!(query = trimmed, "europepmc cache hit");
+                tracing::debug!("europepmc cache hit");
                 return Ok(hit);
             }
         }

@@ -515,6 +515,44 @@ pub fn conclave_oauth_path(config_dir: &Path, provider_id: &str) -> PathBuf {
     config_dir.join("oauth").join(format!("{provider_id}.json"))
 }
 
+/// Write credential material to `path` with owner-only permissions.
+///
+/// `std::fs::write` would inherit the process umask (typically 0644 —
+/// world-readable), which is the wrong default for refresh tokens. On
+/// Unix the file is created 0600 *before* any bytes land in it, and a
+/// pre-existing loose file is tightened first — `mode(0o600)` on
+/// `OpenOptions` only applies at creation, so rewriting an existing
+/// 0644 file would otherwise keep its old mode. On Windows, default
+/// ACLs already scope the user profile directory.
+pub(crate) fn write_secret_file(path: &Path, body: &str) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+        match std::fs::metadata(path) {
+            Ok(meta) => {
+                let mut perms = meta.permissions();
+                perms.set_mode(0o600);
+                std::fs::set_permissions(path, perms)?;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        f.write_all(body.as_bytes())
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, body)
+    }
+}
+
 /// Persist tokens both to Conclave's location and (if the file already
 /// exists) to the matching Claude Code / Codex CLI credentials file so
 /// other tools keep working.
@@ -530,7 +568,7 @@ pub fn persist_tokens(
     }
     let body = serde_json::to_string_pretty(tokens)
         .map_err(|e| ProviderError::Other(format!("serialise tokens: {e}")))?;
-    std::fs::write(&path, body)
+    write_secret_file(&path, &body)
         .map_err(|e| ProviderError::Other(format!("write {}: {e}", path.display())))?;
     // Best-effort: mirror to the CLI tool's credentials file if it exists,
     // matching the schema the official CLI expects.
@@ -549,9 +587,9 @@ pub fn persist_tokens(
                         "subscriptionType": tokens.subscription_type,
                     }
                 });
-                let _ = std::fs::write(
+                let _ = write_secret_file(
                     &cli_path,
-                    serde_json::to_string_pretty(&payload).unwrap_or_default(),
+                    &serde_json::to_string_pretty(&payload).unwrap_or_default(),
                 );
             }
         }
@@ -567,9 +605,9 @@ pub fn persist_tokens(
                         "id_token": tokens.account_id,
                     },
                 });
-                let _ = std::fs::write(
+                let _ = write_secret_file(
                     &cli_path,
-                    serde_json::to_string_pretty(&payload).unwrap_or_default(),
+                    &serde_json::to_string_pretty(&payload).unwrap_or_default(),
                 );
             }
         }
@@ -591,6 +629,28 @@ fn _force_arc<T>(_: Arc<T>) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn secret_files_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tokens.json");
+        // Fresh file → created 0600, never world-readable.
+        write_secret_file(&path, "{\"t\":1}").unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        // A pre-existing loose file is tightened on rewrite.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        write_secret_file(&path, "{\"t\":2}").unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
 
     #[test]
     fn pkce_challenge_is_url_safe_b64() {

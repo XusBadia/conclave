@@ -210,7 +210,7 @@ impl EvidenceSource for PubMedSource {
         }
         if let Some(cache) = &self.cache {
             if let Some(hit) = cache.lookup("pubmed", trimmed)? {
-                tracing::debug!(query = trimmed, "pubmed cache hit");
+                tracing::debug!("pubmed cache hit");
                 return Ok(hit);
             }
         }

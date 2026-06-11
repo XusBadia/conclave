@@ -512,7 +512,7 @@ fn persist_credentials(path: &Path, creds: &OAuthCredentials) -> Result<(), Prov
     };
     let body = serde_json::to_string_pretty(&out)
         .map_err(|e| ProviderError::Other(format!("serialise creds: {e}")))?;
-    std::fs::write(path, body)
+    crate::oauth_flow::write_secret_file(path, &body)
         .map_err(|e| ProviderError::Other(format!("write {}: {e}", path.display())))?;
     Ok(())
 }
