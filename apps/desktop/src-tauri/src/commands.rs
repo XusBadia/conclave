@@ -43,6 +43,40 @@ use crate::state::AppState;
 
 type CommandResult<T> = Result<T, String>;
 
+/// Providers that authenticate outside Conclave's keychain: local
+/// daemons (`ollama`), the on-device Apple bridge, OAuth providers
+/// (tokens live in `<config>/oauth/*.json`), and the CLI proxies
+/// (`claude-cli`, `codex-cli` — auth is the user's own CLI session).
+///
+/// Every run/test/Q&A path MUST resolve keys through
+/// [`resolve_provider_api_key`] instead of matching inline. History:
+/// when `codex-cli` was added, one path missed the bypass and "Ejecutar
+/// comité" became a silent no-op (the keychain lookup failed before any
+/// event was emitted). Worse, `secrets::load` fired concurrently from
+/// batch workers can deadlock inside the macOS Security framework —
+/// skipping it for these ids is a correctness requirement, not an
+/// optimisation.
+const KEYCHAIN_LESS_PROVIDERS: &[&str] = &[
+    "ollama",
+    "apple-intelligence",
+    "anthropic-oauth",
+    "openai-oauth",
+    "claude-cli",
+    "codex-cli",
+];
+
+/// Resolve the API key for `provider_id`: empty string for
+/// keychain-less providers, the stored keychain entry otherwise.
+/// `Err` when a keychain-backed provider has no stored key.
+fn resolve_provider_api_key(provider_id: &str) -> Result<String, String> {
+    if KEYCHAIN_LESS_PROVIDERS.contains(&provider_id) {
+        return Ok(String::new());
+    }
+    secrets::load(provider_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("no API key for `{provider_id}`"))
+}
+
 fn ok<T>(t: T) -> CommandResult<T> {
     Ok(t)
 }
@@ -499,19 +533,7 @@ async fn ask_documents_impl(
     let workspace = workspace_manager(&state)
         .load(&request.workspace_id)
         .map_err(|e| e.to_string())?;
-    // Local CLI providers (`claude-cli`, `codex-cli`) authenticate via
-    // the user's own CLI install — no Conclave-side keychain entry to
-    // look up. Treat them like the OAuth providers and pass an empty
-    // key to `build_provider`. Without this branch the request fails
-    // up-front with "no API key for codex-cli" before the deliberation
-    // ever starts, which to the user looks like a silent no-op.
-    let api_key = match request.provider_id.as_str() {
-        "ollama" | "apple-intelligence" | "anthropic-oauth" | "openai-oauth" | "claude-cli"
-        | "codex-cli" => String::new(),
-        other => secrets::load(other)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("no API key for {other}"))?,
-    };
+    let api_key = resolve_provider_api_key(&request.provider_id)?;
     let provider = build_provider(
         &request.provider_id,
         &api_key,
@@ -1025,13 +1047,9 @@ pub async fn test_provider(
     id: String,
     prompt: Option<String>,
 ) -> CommandResult<String> {
-    let api_key = match id.as_str() {
-        "ollama" | "apple-intelligence" | "anthropic-oauth" | "openai-oauth" | "claude-cli"
-        | "codex-cli" => String::new(),
-        _ => match secrets::load(&id).map_err(|e| e.to_string())? {
-            Some(k) => k,
-            None => return err(format!("no API key for {id}")),
-        },
+    let api_key = match resolve_provider_api_key(&id) {
+        Ok(k) => k,
+        Err(e) => return err(e),
     };
     let provider = build_provider(&id, &api_key, None, state.paths.config_dir())?;
     let prompt = prompt.unwrap_or_else(|| "Reply with one word: hello.".into());
@@ -1723,12 +1741,9 @@ pub async fn preview_data_boundary(
     state: State<'_, AppState>,
     request: CaseRunRequest,
 ) -> CommandResult<DataBoundaryPreview> {
-    let api_key = match request.provider_id.as_str() {
-        "ollama" | "apple-intelligence" | "anthropic-oauth" | "openai-oauth" => String::new(),
-        other => secrets::load(other)
-            .map_err(|e| e.to_string())?
-            .unwrap_or_default(),
-    };
+    // Previews must never fail on auth — a missing key resolves to an
+    // empty string and the preview still renders.
+    let api_key = resolve_provider_api_key(&request.provider_id).unwrap_or_default();
     let provider = build_provider(
         &request.provider_id,
         &api_key,
@@ -2209,13 +2224,7 @@ pub(crate) async fn run_case_impl(
     // it — mirrors the pattern at the Knowledge Q&A path above. CLI
     // providers (`claude-cli`, `codex-cli`) also live outside the
     // Conclave keychain — auth is the user's own CLI session.
-    let api_key = match request.provider_id.as_str() {
-        "ollama" | "apple-intelligence" | "anthropic-oauth" | "openai-oauth" | "claude-cli"
-        | "codex-cli" => String::new(),
-        other => secrets::load(other)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("no API key for `{other}`"))?,
-    };
+    let api_key = resolve_provider_api_key(&request.provider_id)?;
     let provider = build_provider(
         &request.provider_id,
         &api_key,
@@ -2594,13 +2603,7 @@ async fn run_draft_case_impl(
     // use disk-stored tokens, not the macOS keychain — skip secrets::load
     // for them. Same applies to the local CLI providers (`claude-cli`,
     // `codex-cli`): auth lives in the user's own CLI session.
-    let api_key = match request.provider_id.as_str() {
-        "ollama" | "apple-intelligence" | "anthropic-oauth" | "openai-oauth" | "claude-cli"
-        | "codex-cli" => String::new(),
-        other => secrets::load(other)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("no API key for `{other}`"))?,
-    };
+    let api_key = resolve_provider_api_key(&request.provider_id)?;
     let provider = build_provider(
         &request.provider_id,
         &api_key,
@@ -2788,13 +2791,7 @@ pub(crate) async fn run_case_deliberated_impl(
     // See run_case_impl for the concurrent-deadlock rationale. CLI
     // providers (`claude-cli`, `codex-cli`) similarly have no Conclave
     // keychain entry — their auth lives in the user's own CLI session.
-    let api_key = match request.provider_id.as_str() {
-        "ollama" | "apple-intelligence" | "anthropic-oauth" | "openai-oauth" | "claude-cli"
-        | "codex-cli" => String::new(),
-        other => secrets::load(other)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("no API key for `{other}`"))?,
-    };
+    let api_key = resolve_provider_api_key(&request.provider_id)?;
     let provider = build_provider(
         &request.provider_id,
         &api_key,
@@ -3271,12 +3268,7 @@ pub async fn run_batch_cases(
     // OAuth providers use disk-stored tokens, not the macOS keychain.
     // Skip secrets::load for them — see run_case_impl for the
     // concurrent-deadlock rationale.
-    let probe_key = match request.provider_id.as_str() {
-        "ollama" | "apple-intelligence" | "anthropic-oauth" | "openai-oauth" => String::new(),
-        other => secrets::load(other)
-            .map_err(|e| e.to_string())?
-            .unwrap_or_default(),
-    };
+    let probe_key = resolve_provider_api_key(&request.provider_id).unwrap_or_default();
     let probe_provider = build_provider(
         &request.provider_id,
         &probe_key,
@@ -4013,6 +4005,17 @@ pub async fn set_cli_login_override(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keychain_less_providers_resolve_to_empty_key() {
+        for id in KEYCHAIN_LESS_PROVIDERS {
+            assert_eq!(
+                resolve_provider_api_key(id).as_deref(),
+                Ok(""),
+                "{id} must bypass the keychain"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn catch_command_panic_converts_panics_to_err() {
