@@ -93,7 +93,12 @@ pub const DEFAULT_MODEL: &str = "gpt-5.5";
 
 /// Hard ceiling on a single completion. `codex exec` does not enforce
 /// a built-in timeout; this prevents wedged batches.
-const COMPLETION_TIMEOUT: Duration = Duration::from_secs(180);
+///
+/// Sized for the deliberative finalize phase (large prompt + full
+/// verdict JSON, no enforceable output-token cap through the CLI) —
+/// the same reasoning as the claude-cli provider, where 180 s was
+/// measured too tight. A wedge detector, not a latency budget.
+const COMPLETION_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Stable id used by the registry and `ProviderInfo.id`.
 pub const PROVIDER_ID: &str = "codex-cli";

@@ -399,8 +399,13 @@ async fn call_phase(
         messages: vec![Message::user(prompt.to_owned())],
         max_output_tokens: Some(phase.default_max_tokens()),
         temperature: Some(temperature),
+        // The real Verdict schema, not a bare `{"type":"object"}`:
+        // providers that enforce it (claude-cli's structured-output
+        // tool) then reject shape drift like double-encoded containers
+        // at generation time instead of failing `validate_verdict`
+        // after all four phases have been paid for.
         json_schema: if json_mode {
-            Some(serde_json::json!({"type": "object"}))
+            Some(crate::schema::verdict_json_schema())
         } else {
             None
         },

@@ -760,7 +760,9 @@ Return the JSON object only, citing only the supplied evidence ids."
             messages: vec![Message::user(prompt.to_owned())],
             max_output_tokens: Some(options.max_output_tokens),
             temperature: Some(options.temperature),
-            json_schema: Some(serde_json::json!({"type": "object"})),
+            // Real Verdict schema so schema-enforcing providers
+            // (claude-cli) reject malformed shapes at generation time.
+            json_schema: Some(crate::schema::verdict_json_schema()),
             allow_web_search: false,
             images: Vec::new(),
         };

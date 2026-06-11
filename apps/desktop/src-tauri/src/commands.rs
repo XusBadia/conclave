@@ -1344,6 +1344,11 @@ fn is_transport_failure(msg: &str) -> bool {
         || lower.contains("is not responding")
         || lower.contains("provider unavailable:")
         || lower.contains("connection refused")
+        // `ProviderError::Auth` Display — a rejected key/token fails
+        // every subsequent case the same way, so treat it as
+        // structural. (claude-cli's revoked-session error arrives as
+        // "provider unavailable:" with its own remediation text.)
+        || lower.contains("authentication failed")
 }
 
 /// Pre-flight: verify a provider can actually serve a request before
@@ -3929,6 +3934,27 @@ mod tests {
     #[test]
     fn is_transport_failure_catches_unavailable_variant() {
         let msg = "provider error: provider unavailable: model not downloaded";
+        assert!(is_transport_failure(msg));
+    }
+
+    #[test]
+    fn is_transport_failure_catches_revoked_claude_cli_session() {
+        // Shape produced by the claude-cli provider when the stored
+        // OAuth token is rejected with a 401 — one dead token fails
+        // every case, so the batch must short-circuit.
+        let msg = "provider error: deliberation phase briefing failed: \
+                   provider unavailable: Claude CLI is signed out or its \
+                   session was revoked (the API rejected the stored token). \
+                   Run `claude auth login` in a terminal, then retry.";
+        assert!(is_transport_failure(msg));
+    }
+
+    #[test]
+    fn is_transport_failure_catches_auth_failed_variant() {
+        // `ProviderError::Auth` Display ("authentication failed") from
+        // API-key providers — a revoked key is structural for the batch.
+        let msg = "provider error: deliberation phase drafting failed: \
+                   authentication failed";
         assert!(is_transport_failure(msg));
     }
 

@@ -25,7 +25,9 @@
 //!   ```text
 //!   claude -p
 //!     --output-format json
-//!     --max-turns 1
+//!     --max-turns 1            # 2 when --json-schema is used: the
+//!                              # structured answer is an internal
+//!                              # tool call and consumes its own turn
 //!     --tools ""
 //!     --no-session-persistence
 //!     --disable-slash-commands
@@ -35,6 +37,13 @@
 //!     [--json-schema '...']
 //!     "<flattened conversation>"
 //!   ```
+//! - Error surface: in `--output-format json` mode the CLI reports
+//!   failures as JSON on **stdout** (`is_error`, `api_error_status`,
+//!   `result`) and exits 1 with an empty stderr. We parse stdout on
+//!   failure and map 401/403 (revoked or signed-out session) to an
+//!   actionable "run `claude auth login`" message. Structured
+//!   (`--json-schema`) successes leave `result` empty and deliver the
+//!   payload in `structured_output`.
 //! - Why **not** `--bare`: bare mode skips keychain reads and forces
 //!   auth via `ANTHROPIC_API_KEY` or `--settings`, which would defeat
 //!   the entire reason this provider exists (using the user's Claude
@@ -58,11 +67,10 @@
 //!
 //! ## Limitations
 //!
-//! - Token counts: `claude -p --output-format json` does not currently
-//!   surface `input_tokens` / `output_tokens` in a documented field, so
-//!   [`Usage`] is reported as zeros. The cost field (`total_cost_usd`)
-//!   is captured into the model echo when present, for future
-//!   telemetry, but is not promoted into `Usage`.
+//! - Token counts: current CLI versions emit a `usage` block
+//!   (`input_tokens` / `output_tokens`) which we surface in [`Usage`];
+//!   older versions omitted it and report zeros. `total_cost_usd` is
+//!   not promoted into `Usage`.
 //! - Vision: `-p` mode does not document image attachment support, so
 //!   `capabilities().vision` is `false` and any
 //!   [`ImageInput`](crate::types::ImageInput)s on the request are
@@ -100,7 +108,15 @@ pub const DEFAULT_MODEL: &str = "claude-sonnet-4-6";
 
 /// Hard ceiling on a single completion. The CLI itself has no built-in
 /// timeout for `-p`, so we enforce one here to avoid wedged batches.
-const COMPLETION_TIMEOUT: Duration = Duration::from_secs(180);
+///
+/// Sized for the deliberative finalize phase, the heaviest call we
+/// make: ~30k input tokens plus a full verdict JSON generated through
+/// the structured-output tool. `claude -p` exposes no
+/// max-output-tokens flag, so `CompletionRequest::max_output_tokens`
+/// cannot be enforced and long generations are legitimate — measured
+/// finalize runs exceed 180 s. This is a wedge detector, not a
+/// latency budget: it only has to be finite.
+const COMPLETION_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Stable id used by the registry, `ProviderInfo.id`, and the keychain
 /// scope (no keychain entry today, but reserved).
@@ -423,13 +439,21 @@ impl LlmProvider for ClaudeCliProvider {
             req.model.clone()
         };
 
+        // With `--json-schema` the CLI routes the answer through an
+        // internal StructuredOutput tool call, which consumes a turn on
+        // its own. `--max-turns 1` would then stop at `stop_reason:
+        // tool_use` and the run dies with `error_max_turns` and no
+        // result. The minimum that can succeed is 2 (tool call +
+        // wrap-up); 4 leaves room for the tool to reject a payload
+        // that violates the schema and the model to correct it once.
+        let max_turns = if req.json_schema.is_some() { "4" } else { "1" };
         let mut cmd = Command::new(bin);
         cmd.args([
             "-p",
             "--output-format",
             "json",
             "--max-turns",
-            "1",
+            max_turns,
             "--tools",
             "",
             "--no-session-persistence",
@@ -458,11 +482,13 @@ impl LlmProvider for ClaudeCliProvider {
         // HOME (needed for `~/.claude/...` credential lookup). We
         // wipe every other CLAUDE_* / ANTHROPIC_* variable so test
         // harnesses or shell profiles cannot influence the run.
+        // `CLAUDECODE` (no underscore) is the nested-session marker:
+        // when Conclave itself is launched from a terminal running
+        // inside Claude Code (`pnpm tauri dev` during development),
+        // the child CLI would otherwise detect a host session and try
+        // to fetch its OAuth token from a host that isn't there.
         for (key, _) in std::env::vars() {
-            if key.starts_with("CLAUDE_")
-                || key.starts_with("ANTHROPIC_")
-                || key == "CLAUDE_CODE_SIMPLE"
-            {
+            if key.starts_with("CLAUDE_") || key.starts_with("ANTHROPIC_") || key == "CLAUDECODE" {
                 cmd.env_remove(&key);
             }
         }
@@ -494,46 +520,67 @@ impl LlmProvider for ClaudeCliProvider {
         // mid-run. The explicit drop here makes the lifetime obvious.
         drop(cwd);
 
-        if !out.status.success() {
-            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-            if looks_like_auth_failure(&stderr) {
-                return Err(ProviderError::Auth);
-            }
-            return Err(ProviderError::Other(format!(
-                "claude -p exited {}: {}",
-                out.status
-                    .code()
-                    .map_or_else(|| "?".into(), |c| c.to_string()),
-                stderr.trim()
-            )));
-        }
-
-        let stdout = std::str::from_utf8(&out.stdout)
-            .map_err(|_| ProviderError::Other("claude -p produced non-UTF8 stdout".into()))?;
-
+        // In `--output-format json` mode the CLI reports failures as a
+        // JSON payload on STDOUT (`is_error`, `api_error_status`,
+        // `result`) and exits 1 with an *empty* stderr — so parse
+        // stdout before deciding what went wrong, or the user gets
+        // `claude -p exited 1:` with nothing after the colon.
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
         // Newer Claude Code versions occasionally emit a "session
         // started" preamble line before the JSON. Trim to the first
         // `{` so the deserialiser sees clean JSON.
-        let json_start = stdout
+        let parsed: Option<ClaudeCliResult> = stdout
             .find('{')
-            .ok_or_else(|| ProviderError::Other("claude -p produced no JSON output".into()))?;
-        let parsed: ClaudeCliResult = serde_json::from_str(&stdout[json_start..])
-            .map_err(|e| ProviderError::Other(format!("claude JSON parse: {e}")))?;
+            .and_then(|i| serde_json::from_str(&stdout[i..]).ok());
 
-        if parsed.is_error == Some(true) {
-            // The CLI surfaces inferred-error responses with an
-            // `is_error: true` flag. Treat as a provider error so
-            // upstream code can fall through to the retry path.
-            return Err(ProviderError::Other(
-                parsed
-                    .result
-                    .unwrap_or_else(|| "claude reported error".into()),
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            return Err(classify_failure(
+                out.status.code(),
+                parsed.as_ref(),
+                &stderr,
             ));
         }
 
-        let text = parsed
-            .result
-            .ok_or_else(|| ProviderError::Other("claude JSON missing `result`".into()))?;
+        let parsed = match parsed {
+            Some(p) => p,
+            None if stdout.contains('{') => {
+                return Err(ProviderError::Other(format!(
+                    "claude JSON parse failed; stdout started: {}",
+                    excerpt(&stdout)
+                )))
+            }
+            None => {
+                return Err(ProviderError::Other(
+                    "claude -p produced no JSON output".into(),
+                ))
+            }
+        };
+
+        if parsed.is_error == Some(true) {
+            // The CLI surfaces inferred-error responses with an
+            // `is_error: true` flag even on exit 0. Same classification
+            // as the non-zero-exit path so auth problems stay actionable.
+            return Err(classify_failure(None, Some(&parsed), ""));
+        }
+
+        // Plain runs put the assistant text in `result`. Structured
+        // (`--json-schema`) runs leave `result` EMPTY and deliver the
+        // validated object in `structured_output` — serialise it back
+        // to a string since callers downstream re-parse the JSON.
+        let text = match (&parsed.result, &parsed.structured_output) {
+            (Some(t), _) if !t.trim().is_empty() => t.clone(),
+            (_, Some(v)) => v.to_string(),
+            (Some(_) | None, None) => {
+                return Err(ProviderError::Other(format!(
+                    "claude JSON missing `result`{}",
+                    parsed
+                        .subtype
+                        .as_ref()
+                        .map_or_else(String::new, |s| format!(" (subtype: {s})"))
+                )))
+            }
+        };
 
         let echoed_model = parsed.model.unwrap_or(model);
 
@@ -599,13 +646,110 @@ fn flatten_messages(req: &CompletionRequest) -> (String, String) {
     (system, user)
 }
 
+/// User-facing remediation for a signed-out / revoked CLI session.
+///
+/// Returned as [`ProviderError::Unavailable`] rather than
+/// [`ProviderError::Auth`] deliberately: `Auth` renders as a bare
+/// "authentication failed" (the variant is shared by API-key providers
+/// where the Settings panel owns remediation), while this provider's
+/// fix lives *outside* the app — the user must re-run `claude auth
+/// login` in a terminal. `Unavailable`'s message carries that
+/// instruction to the failed-case row, and the batch runner's
+/// structural-failure detection ("provider unavailable:") cancels the
+/// remaining queued cases instead of failing each one identically.
+const AUTH_REMEDIATION: &str = "Claude CLI is signed out or its session was revoked \
+     (the API rejected the stored token). Run `claude auth login` in a \
+     terminal, then retry. `claude auth status` may still claim you are \
+     logged in — it only checks that a token exists locally.";
+
+/// Map a failed `claude -p` run (non-zero exit, or `is_error: true` on
+/// exit 0) onto a typed [`ProviderError`]. `exit_code` is `None` when
+/// the process exited 0 or was killed by a signal.
+fn classify_failure(
+    exit_code: Option<i32>,
+    parsed: Option<&ClaudeCliResult>,
+    stderr: &str,
+) -> ProviderError {
+    if let Some(p) = parsed {
+        let auth_status = matches!(p.api_error_status, Some(401 | 403));
+        let auth_text = p.result.as_deref().is_some_and(looks_like_auth_failure);
+        if auth_status || auth_text {
+            return ProviderError::Unavailable(AUTH_REMEDIATION.into());
+        }
+        // Subscription ceiling ("You've hit your session limit · resets
+        // 12:50am …"). Structural until the stated reset: every further
+        // call fails identically, so surface it as Unavailable — the
+        // batch runner's structural-failure detection then cancels the
+        // remaining queued cases instead of failing each one — and keep
+        // the CLI's own message, which already names the reset time.
+        if let Some(msg) = p.result.as_deref().filter(|m| looks_like_usage_limit(m)) {
+            return ProviderError::Unavailable(msg.trim().to_owned());
+        }
+    }
+    if looks_like_auth_failure(stderr) {
+        return ProviderError::Unavailable(AUTH_REMEDIATION.into());
+    }
+    if looks_like_usage_limit(stderr) {
+        return ProviderError::Unavailable(stderr.trim().to_owned());
+    }
+
+    // Prefer the JSON `result` message (the CLI's real error), then the
+    // machine-readable subtype (e.g. `error_max_turns`), then stderr.
+    let detail = parsed
+        .and_then(|p| {
+            p.result
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .map(str::to_owned)
+                .or_else(|| {
+                    p.subtype
+                        .as_deref()
+                        .filter(|s| !s.trim().is_empty())
+                        .map(|s| format!("claude reported `{s}`"))
+                })
+        })
+        .unwrap_or_else(|| stderr.trim().to_owned());
+    let detail = if detail.is_empty() {
+        "no error detail on stdout or stderr".to_owned()
+    } else {
+        detail
+    };
+
+    match exit_code {
+        Some(code) => ProviderError::Other(format!("claude -p exited {code}: {detail}")),
+        None => ProviderError::Other(detail),
+    }
+}
+
+/// First ~200 chars of a string for error messages, never splitting a
+/// UTF-8 code point.
+fn excerpt(s: &str) -> String {
+    let mut end = s.len().min(200);
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s[..end].to_owned()
+}
+
+/// Subscription/usage ceilings. Matched against the CLI's `result`
+/// message or stderr, e.g. "You've hit your session limit · resets
+/// 12:50am (Europe/Paris)" or "5-hour usage limit reached".
+fn looks_like_usage_limit(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    lower.contains("session limit") || lower.contains("usage limit") || lower.contains("rate limit")
+}
+
 fn looks_like_auth_failure(stderr: &str) -> bool {
     let lower = stderr.to_lowercase();
     lower.contains("not logged in")
         || lower.contains("not authenticated")
         || lower.contains("authentication required")
+        || lower.contains("authentication_error")
+        || lower.contains("failed to authenticate")
+        || lower.contains("invalid authentication")
         || lower.contains("please log in")
         || lower.contains("credentials")
+        || lower.contains("oauth token has expired")
         || lower.contains("`claude auth login`")
 }
 
@@ -614,9 +758,26 @@ fn looks_like_auth_failure(stderr: &str) -> bool {
 /// caller falls back gracefully.
 #[derive(Debug, Deserialize)]
 struct ClaudeCliResult {
-    /// Final assistant text. Present on successful runs.
+    /// Final assistant text. Present on successful plain runs; EMPTY
+    /// on `--json-schema` runs (see `structured_output`); on error
+    /// paths it carries the human-readable error message instead.
     #[serde(default)]
     result: Option<String>,
+    /// Validated object produced by a `--json-schema` run. The CLI
+    /// routes structured answers through an internal tool call and
+    /// parks the payload here, leaving `result` empty.
+    #[serde(default)]
+    structured_output: Option<serde_json::Value>,
+    /// Machine-readable outcome class, e.g. `success`,
+    /// `error_max_turns`, `error_during_execution`.
+    #[serde(default)]
+    subtype: Option<String>,
+    /// HTTP status of the underlying API failure, when one occurred
+    /// (e.g. 401 for a revoked OAuth token). The process still exits 1
+    /// with an empty stderr in that case — this field is the only
+    /// reliable signal.
+    #[serde(default)]
+    api_error_status: Option<u16>,
     /// Echoed model id, e.g. `claude-sonnet-4-6-20250929`. Optional;
     /// older CLI versions did not emit this.
     #[serde(default)]
@@ -695,7 +856,124 @@ mod tests {
         ));
         assert!(looks_like_auth_failure("authentication required"));
         assert!(looks_like_auth_failure("invalid or missing credentials"));
+        assert!(looks_like_auth_failure(
+            "Failed to authenticate. API Error: 401 Invalid authentication credentials"
+        ));
         assert!(!looks_like_auth_failure("model overloaded"));
+    }
+
+    /// The exact shape the CLI emits for a revoked OAuth token: exit 1,
+    /// EMPTY stderr, and the real error only in the stdout JSON. This
+    /// regression test guards the bug where users saw
+    /// `claude -p exited 1:` with nothing after the colon.
+    #[test]
+    fn classify_revoked_token_as_actionable_unavailable() {
+        let json = r#"{
+            "type": "result", "subtype": "success", "is_error": true,
+            "api_error_status": 401,
+            "result": "Failed to authenticate. API Error: 401 Invalid authentication credentials"
+        }"#;
+        let parsed: ClaudeCliResult = serde_json::from_str(json).unwrap();
+        let err = classify_failure(Some(1), Some(&parsed), "");
+        match err {
+            ProviderError::Unavailable(msg) => {
+                assert!(msg.contains("claude auth login"), "got: {msg}");
+            }
+            other => panic!("expected Unavailable, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_auth_text_without_status_as_unavailable() {
+        let json = r#"{"is_error": true, "result": "OAuth token has expired"}"#;
+        let parsed: ClaudeCliResult = serde_json::from_str(json).unwrap();
+        assert!(matches!(
+            classify_failure(Some(1), Some(&parsed), ""),
+            ProviderError::Unavailable(_)
+        ));
+    }
+
+    /// Exact live shape from 2026-06-10: exit 1, empty stderr, and the
+    /// subscription ceiling reported only in the stdout JSON `result`.
+    /// Must surface as Unavailable (batch fail-fast) with the CLI's own
+    /// message preserved — it names the reset time.
+    #[test]
+    fn classify_session_limit_as_unavailable_with_original_message() {
+        let json = r#"{
+            "type": "result", "subtype": "success", "is_error": true,
+            "result": "You've hit your session limit · resets 12:50am (Europe/Paris)"
+        }"#;
+        let parsed: ClaudeCliResult = serde_json::from_str(json).unwrap();
+        match classify_failure(Some(1), Some(&parsed), "") {
+            ProviderError::Unavailable(msg) => {
+                assert!(msg.contains("resets 12:50am"), "got: {msg}");
+            }
+            other => panic!("expected Unavailable, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_stderr_auth_still_detected_without_json() {
+        let err = classify_failure(
+            Some(1),
+            None,
+            "Error: Not logged in. Run `claude auth login`.",
+        );
+        assert!(matches!(err, ProviderError::Unavailable(_)));
+    }
+
+    #[test]
+    fn classify_non_auth_failure_keeps_result_detail() {
+        let json = r#"{"is_error": true, "subtype": "error_during_execution", "result": "model overloaded"}"#;
+        let parsed: ClaudeCliResult = serde_json::from_str(json).unwrap();
+        match classify_failure(Some(1), Some(&parsed), "") {
+            ProviderError::Other(msg) => {
+                assert_eq!(msg, "claude -p exited 1: model overloaded");
+            }
+            other => panic!("expected Other, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_subtype_used_when_result_missing() {
+        let json =
+            r#"{"type": "result", "subtype": "error_max_turns", "is_error": true, "num_turns": 2}"#;
+        let parsed: ClaudeCliResult = serde_json::from_str(json).unwrap();
+        match classify_failure(None, Some(&parsed), "") {
+            ProviderError::Other(msg) => {
+                assert_eq!(msg, "claude reported `error_max_turns`");
+            }
+            other => panic!("expected Other, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_never_produces_empty_detail() {
+        match classify_failure(Some(1), None, "  ") {
+            ProviderError::Other(msg) => {
+                assert_eq!(
+                    msg,
+                    "claude -p exited 1: no error detail on stdout or stderr"
+                );
+            }
+            other => panic!("expected Other, got: {other:?}"),
+        }
+    }
+
+    /// `--json-schema` runs park the payload in `structured_output` and
+    /// leave `result` empty — the provider must hand back the object
+    /// serialised, not the empty string.
+    #[test]
+    fn parse_structured_output_run() {
+        let json = r#"{
+            "type": "result", "subtype": "success", "is_error": false,
+            "result": "",
+            "structured_output": {"saludo": "hola"}
+        }"#;
+        let parsed: ClaudeCliResult = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.result.as_deref(), Some(""));
+        let v = parsed.structured_output.unwrap();
+        assert_eq!(v.to_string(), r#"{"saludo":"hola"}"#);
     }
 
     #[test]
