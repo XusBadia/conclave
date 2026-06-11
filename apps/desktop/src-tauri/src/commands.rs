@@ -489,6 +489,13 @@ pub async fn ask_documents(
     state: State<'_, AppState>,
     request: AskDocumentsRequest,
 ) -> CommandResult<AskDocumentsResponse> {
+    catch_command_panic("ask_documents", ask_documents_impl(state, request)).await
+}
+
+async fn ask_documents_impl(
+    state: State<'_, AppState>,
+    request: AskDocumentsRequest,
+) -> CommandResult<AskDocumentsResponse> {
     let workspace = workspace_manager(&state)
         .load(&request.workspace_id)
         .map_err(|e| e.to_string())?;
@@ -1755,7 +1762,11 @@ pub async fn run_case(
     state: State<'_, AppState>,
     request: CaseRunRequest,
 ) -> CommandResult<CaseRunResponse> {
-    run_case_impl(&app, &state, request, None).await
+    Box::pin(catch_command_panic(
+        "run_case",
+        run_case_impl(&app, &state, request, None),
+    ))
+    .await
 }
 
 /// Drafted case ready for the LLM. The row is already persisted in
@@ -2136,6 +2147,31 @@ async fn stage_draft(
 /// ERROR level (so the dev server output surfaces what broke) AND
 /// persisted on the case row via `set_case_error` so the detail view
 /// can show it to the clinician.
+/// Convert a panic anywhere inside a command future into a normal
+/// `Err(String)` so the frontend's `invoke()` promise settles and the UI
+/// shows an error instead of spinning forever. The batch runner has
+/// carried the same net since a deident char-boundary panic froze a
+/// whole batch (see `run_batch_cases`); this extends it to the
+/// single-case commands.
+async fn catch_command_panic<T>(
+    label: &str,
+    fut: impl std::future::Future<Output = CommandResult<T>>,
+) -> CommandResult<T> {
+    use futures::FutureExt;
+    match std::panic::AssertUnwindSafe(fut).catch_unwind().await {
+        Ok(result) => result,
+        Err(panic) => {
+            let msg = panic
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_owned())
+                .or_else(|| panic.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "panicked".to_owned());
+            tracing::error!(command = label, error = %msg, "command panicked");
+            Err(format!("internal error: {msg}"))
+        }
+    }
+}
+
 fn mark_case_failed_best_effort(store: &Arc<Mutex<CaseStore>>, case_id: &str, err: &str) {
     tracing::error!(case_id, error = err, "case run failed — marking Failed");
     if let Ok(g) = store.lock() {
@@ -2462,6 +2498,28 @@ pub async fn run_draft_case(
     state: State<'_, AppState>,
     request: RunDraftCaseRequest,
 ) -> CommandResult<CaseRunResponse> {
+    // Grab what the panic arm needs BEFORE the request moves into the
+    // future: on a panic the normal error path never runs, and the draft
+    // must not sit as silently "running" forever.
+    let store = case_store_arc(&state, &request.workspace_id).ok();
+    let case_id = request.case_id.clone();
+    let result = Box::pin(catch_command_panic(
+        "run_draft_case",
+        run_draft_case_impl(state, request),
+    ))
+    .await;
+    if let (Err(e), Some(store)) = (&result, &store) {
+        if e.starts_with("internal error:") {
+            mark_case_failed_best_effort(store, &case_id, e);
+        }
+    }
+    result
+}
+
+async fn run_draft_case_impl(
+    state: State<'_, AppState>,
+    request: RunDraftCaseRequest,
+) -> CommandResult<CaseRunResponse> {
     let workspace = workspace_manager(&state)
         .load(&request.workspace_id)
         .map_err(|e| e.to_string())?;
@@ -2704,7 +2762,11 @@ pub async fn run_case_deliberated(
     state: State<'_, AppState>,
     request: CaseRunRequest,
 ) -> CommandResult<CaseRunResponse> {
-    run_case_deliberated_impl(&app, &state, request, None).await
+    Box::pin(catch_command_panic(
+        "run_case_deliberated",
+        run_case_deliberated_impl(&app, &state, request, None),
+    ))
+    .await
 }
 
 /// Free-function body of [`run_case_deliberated`] for batch reuse.
@@ -3951,6 +4013,21 @@ pub async fn set_cli_login_override(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn catch_command_panic_converts_panics_to_err() {
+        let result: CommandResult<()> =
+            catch_command_panic("test", async { panic!("boom {}", 42) }).await;
+        let err = result.unwrap_err();
+        assert!(err.contains("internal error"));
+        assert!(err.contains("boom 42"));
+    }
+
+    #[tokio::test]
+    async fn catch_command_panic_passes_ok_through() {
+        let result = catch_command_panic("test", async { Ok::<u8, String>(7) }).await;
+        assert_eq!(result, Ok(7));
+    }
 
     #[test]
     fn is_transport_failure_catches_ollama_offline_message() {
