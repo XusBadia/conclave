@@ -4006,6 +4006,141 @@ pub async fn set_cli_login_override(
 mod tests {
     use super::*;
 
+    /// Minimal provider double for the data-boundary tests: only
+    /// `requires_network` matters to `boundary_preview_for_request`.
+    #[derive(Debug)]
+    struct FakeProvider {
+        network: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for FakeProvider {
+        fn id(&self) -> &'static str {
+            "fake"
+        }
+
+        fn capabilities(&self) -> conclave_providers::ProviderCapabilities {
+            conclave_providers::ProviderCapabilities {
+                max_context_tokens: 8_000,
+                supports_json_mode: false,
+                supports_streaming: false,
+                vision: false,
+                scope: ProviderScope::General,
+            }
+        }
+
+        fn requires_network(&self) -> bool {
+            self.network
+        }
+
+        async fn complete(
+            &self,
+            _req: CompletionRequest,
+        ) -> Result<conclave_providers::CompletionResponse, conclave_providers::ProviderError>
+        {
+            Ok(conclave_providers::CompletionResponse {
+                text: String::new(),
+                usage: conclave_providers::Usage {
+                    input_tokens: 0,
+                    output_tokens: 0,
+                },
+                model: "fake".into(),
+                web_citations: Vec::new(),
+            })
+        }
+    }
+
+    fn boundary_request(mode: &str, files: &[&str], allow_phi: bool) -> CaseRunRequest {
+        CaseRunRequest {
+            workspace_id: "ws".into(),
+            text: "texto".into(),
+            question: "pregunta".into(),
+            provider_id: "fake".into(),
+            model: None,
+            attached_file_paths: files.iter().map(|s| (*s).to_owned()).collect(),
+            patient_label: String::new(),
+            data_boundary_mode: Some(mode.to_owned()),
+            allow_phi_payload: allow_phi,
+            retain_raw_text: false,
+            active_skill_id: None,
+            use_online_evidence: false,
+        }
+    }
+
+    // Regression net for the image/data-boundary gate: these block
+    // reasons are the only thing standing between a raw PHI image and a
+    // cloud provider, so each branch gets pinned.
+
+    #[test]
+    fn boundary_blocks_cloud_vision_outside_explicit_phi() {
+        let provider: Arc<dyn LlmProvider> = Arc::new(FakeProvider { network: true });
+        let p = boundary_preview_for_request(
+            &boundary_request("deid_cloud", &["scan.png"], false),
+            &provider,
+            None,
+            false,
+        );
+        assert_eq!(
+            p.blocked_reason.as_deref(),
+            Some("cloud vision requires explicit_phi mode")
+        );
+    }
+
+    #[test]
+    fn boundary_requires_consent_for_phi_images_even_in_explicit_phi() {
+        let provider: Arc<dyn LlmProvider> = Arc::new(FakeProvider { network: true });
+        let p = boundary_preview_for_request(
+            &boundary_request("explicit_phi", &["scan.png"], false),
+            &provider,
+            None,
+            false,
+        );
+        assert_eq!(
+            p.blocked_reason.as_deref(),
+            Some("explicit_phi mode requires allow_phi_payload consent")
+        );
+    }
+
+    #[test]
+    fn boundary_blocks_network_providers_in_local_only() {
+        let provider: Arc<dyn LlmProvider> = Arc::new(FakeProvider { network: true });
+        let p = boundary_preview_for_request(
+            &boundary_request("local_only", &[], false),
+            &provider,
+            None,
+            false,
+        );
+        assert_eq!(
+            p.blocked_reason.as_deref(),
+            Some("local_only blocks network providers")
+        );
+    }
+
+    #[test]
+    fn boundary_allows_local_provider_with_images_and_reports_retention() {
+        let provider: Arc<dyn LlmProvider> = Arc::new(FakeProvider { network: false });
+        let p = boundary_preview_for_request(
+            &boundary_request("deid_cloud", &["scan.png"], false),
+            &provider,
+            None,
+            false,
+        );
+        assert_eq!(p.blocked_reason, None);
+        assert!(p.sends_images);
+        // purge setting off + attachments present → files are retained.
+        assert!(p.retains_attachment_files);
+
+        // With the purge setting on and raw text discarded, the preview
+        // must announce the purge instead.
+        let p = boundary_preview_for_request(
+            &boundary_request("deid_cloud", &["scan.png"], false),
+            &provider,
+            None,
+            true,
+        );
+        assert!(!p.retains_attachment_files);
+    }
+
     #[test]
     fn keychain_less_providers_resolve_to_empty_key() {
         for id in KEYCHAIN_LESS_PROVIDERS {

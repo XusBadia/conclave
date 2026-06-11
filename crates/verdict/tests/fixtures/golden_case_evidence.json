@@ -1,0 +1,6 @@
+{
+  "name": "es-con-evidencia-externa",
+  "text": "Paciente con DNI 87654321X y disnea de esfuerzo progresiva de tres meses, con ortopnea reciente. Ecocardiograma pendiente.",
+  "question": "¿Aporta algo la literatura externa reciente al manejo?",
+  "pii": ["87654321X"]
+}

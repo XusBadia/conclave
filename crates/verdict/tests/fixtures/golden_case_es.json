@@ -1,0 +1,6 @@
+{
+  "name": "es-cardio-basico",
+  "text": "Paciente Marta Soler Vives, DNI 12345678Z, tel. 612345678, email marta.soler@example.com. Acude el 12/03/2026 por disnea súbita de dos horas con dolor torácico opresivo irradiado a brazo izquierdo. Antecedentes: HTA en tratamiento con enalapril. Exploración: TA 150/90 mmHg, FC 102 lpm.",
+  "question": "¿Manejo inicial recomendado?",
+  "pii": ["12345678Z", "612345678", "marta.soler@example.com"]
+}

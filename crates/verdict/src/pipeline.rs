@@ -1149,6 +1149,155 @@ mod tests {
         assert_eq!(audit.online_evidence_refs, vec!["X1"]);
     }
 
+    /// Golden cases (promised by ARCHITECTURE.md §Testing): fixture-driven
+    /// end-to-end runs over the mock provider. They pin (a) that the
+    /// pipeline survives realistic clinical text — including the
+    /// multibyte/emoji class that once panicked deident — and (b) the
+    /// de-identification contract: no fixture PII literal may survive into
+    /// the masked text or the persisted case row.
+    mod golden {
+        use super::*;
+
+        #[derive(serde::Deserialize)]
+        struct GoldenCase {
+            name: String,
+            text: String,
+            question: String,
+            pii: Vec<String>,
+        }
+
+        struct GoldenRun {
+            fixture: GoldenCase,
+            run: VerdictRun,
+            store: Arc<Mutex<CaseStore>>,
+            _tmp: tempfile::TempDir,
+        }
+
+        async fn run_fixture(raw: &str, response: String, options: VerdictOptions) -> GoldenRun {
+            let fixture: GoldenCase = serde_json::from_str(raw).unwrap();
+            let tmp = tempfile::tempdir().unwrap();
+            let layout = RepositoryLayout::new(tmp.path().join("ws"));
+            let repo = Arc::new(
+                DocumentRepository::open(layout, MockEmbedder::new().dim())
+                    .await
+                    .unwrap(),
+            );
+            let store = Arc::new(Mutex::new(
+                CaseStore::open(tmp.path().join("cases.sqlite")).unwrap(),
+            ));
+            let provider: Arc<dyn LlmProvider> = Arc::new(MockProvider::with_response(response));
+            let pipeline = VerdictPipeline::new(
+                sample_workspace(),
+                Box::new(PipelineDeidentifier::new()),
+                Arc::new(MockEmbedder::new()),
+                repo,
+                provider,
+                Arc::clone(&store),
+            );
+            let run = pipeline
+                .run(&fixture.text, &fixture.question, &[], &options)
+                .await
+                .unwrap_or_else(|e| panic!("{}: pipeline failed: {e}", fixture.name));
+            GoldenRun {
+                fixture,
+                run,
+                store,
+                _tmp: tmp,
+            }
+        }
+
+        #[tokio::test]
+        async fn golden_cases_mask_pii_end_to_end() {
+            for raw in [
+                include_str!("../tests/fixtures/golden_case_es.json"),
+                include_str!("../tests/fixtures/golden_case_multibyte.json"),
+            ] {
+                let GoldenRun {
+                    fixture,
+                    run,
+                    store,
+                    _tmp,
+                } = run_fixture(raw, sample_verdict_json(), VerdictOptions::default()).await;
+
+                for pii in &fixture.pii {
+                    assert!(
+                        !run.case.masked_text.contains(pii.as_str()),
+                        "{}: PII `{pii}` survived into masked_text: {}",
+                        fixture.name,
+                        run.case.masked_text
+                    );
+                }
+                // Default options discard raw text: the in-memory case must
+                // not carry the original narrative either.
+                assert!(run.case.original_text.is_empty(), "{}", fixture.name);
+
+                // Structure stability of the verdict surface.
+                assert!(!run.verdict.case_summary.is_empty());
+                assert!(!run.verdict.primary_recommendation.action.is_empty());
+                assert!(run
+                    .verdict
+                    .disclaimer
+                    .starts_with("Conclave is an experimental"));
+
+                // The persisted row and the audit trail match the contract.
+                let g = store.lock().unwrap();
+                let persisted = g.get_case(&run.case.id).unwrap().unwrap();
+                assert!(persisted.original_text.is_empty(), "{}", fixture.name);
+                for pii in &fixture.pii {
+                    assert!(
+                        !persisted.masked_text.contains(pii.as_str()),
+                        "{}: PII `{pii}` persisted to SQLite",
+                        fixture.name
+                    );
+                }
+                let audit = g.latest_audit_for_case(&run.case.id).unwrap().unwrap();
+                assert_eq!(audit.status, "success");
+                assert!(audit.attachments_retained);
+            }
+        }
+
+        #[tokio::test]
+        async fn golden_evidence_case_wires_x_refs() {
+            let options = VerdictOptions {
+                external_evidence: vec![EvidenceItem {
+                    source: "pubmed".into(),
+                    id: "1".into(),
+                    title: "External paper".into(),
+                    authors: vec!["Smith".into()],
+                    year: Some(2026),
+                    venue: Some("Journal".into()),
+                    abstract_text: Some("Abstract".into()),
+                    url: "https://pubmed.ncbi.nlm.nih.gov/1/".into(),
+                }],
+                ..Default::default()
+            };
+            let GoldenRun {
+                fixture,
+                run,
+                store,
+                _tmp,
+            } = run_fixture(
+                include_str!("../tests/fixtures/golden_case_evidence.json"),
+                sample_verdict_json_with_x_ref(),
+                options,
+            )
+            .await;
+
+            assert_eq!(run.trace.online_evidence_refs, vec!["X1"]);
+            assert_eq!(run.verdict.applied_evidence[0].reference, "X1");
+            for pii in &fixture.pii {
+                assert!(!run.case.masked_text.contains(pii.as_str()));
+            }
+            let audit = store
+                .lock()
+                .unwrap()
+                .latest_audit_for_case(&run.case.id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(audit.online_evidence_refs, vec!["X1"]);
+        }
+    }
+
     #[tokio::test]
     async fn local_only_rejects_network_provider_before_calling_llm() {
         let tmp = tempfile::tempdir().unwrap();
