@@ -2095,13 +2095,11 @@ async fn stage_draft(
     };
 
     {
-        let g = store.lock().map_err(|_| "store poisoned")?;
-        g.insert_case(&case).map_err(|e| e.to_string())?;
-        for att in &attachments {
-            if let Err(e) = g.insert_attachment(att) {
-                tracing::warn!(error = ?e, "could not persist draft attachment row");
-            }
-        }
+        let mut g = store.lock().map_err(|_| "store poisoned")?;
+        // One transaction: a failed attachment row aborts the whole draft
+        // instead of silently persisting a case with missing attachments.
+        g.insert_case_with_attachments(&case, &attachments)
+            .map_err(|e| e.to_string())?;
     }
 
     let _ = app.emit(
@@ -2400,20 +2398,17 @@ pub async fn create_draft_cases(
     let mut out = Vec::with_capacity(staged.len());
     let mut to_upgrade: Vec<(String, String, Vec<CaseAttachment>)> = Vec::new();
     {
-        let store_guard = store.lock().map_err(|_| "store poisoned")?;
+        let mut store_guard = store.lock().map_err(|_| "store poisoned")?;
         for Staged {
             record,
             attachments,
         } in staged
         {
+            // One transaction per draft: a failed attachment row aborts
+            // that draft instead of persisting it with missing rows.
             store_guard
-                .insert_case(&record)
+                .insert_case_with_attachments(&record, &attachments)
                 .map_err(|e| e.to_string())?;
-            for att in &attachments {
-                if let Err(e) = store_guard.insert_attachment(att) {
-                    tracing::warn!(error = ?e, "could not persist draft attachment row");
-                }
-            }
             to_upgrade.push((
                 record.id.clone(),
                 record.masked_text.clone(),

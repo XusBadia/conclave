@@ -634,30 +634,51 @@ impl CaseStore {
 
     /// Insert a case row.
     pub fn insert_case(&self, c: &CaseRecord) -> Result<()> {
-        self.conn
-            .execute(
-                "INSERT INTO cases
+        Self::insert_case_on(&self.conn, c)
+    }
+
+    fn insert_case_on(conn: &Connection, c: &CaseRecord) -> Result<()> {
+        conn.execute(
+            "INSERT INTO cases
                    (id, created_at, workspace_id, question, original_text, masked_text,
                     deident_pipeline_id, status, case_date, patient_label, latest_error,
                     raw_text_sha256, raw_text_retention)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-                params![
-                    c.id,
-                    c.created_at.to_rfc3339(),
-                    c.workspace_id,
-                    c.question,
-                    c.original_text,
-                    c.masked_text,
-                    c.deident_pipeline_id,
-                    c.status.as_db_str(),
-                    c.case_date.to_rfc3339(),
-                    c.patient_label,
-                    c.latest_error.as_deref(),
-                    c.raw_text_sha256,
-                    c.raw_text_retention.as_db_str(),
-                ],
-            )
-            .map_err(map_sql)?;
+            params![
+                c.id,
+                c.created_at.to_rfc3339(),
+                c.workspace_id,
+                c.question,
+                c.original_text,
+                c.masked_text,
+                c.deident_pipeline_id,
+                c.status.as_db_str(),
+                c.case_date.to_rfc3339(),
+                c.patient_label,
+                c.latest_error.as_deref(),
+                c.raw_text_sha256,
+                c.raw_text_retention.as_db_str(),
+            ],
+        )
+        .map_err(map_sql)?;
+        Ok(())
+    }
+
+    /// Insert a draft case and ALL of its attachment rows in one SQLite
+    /// transaction. A failure on any row rolls the whole insert back, so a
+    /// case can never be persisted with a partial attachment set (the old
+    /// insert-then-warn loop silently dropped failed attachment rows).
+    pub fn insert_case_with_attachments(
+        &mut self,
+        record: &CaseRecord,
+        attachments: &[CaseAttachment],
+    ) -> Result<()> {
+        let tx = self.conn.transaction().map_err(map_sql)?;
+        Self::insert_case_on(&tx, record)?;
+        for a in attachments {
+            Self::insert_attachment_on(&tx, a)?;
+        }
+        tx.commit().map_err(map_sql)?;
         Ok(())
     }
 
@@ -829,29 +850,32 @@ impl CaseStore {
 
     /// Insert a case attachment row.
     pub fn insert_attachment(&self, a: &CaseAttachment) -> Result<()> {
-        self.conn
-            .execute(
-                "INSERT INTO case_attachments
+        Self::insert_attachment_on(&self.conn, a)
+    }
+
+    fn insert_attachment_on(conn: &Connection, a: &CaseAttachment) -> Result<()> {
+        conn.execute(
+            "INSERT INTO case_attachments
                    (id, case_id, position, original_filename, stored_path,
                     sha256, doc_type, mime, extracted_text, needs_ocr,
                     byte_size, created_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-                params![
-                    a.id,
-                    a.case_id,
-                    i64::from(a.position),
-                    a.original_filename,
-                    a.stored_path,
-                    a.sha256,
-                    a.doc_type,
-                    a.mime,
-                    a.extracted_text,
-                    i64::from(a.needs_ocr),
-                    a.byte_size as i64,
-                    a.created_at.to_rfc3339(),
-                ],
-            )
-            .map_err(map_sql)?;
+            params![
+                a.id,
+                a.case_id,
+                i64::from(a.position),
+                a.original_filename,
+                a.stored_path,
+                a.sha256,
+                a.doc_type,
+                a.mime,
+                a.extracted_text,
+                i64::from(a.needs_ocr),
+                a.byte_size as i64,
+                a.created_at.to_rfc3339(),
+            ],
+        )
+        .map_err(map_sql)?;
         Ok(())
     }
 
@@ -2041,6 +2065,45 @@ mod tests {
         store.set_case_error("old1", Some("backfilled")).unwrap();
         let fetched = store.get_case("old1").unwrap().unwrap();
         assert_eq!(fetched.latest_error.as_deref(), Some("backfilled"));
+    }
+
+    #[test]
+    fn insert_case_with_attachments_rolls_back_on_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut store = CaseStore::open(tmp.path().join("cases.sqlite")).unwrap();
+        let case = sample_case("case-tx");
+        let make_att = |id: &str| CaseAttachment {
+            id: id.into(),
+            case_id: "case-tx".into(),
+            position: 1,
+            original_filename: "a.txt".into(),
+            stored_path: "/tmp/a.txt".into(),
+            sha256: String::new(),
+            doc_type: "informe".into(),
+            mime: "text/plain".into(),
+            extracted_text: String::new(),
+            needs_ocr: false,
+            byte_size: 0,
+            created_at: Utc::now(),
+        };
+        // Duplicate attachment PK → the second insert fails → the whole
+        // transaction (case row included) must roll back.
+        let err = store
+            .insert_case_with_attachments(&case, &[make_att("dup"), make_att("dup")])
+            .unwrap_err();
+        assert!(err.to_string().to_lowercase().contains("unique"));
+        assert!(store.get_case("case-tx").unwrap().is_none());
+        assert!(store
+            .list_attachments_for_case("case-tx")
+            .unwrap()
+            .is_empty());
+
+        // And the happy path commits both rows.
+        store
+            .insert_case_with_attachments(&case, &[make_att("a1"), make_att("a2")])
+            .unwrap();
+        assert!(store.get_case("case-tx").unwrap().is_some());
+        assert_eq!(store.list_attachments_for_case("case-tx").unwrap().len(), 2);
     }
 
     #[test]
