@@ -137,6 +137,7 @@ CREATE TABLE IF NOT EXISTS audit_runs (
     online_evidence_refs_json TEXT NOT NULL DEFAULT '[]',
     attachment_refs_json TEXT NOT NULL DEFAULT '[]',
     raw_text_retention TEXT NOT NULL DEFAULT 'discarded',
+    attachments_retained INTEGER NOT NULL DEFAULT 1,
     status TEXT NOT NULL,
     error TEXT
 );
@@ -389,8 +390,17 @@ pub struct AuditRunRecord {
     pub online_evidence_refs: Vec<String>,
     pub attachment_refs: Vec<String>,
     pub raw_text_retention: RawTextRetention,
+    /// Whether the original attachment files were left on disk after the
+    /// run. Legacy rows (pre-column) read as `true`: nothing purged files
+    /// before this column existed, so "retained" is the honest value.
+    #[serde(default = "attachments_retained_default")]
+    pub attachments_retained: bool,
     pub status: String,
     pub error: Option<String>,
+}
+
+fn attachments_retained_default() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -438,6 +448,7 @@ impl CaseStore {
         Self::migrate_cases_case_date(&conn)?;
         Self::migrate_cases_patient_label_and_error(&conn)?;
         Self::migrate_cases_privacy(&conn)?;
+        Self::migrate_audit_runs_attachments_retained(&conn)?;
         Ok(Self { conn, path })
     }
 
@@ -519,6 +530,30 @@ impl CaseStore {
         if !cols.iter().any(|c| c == "latest_error") {
             conn.execute("ALTER TABLE cases ADD COLUMN latest_error TEXT", [])
                 .map_err(map_sql)?;
+        }
+        Ok(())
+    }
+
+    /// Idempotent migration: record whether the original attachment files
+    /// were retained after each run. Legacy rows default to 1 (retained) —
+    /// the honest value, since nothing purged attachment files before this
+    /// column existed.
+    fn migrate_audit_runs_attachments_retained(conn: &Connection) -> Result<()> {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(audit_runs)")
+            .map_err(map_sql)?;
+        let cols: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .map_err(map_sql)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(map_sql)?;
+        if !cols.iter().any(|c| c == "attachments_retained") {
+            conn.execute(
+                "ALTER TABLE audit_runs
+                     ADD COLUMN attachments_retained INTEGER NOT NULL DEFAULT 1",
+                [],
+            )
+            .map_err(map_sql)?;
         }
         Ok(())
     }
@@ -1015,9 +1050,10 @@ impl CaseStore {
                     payload_mode, active_skill_id, started_at, completed_at, latency_ms,
                     input_tokens, output_tokens, prompt_sha256, output_sha256,
                     evidence_refs_json, past_cases_refs_json, online_evidence_refs_json,
-                    attachment_refs_json, raw_text_retention, status, error)
+                    attachment_refs_json, raw_text_retention, attachments_retained,
+                    status, error)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                         ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
+                         ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
                 params![
                     run.id,
                     run.case_id,
@@ -1040,6 +1076,7 @@ impl CaseStore {
                         .unwrap_or_else(|_| "[]".into()),
                     serde_json::to_string(&run.attachment_refs).unwrap_or_else(|_| "[]".into()),
                     run.raw_text_retention.as_db_str(),
+                    run.attachments_retained,
                     run.status,
                     run.error,
                 ],
@@ -1056,7 +1093,8 @@ impl CaseStore {
                         payload_mode, active_skill_id, started_at, completed_at, latency_ms,
                         input_tokens, output_tokens, prompt_sha256, output_sha256,
                         evidence_refs_json, past_cases_refs_json, online_evidence_refs_json,
-                        attachment_refs_json, raw_text_retention, status, error
+                        attachment_refs_json, raw_text_retention, attachments_retained,
+                        status, error
                  FROM audit_runs
                  ORDER BY started_at DESC
                  LIMIT ?1",
@@ -1079,7 +1117,8 @@ impl CaseStore {
                         payload_mode, active_skill_id, started_at, completed_at, latency_ms,
                         input_tokens, output_tokens, prompt_sha256, output_sha256,
                         evidence_refs_json, past_cases_refs_json, online_evidence_refs_json,
-                        attachment_refs_json, raw_text_retention, status, error
+                        attachment_refs_json, raw_text_retention, attachments_retained,
+                        status, error
                  FROM audit_runs
                  WHERE case_id = ?1
                  ORDER BY started_at DESC
@@ -1594,8 +1633,9 @@ fn row_to_audit_run(r: &rusqlite::Row<'_>) -> rusqlite::Result<AuditRunRecord> {
         online_evidence_refs: refs(17)?,
         attachment_refs: refs(18)?,
         raw_text_retention: RawTextRetention::from_db_str(&r.get::<_, String>(19)?),
-        status: r.get(20)?,
-        error: r.get(21)?,
+        attachments_retained: r.get(20)?,
+        status: r.get(21)?,
+        error: r.get(22)?,
     })
 }
 
@@ -1726,6 +1766,7 @@ mod tests {
             online_evidence_refs: vec!["X1".into()],
             attachment_refs: vec!["A1".into()],
             raw_text_retention: RawTextRetention::Discarded,
+            attachments_retained: true,
             status: "ok".into(),
             error: None,
         }
@@ -1916,6 +1957,55 @@ mod tests {
         store.set_case_patient_label("c-pl", "CR-IA-011").unwrap();
         let fetched = store.get_case("c-pl").unwrap().unwrap();
         assert_eq!(fetched.patient_label, "CR-IA-011");
+    }
+
+    #[test]
+    fn migration_adds_attachments_retained_to_legacy_audit_runs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("cases.sqlite");
+        // Hand-craft a legacy audit_runs table that predates the
+        // attachments_retained column, with one row in it.
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE audit_runs (
+                    id TEXT PRIMARY KEY,
+                    case_id TEXT NOT NULL,
+                    verdict_id TEXT,
+                    provider_id TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    data_boundary_mode TEXT NOT NULL,
+                    payload_mode TEXT NOT NULL,
+                    active_skill_id TEXT,
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    latency_ms INTEGER NOT NULL DEFAULT 0,
+                    input_tokens INTEGER NOT NULL DEFAULT 0,
+                    output_tokens INTEGER NOT NULL DEFAULT 0,
+                    prompt_sha256 TEXT NOT NULL DEFAULT '',
+                    output_sha256 TEXT NOT NULL DEFAULT '',
+                    evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+                    past_cases_refs_json TEXT NOT NULL DEFAULT '[]',
+                    online_evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+                    attachment_refs_json TEXT NOT NULL DEFAULT '[]',
+                    raw_text_retention TEXT NOT NULL DEFAULT 'discarded',
+                    status TEXT NOT NULL,
+                    error TEXT
+                );
+                INSERT INTO audit_runs
+                    (id, case_id, provider_id, model, data_boundary_mode,
+                     payload_mode, started_at, status)
+                VALUES
+                    ('audit-legacy', 'case-legacy', 'mock', 'm', 'deid_cloud',
+                     'fingerprint_only', '2026-01-01T00:00:00Z', 'success');",
+            )
+            .unwrap();
+        }
+        // Opening via CaseStore adds the column idempotently; the legacy
+        // row must read back as retained (nothing purged files back then).
+        let store = CaseStore::open(&db).unwrap();
+        let run = store.latest_audit_for_case("case-legacy").unwrap().unwrap();
+        assert!(run.attachments_retained);
     }
 
     #[test]

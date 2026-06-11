@@ -208,6 +208,7 @@ export type AuditPayloadMode = "none" | "fingerprint" | "preview" | "payload";
 
 export interface PrivacySettings {
   default_data_boundary: DataBoundaryMode;
+  purge_attachments_with_raw_text: boolean;
 }
 
 export interface VerdictRecord {
@@ -307,6 +308,7 @@ export interface DataBoundaryPreview {
   sends_raw_text: boolean;
   sends_images: boolean;
   stores_raw_text: boolean;
+  retains_attachment_files: boolean;
   uses_online_evidence: boolean;
   blocked_reason: string | null;
 }

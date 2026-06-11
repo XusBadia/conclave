@@ -74,6 +74,11 @@ pub struct VerdictOptions {
     pub active_skill_instructions: Option<String>,
     /// Keep raw text locally after a successful run.
     pub retain_raw_text: bool,
+    /// When raw text is NOT retained, also delete the original attachment
+    /// files from disk after the run (and zero their stored paths). Off by
+    /// default: attachments stay viewable in the case detail UI and the
+    /// audit row records them as retained.
+    pub purge_attachment_files: bool,
     /// Optional live literature supplied by an opt-in external evidence
     /// lookup. These become `X1..Xn` refs in the verdict prompt.
     pub external_evidence: Vec<EvidenceItem>,
@@ -94,6 +99,7 @@ impl Default for VerdictOptions {
             active_skill_id: None,
             active_skill_instructions: None,
             retain_raw_text: false,
+            purge_attachment_files: false,
             external_evidence: Vec::new(),
         }
     }
@@ -395,6 +401,9 @@ Return the JSON object only, citing only the supplied evidence ids."
                 online_evidence_refs: trace.online_evidence_refs.clone(),
                 attachment_refs: trace.attachment_refs.clone(),
                 raw_text_retention: raw_retention,
+                // Retained unless this run's policy actually purges files:
+                // must stay the exact negation of the purge condition below.
+                attachments_retained: options.retain_raw_text || !options.purge_attachment_files,
                 status: "success".into(),
                 error: None,
             })?;
@@ -628,6 +637,9 @@ Return the JSON object only, citing only the supplied evidence ids."
                 online_evidence_refs: trace.online_evidence_refs.clone(),
                 attachment_refs: trace.attachment_refs.clone(),
                 raw_text_retention: raw_retention,
+                // Retained unless this run's policy actually purges files:
+                // must stay the exact negation of the purge condition below.
+                attachments_retained: options.retain_raw_text || !options.purge_attachment_files,
                 status: "success".into(),
                 error: None,
             })?;
@@ -640,6 +652,9 @@ Return the JSON object only, citing only the supplied evidence ids."
             store.mark_case_status(&case.id, CaseStatus::ReviewReady)?;
             if !options.retain_raw_text {
                 store.purge_case_phi(&case.id)?;
+                if options.purge_attachment_files {
+                    store.purge_case_attachment_files(&case.id)?;
+                }
             }
         }
 
@@ -971,6 +986,115 @@ mod tests {
             .starts_with("Conclave is an experimental"));
         assert_eq!(run.case.workspace_id, "test-ws");
         assert_eq!(run.verdict_record.prompt_version, VERDICT_PROMPT_VERSION);
+    }
+
+    /// Persist a draft with one real attachment file on disk, run it with
+    /// `retain_raw_text: false`, and return the bits the assertions need.
+    async fn run_draft_with_attachment(
+        purge_attachment_files: bool,
+    ) -> (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        Arc<Mutex<CaseStore>>,
+        String,
+    ) {
+        let tmp = tempfile::tempdir().unwrap();
+        let layout = RepositoryLayout::new(tmp.path().join("ws"));
+        let repo = Arc::new(
+            DocumentRepository::open(layout, MockEmbedder::new().dim())
+                .await
+                .unwrap(),
+        );
+        let store = Arc::new(Mutex::new(
+            CaseStore::open(tmp.path().join("cases.sqlite")).unwrap(),
+        ));
+        let att_body = "informe clínico adjunto";
+        let att_path = tmp.path().join("informe.txt");
+        std::fs::write(&att_path, att_body).unwrap();
+        let case = CaseRecord {
+            id: "case-att".into(),
+            created_at: Utc::now(),
+            case_date: Utc::now(),
+            workspace_id: "test-ws".into(),
+            question: "Manejo?".into(),
+            original_text: "Paciente con disnea.".into(),
+            masked_text: "Paciente con disnea.".into(),
+            deident_pipeline_id: "test".into(),
+            status: CaseStatus::Draft,
+            patient_label: String::new(),
+            latest_error: None,
+            raw_text_sha256: String::new(),
+            raw_text_retention: RawTextRetention::TemporaryDraft,
+        };
+        let attachment = CaseAttachment {
+            id: "att-1".into(),
+            case_id: case.id.clone(),
+            position: 1,
+            original_filename: "informe.txt".into(),
+            stored_path: att_path.to_string_lossy().into_owned(),
+            sha256: String::new(),
+            doc_type: "informe".into(),
+            mime: "text/plain".into(),
+            extracted_text: att_body.into(),
+            needs_ocr: false,
+            byte_size: att_body.len() as u64,
+            created_at: Utc::now(),
+        };
+        {
+            let g = store.lock().unwrap();
+            g.insert_case(&case).unwrap();
+            g.insert_attachment(&attachment).unwrap();
+        }
+        let provider: Arc<dyn LlmProvider> =
+            Arc::new(MockProvider::with_response(sample_verdict_json()));
+        let pipeline = VerdictPipeline::new(
+            sample_workspace(),
+            Box::new(PipelineDeidentifier::new()),
+            Arc::new(MockEmbedder::new()),
+            repo,
+            provider,
+            Arc::clone(&store),
+        );
+        let options = VerdictOptions {
+            retain_raw_text: false,
+            purge_attachment_files,
+            ..Default::default()
+        };
+        let run = pipeline
+            .run_for_case(&case, &[attachment], &options)
+            .await
+            .unwrap();
+        (tmp, att_path, store, run.case.id)
+    }
+
+    #[tokio::test]
+    async fn purge_option_deletes_attachment_files_and_audits_it() {
+        let (_tmp, att_path, store, case_id) = run_draft_with_attachment(true).await;
+        assert!(
+            !att_path.exists(),
+            "attachment file must be deleted when purge_attachment_files is on"
+        );
+        let g = store.lock().unwrap();
+        let atts = g.list_attachments_for_case(&case_id).unwrap();
+        assert_eq!(atts[0].stored_path, "");
+        let audit = g.latest_audit_for_case(&case_id).unwrap().unwrap();
+        assert!(!audit.attachments_retained);
+    }
+
+    #[tokio::test]
+    async fn default_keeps_attachment_files_and_audits_retention() {
+        let (_tmp, att_path, store, case_id) = run_draft_with_attachment(false).await;
+        assert!(
+            att_path.exists(),
+            "attachment files must survive by default"
+        );
+        let audit = store
+            .lock()
+            .unwrap()
+            .latest_audit_for_case(&case_id)
+            .unwrap()
+            .unwrap();
+        assert!(audit.attachments_retained);
     }
 
     #[tokio::test]

@@ -87,12 +87,17 @@ impl Default for RagConfig {
 pub struct PrivacyConfig {
     /// `local_only`, `deid_cloud`, or `explicit_phi`.
     pub default_data_boundary: String,
+    /// When a run discards raw text, also delete the original attachment
+    /// files from disk. Off by default: attachments stay viewable in the
+    /// case detail UI until purged manually.
+    pub purge_attachments_with_raw_text: bool,
 }
 
 impl Default for PrivacyConfig {
     fn default() -> Self {
         Self {
             default_data_boundary: "deid_cloud".to_owned(),
+            purge_attachments_with_raw_text: false,
         }
     }
 }

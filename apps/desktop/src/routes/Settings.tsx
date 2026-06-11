@@ -28,6 +28,7 @@ import {
   type CliDiagnostics,
   type DataBoundaryMode,
   type ProviderInfo,
+  type PrivacySettings,
 } from "../lib/ipc";
 import { isReady } from "../lib/providerStatus";
 import {
@@ -65,6 +66,7 @@ export function SettingsPage() {
   const [busy, setBusy] = useState(false);
   const [privacyMode, setPrivacyMode] =
     useState<DataBoundaryMode>("deid_cloud");
+  const [purgeAttachments, setPurgeAttachments] = useState(false);
   const [privacyBusy, setPrivacyBusy] = useState(false);
 
   const [flow, setFlow] = useState<ConnectFlow>({ kind: "idle" });
@@ -99,6 +101,7 @@ export function SettingsPage() {
       setProviders(list);
       if (privacy) {
         setPrivacyMode(privacy.default_data_boundary);
+        setPurgeAttachments(privacy.purge_attachments_with_raw_text);
       }
       if (
         connectedSlotProviders(list).length > 1 &&
@@ -300,14 +303,13 @@ export function SettingsPage() {
     }
   };
 
-  const savePrivacyMode = async (mode: DataBoundaryMode) => {
+  const savePrivacy = async (next: PrivacySettings) => {
     setPrivacyBusy(true);
     setError(null);
     try {
-      const saved = await ipc.setPrivacySettings({
-        default_data_boundary: mode,
-      });
+      const saved = await ipc.setPrivacySettings(next);
       setPrivacyMode(saved.default_data_boundary);
+      setPurgeAttachments(saved.purge_attachments_with_raw_text);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -382,8 +384,20 @@ export function SettingsPage() {
       <LanguageCard />
       <PrivacyCard
         mode={privacyMode}
+        purgeAttachments={purgeAttachments}
         busy={privacyBusy}
-        onChange={savePrivacyMode}
+        onChangeMode={(mode) =>
+          savePrivacy({
+            default_data_boundary: mode,
+            purge_attachments_with_raw_text: purgeAttachments,
+          })
+        }
+        onChangePurgeAttachments={(value) =>
+          savePrivacy({
+            default_data_boundary: privacyMode,
+            purge_attachments_with_raw_text: value,
+          })
+        }
       />
 
       <Card>
@@ -597,12 +611,16 @@ function LanguageCard() {
 
 function PrivacyCard({
   mode,
+  purgeAttachments,
   busy,
-  onChange,
+  onChangeMode,
+  onChangePurgeAttachments,
 }: {
   mode: DataBoundaryMode;
+  purgeAttachments: boolean;
   busy: boolean;
-  onChange: (mode: DataBoundaryMode) => void;
+  onChangeMode: (mode: DataBoundaryMode) => void;
+  onChangePurgeAttachments: (value: boolean) => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -616,7 +634,7 @@ function PrivacyCard({
           <select
             value={mode}
             disabled={busy}
-            onChange={(e) => onChange(e.target.value as DataBoundaryMode)}
+            onChange={(e) => onChangeMode(e.target.value as DataBoundaryMode)}
             className="w-full rounded-md border border-border-subtle bg-bg px-3 py-2 text-[13px] text-ink outline-none focus:ring-2 focus:ring-accent/40 disabled:opacity-60"
           >
             <option value="deid_cloud">
@@ -630,6 +648,21 @@ function PrivacyCard({
             </option>
           </select>
         </Field>
+        <label className="mt-3 flex items-start gap-2 rounded-md border border-border-subtle bg-bg px-3 py-2 text-[12.5px] text-ink-dim">
+          <input
+            type="checkbox"
+            checked={purgeAttachments}
+            disabled={busy}
+            onChange={(e) => onChangePurgeAttachments(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span>
+            {t("settings.privacy_purge_attachments_label")}
+            <span className="mt-0.5 block text-[11.5px] text-ink-dim/80">
+              {t("settings.privacy_purge_attachments_help")}
+            </span>
+          </span>
+        </label>
       </CardBody>
     </Card>
   );

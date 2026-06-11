@@ -1446,6 +1446,9 @@ pub struct DataBoundaryPreview {
     pub sends_raw_text: bool,
     pub sends_images: bool,
     pub stores_raw_text: bool,
+    /// Whether the original attachment files will remain on disk after the
+    /// run, given the current privacy settings.
+    pub retains_attachment_files: bool,
     pub uses_online_evidence: bool,
     pub blocked_reason: Option<String>,
 }
@@ -1470,6 +1473,7 @@ fn boundary_preview_for_request(
     request: &CaseRunRequest,
     provider: &Arc<dyn LlmProvider>,
     skill_blocked_reason: Option<String>,
+    purge_attachments_with_raw_text: bool,
 ) -> DataBoundaryPreview {
     let mode = parse_data_boundary_mode(request.data_boundary_mode.as_deref());
     let sends_images = request.attached_file_paths.iter().any(|p| is_image_path(p));
@@ -1502,6 +1506,8 @@ fn boundary_preview_for_request(
         sends_raw_text: false,
         sends_images,
         stores_raw_text: request.retain_raw_text,
+        retains_attachment_files: !request.attached_file_paths.is_empty()
+            && (request.retain_raw_text || !purge_attachments_with_raw_text),
         uses_online_evidence: request.use_online_evidence,
         blocked_reason,
     }
@@ -1627,6 +1633,7 @@ fn push_query_term(out: &mut Vec<String>, term: &str, stopwords: &[&str]) {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrivacySettingsDto {
     pub default_data_boundary: DataBoundaryMode,
+    pub purge_attachments_with_raw_text: bool,
 }
 
 #[tauri::command]
@@ -1634,6 +1641,7 @@ pub fn privacy_settings(state: State<'_, AppState>) -> CommandResult<PrivacySett
     let cfg = state.config.lock().map_err(|_| "config poisoned")?.clone();
     Ok(PrivacySettingsDto {
         default_data_boundary: DataBoundaryMode::from_db_str(&cfg.privacy.default_data_boundary),
+        purge_attachments_with_raw_text: cfg.privacy.purge_attachments_with_raw_text,
     })
 }
 
@@ -1644,6 +1652,7 @@ pub fn set_privacy_settings(
 ) -> CommandResult<PrivacySettingsDto> {
     let mut cfg = state.config.lock().map_err(|_| "config poisoned")?.clone();
     cfg.privacy.default_data_boundary = settings.default_data_boundary.as_db_str().to_owned();
+    cfg.privacy.purge_attachments_with_raw_text = settings.purge_attachments_with_raw_text;
     cfg.save(state.paths.config_file())
         .map_err(|e| e.to_string())?;
     *state.config.lock().map_err(|_| "config poisoned")? = cfg;
@@ -1726,10 +1735,17 @@ pub async fn preview_data_boundary(
         request.active_skill_id.as_deref(),
         mode,
     );
+    let purge_attachments_cfg = state
+        .config
+        .lock()
+        .map_err(|_| "config poisoned")?
+        .privacy
+        .purge_attachments_with_raw_text;
     Ok(boundary_preview_for_request(
         &request,
         &provider,
         skill_blocked_reason,
+        purge_attachments_cfg,
     ))
 }
 
@@ -2181,7 +2197,13 @@ pub(crate) async fn run_case_impl(
         request.active_skill_id.as_deref(),
         mode,
     )?;
-    let boundary = boundary_preview_for_request(&request, &provider, None);
+    let purge_attachments_cfg = state
+        .config
+        .lock()
+        .map_err(|_| "config poisoned")?
+        .privacy
+        .purge_attachments_with_raw_text;
+    let boundary = boundary_preview_for_request(&request, &provider, None, purge_attachments_cfg);
     enforce_data_boundary(&boundary)?;
 
     let store = case_store_arc(state, &workspace.id)?;
@@ -2226,6 +2248,7 @@ pub(crate) async fn run_case_impl(
     }
     options.data_boundary_mode = boundary.mode;
     options.retain_raw_text = request.retain_raw_text;
+    options.purge_attachment_files = cfg.privacy.purge_attachments_with_raw_text;
     options.external_evidence = external_evidence;
     if let Some(skill) = active_skill {
         options.active_skill_id = Some(skill.id);
@@ -2554,7 +2577,14 @@ pub async fn run_draft_case(
         request.active_skill_id.as_deref(),
         mode,
     )?;
-    let boundary = boundary_preview_for_request(&compat_request, &provider, None);
+    let purge_attachments_cfg = state
+        .config
+        .lock()
+        .map_err(|_| "config poisoned")?
+        .privacy
+        .purge_attachments_with_raw_text;
+    let boundary =
+        boundary_preview_for_request(&compat_request, &provider, None, purge_attachments_cfg);
     enforce_data_boundary(&boundary)?;
     let external_evidence = if compat_request.use_online_evidence {
         fetch_external_evidence_for_case(&state, &draft.masked_text, &draft.question).await?
@@ -2569,6 +2599,7 @@ pub async fn run_draft_case(
     }
     options.data_boundary_mode = boundary.mode;
     options.retain_raw_text = request.retain_raw_text;
+    options.purge_attachment_files = cfg.privacy.purge_attachments_with_raw_text;
     options.external_evidence = external_evidence;
     if let Some(skill) = active_skill {
         options.active_skill_id = Some(skill.id);
@@ -2722,7 +2753,13 @@ pub(crate) async fn run_case_deliberated_impl(
         request.active_skill_id.as_deref(),
         mode,
     )?;
-    let boundary = boundary_preview_for_request(&request, &provider, None);
+    let purge_attachments_cfg = state
+        .config
+        .lock()
+        .map_err(|_| "config poisoned")?
+        .privacy
+        .purge_attachments_with_raw_text;
+    let boundary = boundary_preview_for_request(&request, &provider, None, purge_attachments_cfg);
     enforce_data_boundary(&boundary)?;
 
     let store = case_store_arc(state, &workspace.id)?;
@@ -2747,6 +2784,7 @@ pub(crate) async fn run_case_deliberated_impl(
     }
     options.data_boundary_mode = boundary.mode;
     options.retain_raw_text = request.retain_raw_text;
+    options.purge_attachment_files = cfg.privacy.purge_attachments_with_raw_text;
     if let Some(skill) = active_skill {
         options.active_skill_id = Some(skill.id);
         options.active_skill_instructions = Some(skill.body);
@@ -3032,6 +3070,9 @@ pub(crate) async fn run_case_deliberated_impl(
             } else {
                 RawTextRetention::Discarded
             },
+            // Retained unless this run's policy actually purges files:
+            // must stay the exact negation of the purge condition below.
+            attachments_retained: request.retain_raw_text || !options.purge_attachment_files,
             status: "success".into(),
             error: None,
         })
@@ -3047,6 +3088,10 @@ pub(crate) async fn run_case_deliberated_impl(
             .map_err(|e| e.to_string())?;
         if !request.retain_raw_text {
             g.purge_case_phi(&case_id).map_err(|e| e.to_string())?;
+            if options.purge_attachment_files {
+                g.purge_case_attachment_files(&case_id)
+                    .map_err(|e| e.to_string())?;
+            }
         }
     }
 

@@ -2380,6 +2380,13 @@ function NewCase({
                   retention: t(
                     `cases.raw_retention.${boundaryPreview.stores_raw_text ? "explicit_retained" : "discarded"}`,
                   ),
+                  attachments: t(
+                    attachments.length + draftAttachments.length === 0
+                      ? "cases.attachments_retention.none"
+                      : boundaryPreview.retains_attachment_files
+                        ? "cases.attachments_retention.kept"
+                        : "cases.attachments_retention.purged",
+                  ),
                 })}
             </div>
           )}

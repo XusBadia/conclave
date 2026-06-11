@@ -172,7 +172,7 @@
       "deid_cloud": "nube desidentificada",
       "explicit_phi": "PHI explícita"
     },
-    "data_boundary_preview": "{{mode}} · {{provider}} · imágenes: {{images}} · literatura: {{online}} · retención: {{retention}}",
+    "data_boundary_preview": "{{mode}} · {{provider}} · imágenes: {{images}} · literatura: {{online}} · retención: {{retention}} · adjuntos: {{attachments}}",
     "skill_label": "Skill",
     "skill_none": "Sin skill",
     "allow_phi_payload": "Autorizo enviar adjuntos o imágenes con PHI a este proveedor en esta ejecución.",
@@ -183,6 +183,11 @@
       "temporary_draft": "borrador temporal",
       "explicit_retained": "retenido explícito",
       "discarded": "descartado"
+    },
+    "attachments_retention": {
+      "none": "ninguno",
+      "kept": "se conservan en este equipo",
+      "purged": "se purgan al terminar"
     },
     "no_provider_configured": "No hay proveedor configurado",
     "mode_selector_label": "Modo de deliberación",
@@ -440,6 +445,8 @@
     "privacy_boundary_deid_cloud": "Cloud desidentificado",
     "privacy_boundary_local_only": "Solo local",
     "privacy_boundary_explicit_phi": "PHI explícita",
+    "privacy_purge_attachments_label": "Purgar adjuntos originales al descartar el texto crudo",
+    "privacy_purge_attachments_help": "Cuando una ejecución descarta la narrativa cruda, borra también los ficheros adjuntos originales del disco. Los lotes siempre descartan el texto crudo, así que con esto activado también purgan sus adjuntos. Desactivado, los ficheros quedan visibles en el caso hasta purgarlos manualmente.",
     "ai_title": "Tu IA",
     "ai_subtitle_empty": "Conecta un proveedor — podrás cambiarlo cuando quieras",
     "ai_subtitle_active": "Una sola IA activa a la vez · cámbiala cuando quieras",

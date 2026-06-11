@@ -172,7 +172,7 @@
       "deid_cloud": "de-identified cloud",
       "explicit_phi": "explicit PHI"
     },
-    "data_boundary_preview": "{{mode}} · {{provider}} · images: {{images}} · literature: {{online}} · retention: {{retention}}",
+    "data_boundary_preview": "{{mode}} · {{provider}} · images: {{images}} · literature: {{online}} · retention: {{retention}} · attachments: {{attachments}}",
     "skill_label": "Skill",
     "skill_none": "No skill",
     "allow_phi_payload": "I authorize sending attachments or images with PHI to this provider for this run.",
@@ -183,6 +183,11 @@
       "temporary_draft": "temporary draft",
       "explicit_retained": "explicit retained",
       "discarded": "discarded"
+    },
+    "attachments_retention": {
+      "none": "none",
+      "kept": "kept on this device",
+      "purged": "purged after the run"
     },
     "no_provider_configured": "No provider configured",
     "mode_selector_label": "Deliberation mode",
@@ -440,6 +445,8 @@
     "privacy_boundary_deid_cloud": "De-identified cloud",
     "privacy_boundary_local_only": "Local only",
     "privacy_boundary_explicit_phi": "Explicit PHI",
+    "privacy_purge_attachments_label": "Purge original attachments when raw text is discarded",
+    "privacy_purge_attachments_help": "When a run discards the raw narrative, also delete the original attachment files from disk. Batch runs always discard raw text, so with this on they purge their attachments too. Off, files stay viewable in the case until purged manually.",
     "ai_title": "Your AI",
     "ai_subtitle_empty": "Connect a provider — you can change it whenever you want",
     "ai_subtitle_active": "One AI active at a time · switch whenever you want",
