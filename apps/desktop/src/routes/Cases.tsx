@@ -13,7 +13,6 @@ import {
   IconChevronDown,
   IconChevronRight,
   IconClipboardCheck,
-  IconCopy,
   IconFileTypePdf,
   IconGripVertical,
   IconLock,
@@ -36,9 +35,7 @@ import { PdfOptionsSheet } from "../pdf/PdfOptionsSheet";
 import { Button } from "../components/Button";
 import { Card, CardBody, CardHeader } from "../components/Card";
 import { Field, Input, Textarea } from "../components/Field";
-import { Popover } from "../components/Popover";
 import { ProviderStatusPill } from "../components/ProviderStatusPill";
-import { Sheet } from "../components/Sheet";
 import { cn } from "../lib/cn";
 import {
   ipc,
@@ -70,7 +67,6 @@ import {
   formatBytes,
   formatElapsed,
   isFallbackLabel,
-  isoToLocalInput,
   localInputToIso,
   type GroupBy,
   type LiveCasePhase,
@@ -83,20 +79,21 @@ import {
   PHASE_ORDER,
   tryParseVerdict,
 } from "./cases/verdictParsing";
+import {
+  BatchProgressBanner,
+  CopyButton,
+  PdfExportBanner,
+  PdfExportResultBanner,
+  PhaseRunningChip,
+  ShowCaseSkeleton,
+  StatusBadge,
+} from "./cases/banners";
+import {
+  ConfirmDeletePopover,
+  ConfirmPurgePopover,
+  EditDateSheet,
+} from "./cases/dialogs";
 
-/**
- * Status badge shown next to every row in the cases list. Five visual
- * states:
- *   - `running` (transient frontend-only overlay): accent + animated dot
- *   - `draft`: violet
- *   - `completed`: green
- *   - `failed`: red
- *
- * The `running` flag is supplied by the page-level batch:progress
- * listener; the DB-side status remains `draft` until the LLM call
- * completes. We render `running` last so it wins over any underlying
- * draft state during the brief overlap.
- */
 /** Ids the page is currently retrying so we don't fire duplicate calls
  *  on every refresh. Lives at module scope (not per-CasesPage) so the
  *  set survives unmounts while still scoped to the lifetime of the
@@ -123,50 +120,6 @@ function retryStaleLabels(workspaceId: string, cases: CaseRecord[]): void {
       .regenerateCaseLabel(workspaceId, c.id)
       .finally(() => labelRetryInflight.delete(c.id));
   }
-}
-
-function StatusBadge({
-  status,
-  running,
-}: {
-  status: CaseRecord["status"];
-  running: boolean;
-}) {
-  const { t } = useTranslation();
-  if (running) {
-    return (
-      <span className="flex items-center gap-1 rounded bg-accent/15 px-2 py-0.5 text-[11px] font-medium text-accent">
-        <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
-        {t("cases.status.running")}
-      </span>
-    );
-  }
-  if (status === "finalized" || status === "finalized_legacy") {
-    return (
-      <span className="rounded bg-ok/15 px-2 py-0.5 text-[11px] font-medium text-ok">
-        {t("cases.status.finalized")}
-      </span>
-    );
-  }
-  if (status === "review_ready") {
-    return (
-      <span className="rounded bg-accent/15 px-2 py-0.5 text-[11px] font-medium text-accent">
-        {t("cases.status.review_ready")}
-      </span>
-    );
-  }
-  if (status === "draft") {
-    return (
-      <span className="rounded bg-violet-400/15 px-2 py-0.5 text-[11px] font-medium text-violet-200">
-        {t("cases.status.draft")}
-      </span>
-    );
-  }
-  return (
-    <span className="rounded bg-danger/15 px-2 py-0.5 text-[11px] font-medium text-danger">
-      {t("cases.status.failed")}
-    </span>
-  );
 }
 
 type View = "list" | "new" | "show";
@@ -1467,198 +1420,6 @@ export function CasesPage({
         />
       )}
     </div>
-  );
-}
-
-function EditDateSheet({
-  open,
-  onOpenChange,
-  count,
-  initialIso,
-  busy,
-  error,
-  onApply,
-}: {
-  open: boolean;
-  onOpenChange: (next: boolean) => void;
-  count: number;
-  initialIso: string;
-  busy: boolean;
-  error: string | null;
-  onApply: (localValue: string) => void;
-}) {
-  const { t } = useTranslation();
-  const [value, setValue] = useState<string>(isoToLocalInput(initialIso));
-
-  // Re-seed the input whenever the sheet (re)opens with a different
-  // initial value — without this, opening, closing without saving, and
-  // re-opening on a different selection would keep the old value.
-  useEffect(() => {
-    if (open) setValue(isoToLocalInput(initialIso));
-  }, [open, initialIso]);
-
-  const title =
-    count > 1
-      ? t("cases.edit_date_title_plural", { count })
-      : t("cases.edit_date_title");
-
-  return (
-    <Sheet open={open} onOpenChange={onOpenChange} title={title}>
-      <div className="space-y-4 px-5 py-4">
-        {error && (
-          <div className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-[13px] text-danger">
-            {error}
-          </div>
-        )}
-        <Field label={t("cases.edit_date_field")}>
-          <input
-            type="datetime-local"
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            className="block w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-ink focus:outline-none focus:ring-conclave focus:border-accent"
-          />
-        </Field>
-        <div className="flex justify-end gap-2 pt-2">
-          <Button size="sm" variant="ghost" onClick={() => onOpenChange(false)}>
-            {t("common.cancel")}
-          </Button>
-          <Button
-            size="sm"
-            variant="primary"
-            loading={busy}
-            disabled={!value}
-            onClick={() => onApply(value)}
-          >
-            {t("cases.edit_date_apply")}
-          </Button>
-        </div>
-      </div>
-    </Sheet>
-  );
-}
-
-function ConfirmDeletePopover({
-  open,
-  onOpenChange,
-  anchor,
-  count,
-  busy,
-  error,
-  onConfirm,
-  side = "bottom",
-  align = "end",
-}: {
-  open: boolean;
-  onOpenChange: (next: boolean) => void;
-  anchor: HTMLElement | null;
-  count: number;
-  busy: boolean;
-  error: string | null;
-  onConfirm: () => void;
-  side?: "top" | "bottom";
-  align?: "start" | "center" | "end";
-}) {
-  const { t } = useTranslation();
-  const title =
-    count > 1
-      ? t("cases.delete_confirm_title_plural", { count })
-      : t("cases.delete_confirm_title");
-  const body =
-    count > 1
-      ? t("cases.delete_confirm_body_plural", { count })
-      : t("cases.delete_confirm_body");
-
-  return (
-    <Popover
-      open={open}
-      onOpenChange={onOpenChange}
-      anchor={anchor}
-      side={side}
-      align={align}
-      width={320}
-      ariaLabel={title}
-    >
-      <div className="space-y-3 p-4">
-        <h3 className="text-[13px] font-semibold text-ink">{title}</h3>
-        {error && (
-          <div className="rounded-md border border-danger/40 bg-danger/10 px-2.5 py-1.5 text-[12px] text-danger">
-            {t("cases.delete_error", { error })}
-          </div>
-        )}
-        <p className="text-[12.5px] leading-relaxed text-ink-dim">{body}</p>
-        <div className="flex justify-end gap-2 pt-1">
-          <Button size="sm" variant="ghost" onClick={() => onOpenChange(false)}>
-            {t("common.cancel")}
-          </Button>
-          <Button size="sm" variant="danger" loading={busy} onClick={onConfirm}>
-            {t("cases.delete_confirm_apply")}
-          </Button>
-        </div>
-      </div>
-    </Popover>
-  );
-}
-
-function ConfirmPurgePopover({
-  open,
-  onOpenChange,
-  anchor,
-  busy,
-  error,
-  title,
-  lines,
-  confirmLabel,
-  onConfirm,
-}: {
-  open: boolean;
-  onOpenChange: (next: boolean) => void;
-  anchor: HTMLElement | null;
-  busy: boolean;
-  error: string | null;
-  title: string;
-  lines: string[];
-  confirmLabel: string;
-  onConfirm: () => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <Popover
-      open={open}
-      onOpenChange={onOpenChange}
-      anchor={anchor}
-      side="bottom"
-      align="end"
-      width={360}
-      ariaLabel={title}
-    >
-      <div className="space-y-3 p-4">
-        <h3 className="text-[13px] font-semibold text-ink">{title}</h3>
-        {error && (
-          <div className="rounded-md border border-danger/40 bg-danger/10 px-2.5 py-1.5 text-[12px] text-danger">
-            {error}
-          </div>
-        )}
-        <ul className="space-y-1.5 text-[12.5px] leading-relaxed text-ink-dim">
-          {lines.map((line, i) => (
-            <li key={i} className="flex gap-2">
-              <span
-                aria-hidden
-                className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-ink-faint"
-              />
-              <span>{line}</span>
-            </li>
-          ))}
-        </ul>
-        <div className="flex justify-end gap-2 pt-1">
-          <Button size="sm" variant="ghost" onClick={() => onOpenChange(false)}>
-            {t("common.cancel")}
-          </Button>
-          <Button size="sm" variant="danger" loading={busy} onClick={onConfirm}>
-            {confirmLabel}
-          </Button>
-        </div>
-      </div>
-    </Popover>
   );
 }
 
@@ -4624,281 +4385,5 @@ function DeliberationTraceAccordion({
         </CardBody>
       )}
     </Card>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Helpers — banner, per-row phase chip, copy button, skeleton.
-// ---------------------------------------------------------------------------
-
-/** Batch banner: shows live elapsed time + an ETA derived from the
- *  first completed case. The user gets a sense of pace AND a "how long
- *  is left" estimate without us touching the deliberation pipeline. */
-function BatchProgressBanner({
-  done,
-  total,
-  startedAtMs,
-  firstCaseMs,
-  tickMs,
-  cancelling,
-  onCancelAll,
-}: {
-  done: number;
-  total: number;
-  startedAtMs: number | null;
-  firstCaseMs: number | null;
-  /** Time tick from CasesPage — we ignore the value (it just forces
-   *  a re-render). Without it the elapsed chip would stay frozen until
-   *  another React update arrived. */
-  tickMs: number;
-  /** True while a batch-wide cancel is in flight. */
-  cancelling: boolean;
-  onCancelAll: () => void;
-}) {
-  void tickMs;
-  const { t } = useTranslation();
-  const elapsedMs = startedAtMs === null ? 0 : Math.max(0, Date.now() - startedAtMs);
-  // ETA heuristic: each remaining case takes ~ firstCaseMs. The first
-  // case usually has cold-cache penalties (provider auth, embedder
-  // warmup) so this overestimates a bit — fine, better than nothing.
-  const remaining = Math.max(0, total - done);
-  const etaMs = firstCaseMs !== null ? remaining * firstCaseMs : null;
-
-  return (
-    <div className="flex flex-wrap items-center gap-3 rounded-md border border-accent/40 bg-accent/5 px-3 py-2 text-[13px] text-accent">
-      <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
-      <span>{t("cases.batch_progress_banner", { done, total })}</span>
-      {startedAtMs !== null && (
-        <span className="rounded bg-accent/10 px-2 py-0.5 font-mono text-[11.5px]">
-          {t("cases.batch_progress_elapsed", { elapsed: formatElapsed(elapsedMs) })}
-        </span>
-      )}
-      {etaMs !== null && remaining > 0 && (
-        <span className="rounded bg-accent/10 px-2 py-0.5 font-mono text-[11.5px]">
-          {t("cases.batch_progress_eta", { eta: formatElapsed(etaMs) })}
-        </span>
-      )}
-      <button
-        type="button"
-        onClick={onCancelAll}
-        disabled={cancelling}
-        className={cn(
-          "ml-auto rounded-md border border-accent/30 px-2 py-0.5 text-[11.5px] text-accent transition hover:bg-accent/10 focus:outline-none focus-visible:ring-conclave",
-          cancelling && "cursor-default opacity-60 hover:bg-transparent",
-        )}
-      >
-        {t(cancelling ? "cases.batch_cancelling" : "cases.batch_cancel_all")}
-      </button>
-    </div>
-  );
-}
-
-/** Progress banner for a multi-case PDF export. Mirrors the deliberation
- *  BatchProgressBanner styling so the two read as the same family. The Cancel
- *  button aborts the run between cases (PDFs already written stay on disk). */
-function PdfExportBanner({
-  done,
-  total,
-  onCancel,
-}: {
-  done: number;
-  total: number;
-  onCancel: () => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <div className="flex flex-wrap items-center gap-3 rounded-md border border-accent/40 bg-accent/5 px-3 py-2 text-[13px] text-accent">
-      <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
-      <span>{t("cases.batch_export_progress", { done, total })}</span>
-      <button
-        type="button"
-        onClick={onCancel}
-        className="ml-auto rounded-md border border-accent/30 px-2 py-0.5 text-[11.5px] text-accent transition hover:bg-accent/10 focus:outline-none focus-visible:ring-conclave"
-      >
-        {t("common.cancel")}
-      </button>
-    </div>
-  );
-}
-
-/** Dismissible summary shown after a multi-case PDF export settles: how many
- *  PDFs landed where, plus any skipped (verdict-less) or aborted note. Green
- *  when something was written, amber when nothing was. */
-function PdfExportResultBanner({
-  result,
-  onDismiss,
-}: {
-  result: BatchExportResult;
-  onDismiss: () => void;
-}) {
-  const { t } = useTranslation();
-  const none = result.saved === 0;
-  const parts: string[] = [];
-  if (none) {
-    parts.push(t("cases.batch_export_none"));
-  } else {
-    parts.push(
-      t(
-        result.saved === 1
-          ? "cases.batch_export_done"
-          : "cases.batch_export_done_plural",
-        { count: result.saved, dir: result.dir ?? "" },
-      ),
-    );
-  }
-  if (result.skipped.length > 0) {
-    parts.push(
-      t(
-        result.skipped.length === 1
-          ? "cases.batch_export_skipped"
-          : "cases.batch_export_skipped_plural",
-        { count: result.skipped.length },
-      ),
-    );
-  }
-  if (result.aborted) {
-    parts.push(t("cases.batch_export_aborted"));
-  }
-  return (
-    <div
-      className={cn(
-        "flex items-start justify-between gap-3 rounded-md border px-3 py-2 text-[13px]",
-        none
-          ? "border-warn/40 bg-warn/10 text-warn"
-          : "border-ok/30 bg-ok/5 text-ok",
-      )}
-    >
-      <span className="break-words">{parts.join(" · ")}</span>
-      <button
-        type="button"
-        onClick={onDismiss}
-        aria-label={t("common.dismiss")}
-        className={cn(
-          "shrink-0 rounded p-0.5 transition",
-          none
-            ? "text-warn/70 hover:bg-warn/10 hover:text-warn"
-            : "text-ok/70 hover:bg-ok/10 hover:text-ok",
-        )}
-      >
-        <IconX size={14} stroke={1.7} aria-hidden />
-      </button>
-    </div>
-  );
-}
-
-/** Compact chip rendered next to a running case row: shows the current
- *  phase name + ticking elapsed time. Quick-mode runs never produce
- *  these — they just animate the regular `running…` status badge. */
-function PhaseRunningChip({
-  phase,
-  tickMs,
-}: {
-  phase: LiveCasePhase;
-  tickMs: number;
-}) {
-  void tickMs;
-  const { t } = useTranslation();
-  const label = t(`cases.phase_short.${phase.phase}`);
-  const elapsedMs =
-    phase.status === "active" ? Math.max(0, Date.now() - phase.startedAtMs) : 0;
-  const colour =
-    phase.status === "active"
-      ? "bg-accent/10 text-accent"
-      : phase.status === "failed"
-        ? "bg-danger/10 text-danger"
-        : "bg-ok/10 text-ok";
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[10.5px]",
-        colour,
-      )}
-      title={t("cases.row_running_phase", { phase: label })}
-    >
-      <span>{label}</span>
-      {phase.status === "active" && elapsedMs > 0 && (
-        <span>· {formatElapsed(elapsedMs)}</span>
-      )}
-    </span>
-  );
-}
-
-/** Small button that copies `text` to the clipboard and flashes a
- *  brief "copied" confirmation. Reused across every verdict section. */
-function CopyButton({ text }: { text: string }) {
-  const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
-  const timerRef = useRef<number | null>(null);
-  useEffect(() => {
-    return () => {
-      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-    };
-  }, []);
-  return (
-    <button
-      type="button"
-      onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(text);
-        } catch {
-          // Some Tauri contexts disallow clipboard access; the user
-          // can still select and copy manually. Surface silently.
-          return;
-        }
-        setCopied(true);
-        if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-        timerRef.current = window.setTimeout(() => setCopied(false), 1500);
-      }}
-      title={t("cases.copy_field")}
-      aria-label={t("cases.copy_field")}
-      className={cn(
-        "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px]",
-        "text-ink-faint transition hover:bg-surface hover:text-ink",
-        "focus:outline-none focus-visible:ring-conclave",
-        copied && "text-ok",
-      )}
-    >
-      {copied ? (
-        <>
-          <IconCheck aria-hidden="true" size={12} stroke={1.8} />
-          <span>{t("cases.copied_toast")}</span>
-        </>
-      ) : (
-        <>
-          <IconCopy aria-hidden="true" size={12} stroke={1.6} />
-          <span>{t("cases.copy_field")}</span>
-        </>
-      )}
-    </button>
-  );
-}
-
-/** Skeleton placeholder for the case-detail view. Shown during the
- *  brief optimistic gap between clicking a row and the `showCase` IPC
- *  resolving — keeps the user oriented instead of a flash of blank. */
-function ShowCaseSkeleton({ onBack }: { onBack: () => void }) {
-  const { t } = useTranslation();
-  return (
-    <div className="mx-auto w-full max-w-5xl space-y-5 p-6">
-      <div className="flex items-center justify-between">
-        <Button size="sm" variant="ghost" onClick={onBack}>
-          {t("cases.back")}
-        </Button>
-      </div>
-      <Card>
-        <CardHeader
-          title={t("cases.show_case_loading")}
-          subtitle={" "}
-        />
-        <CardBody className="space-y-4">
-          <div className="h-3 w-2/3 animate-pulse rounded bg-surface" />
-          <div className="h-3 w-1/2 animate-pulse rounded bg-surface" />
-          <div className="h-24 w-full animate-pulse rounded bg-surface" />
-          <div className="h-3 w-3/4 animate-pulse rounded bg-surface" />
-          <div className="h-3 w-1/3 animate-pulse rounded bg-surface" />
-          <div className="h-16 w-full animate-pulse rounded bg-surface" />
-        </CardBody>
-      </Card>
-    </div>
   );
 }
