@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { TFunction } from "i18next";
 import { Trans, useTranslation } from "react-i18next";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -62,97 +61,28 @@ import {
 } from "../lib/ipc";
 import { isReady } from "../lib/providerStatus";
 import { isClinicalEligible, metaFor, preferredProvider } from "../lib/providers";
-
-// Extensions we accept when the user drops or picks files for a case.
-// Mirrors `apps/desktop/src-tauri/src/batch.rs::ATTACHMENT_EXTS` so the
-// frontend filter and the backend extractor agree on what counts.
-const SUPPORTED_ATTACHMENT_EXTS = [
-  "pdf",
-  "docx",
-  "txt",
-  "md",
-  "markdown",
-  "html",
-  "htm",
-  "png",
-  "jpg",
-  "jpeg",
-  "webp",
-  "tif",
-  "tiff",
-  "heic",
-  "heif",
-] as const;
-
-type PendingAttachment = {
-  path: string;
-  name: string;
-  ext: string;
-  isImage: boolean;
-};
-
-function attachmentFromPath(path: string): PendingAttachment | null {
-  const segments = path.split(/[\\/]/);
-  const name = segments[segments.length - 1] || path;
-  const dot = name.lastIndexOf(".");
-  if (dot === -1) return null;
-  const ext = name.slice(dot + 1).toLowerCase();
-  if (!SUPPORTED_ATTACHMENT_EXTS.includes(ext as (typeof SUPPORTED_ATTACHMENT_EXTS)[number]))
-    return null;
-  const isImage = ["png", "jpg", "jpeg", "webp", "tif", "tiff", "heic", "heif"].includes(
-    ext,
-  );
-  return { path, name, ext, isImage };
-}
-
-function dedupeAttachments(
-  base: PendingAttachment[],
-  incoming: PendingAttachment[],
-): PendingAttachment[] {
-  const seen = new Set(base.map((a) => a.path));
-  const out = [...base];
-  for (const a of incoming) {
-    if (!seen.has(a.path)) {
-      out.push(a);
-      seen.add(a.path);
-    }
-  }
-  return out;
-}
-
-function formatBytes(size: number): string {
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function attachmentBadgeColor(extOrType: string): string {
-  switch (extOrType) {
-    case "pdf":
-      return "bg-rose-400/15 text-rose-200";
-    case "docx":
-      return "bg-sky-400/15 text-sky-200";
-    case "image":
-    case "png":
-    case "jpg":
-    case "jpeg":
-    case "webp":
-    case "tif":
-    case "tiff":
-    case "heic":
-    case "heif":
-      return "bg-amber-400/15 text-amber-200";
-    case "txt":
-    case "md":
-    case "markdown":
-      return "bg-emerald-400/15 text-emerald-200";
-    case "html":
-    case "htm":
-      return "bg-indigo-400/15 text-indigo-200";
-    default:
-      return "bg-slate-400/15 text-slate-200";
-  }
-}
+import {
+  attachmentBadgeColor,
+  attachmentFromPath,
+  bucketKey,
+  bucketLabel,
+  dedupeAttachments,
+  formatBytes,
+  formatElapsed,
+  isFallbackLabel,
+  isoToLocalInput,
+  localInputToIso,
+  type GroupBy,
+  type LiveCasePhase,
+  type PendingAttachment,
+  type SortBy,
+  SUPPORTED_ATTACHMENT_EXTS,
+} from "./cases/helpers";
+import {
+  parseFailedPhase,
+  PHASE_ORDER,
+  tryParseVerdict,
+} from "./cases/verdictParsing";
 
 /**
  * Status badge shown next to every row in the cases list. Five visual
@@ -167,25 +97,6 @@ function attachmentBadgeColor(extOrType: string): string {
  * completes. We render `running` last so it wins over any underlying
  * draft state during the brief overlap.
  */
-/** Detect labels that are still the filename-stem fallback (e.g.
- *  "CR-IA-007", "case_recto_bajo_alto_riesgo") rather than a proper
- *  patient summary from Apple Intelligence ("Mujer 67, recto bajo T3N1"
- *  — sentence-shaped, has spaces and commas).
- *
- *  Heuristic: empty, or zero spaces, or contains underscores. AI
- *  summaries always have at least one space and never use underscores
- *  in our prompt template. */
-function isFallbackLabel(label: string | null | undefined): boolean {
-  if (!label) return true;
-  const trimmed = label.trim();
-  if (trimmed.length === 0) return true;
-  // Filename stems and "CR-IA-XXX" codes have no spaces.
-  if (!/\s/.test(trimmed)) return true;
-  // Any underscore means it survived from a file name.
-  if (trimmed.includes("_")) return true;
-  return false;
-}
-
 /** Ids the page is currently retrying so we don't fire duplicate calls
  *  on every refresh. Lives at module scope (not per-CasesPage) so the
  *  set survives unmounts while still scoped to the lifetime of the
@@ -259,130 +170,6 @@ function StatusBadge({
 }
 
 type View = "list" | "new" | "show";
-
-type SortBy = "date_desc" | "date_asc" | "question_az" | "status";
-type GroupBy = "off" | "day" | "week" | "month";
-
-// Anchor a date to the start of its bucket (used both as map key and as
-// the value we feed into bucketLabel — so the displayed name aligns with
-// the rows it groups).
-function bucketAnchor(iso: string, mode: GroupBy): Date {
-  const d = new Date(iso);
-  d.setHours(0, 0, 0, 0);
-  if (mode === "day" || mode === "off") return d;
-  if (mode === "week") {
-    // Monday-anchored week. JS getDay() returns 0 for Sunday → treat as 7.
-    const dow = d.getDay() || 7;
-    d.setDate(d.getDate() - (dow - 1));
-    return d;
-  }
-  // month
-  d.setDate(1);
-  return d;
-}
-
-function bucketKey(iso: string, mode: GroupBy): string {
-  if (mode === "off") return "all";
-  const d = bucketAnchor(iso, mode);
-  if (mode === "month") return `${d.getFullYear()}-${d.getMonth() + 1}`;
-  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
-}
-
-function bucketLabel(
-  iso: string,
-  mode: GroupBy,
-  t: TFunction,
-  locale: string,
-): string {
-  if (mode === "off") return "";
-  const anchor = bucketAnchor(iso, mode);
-  const todayAnchor = bucketAnchor(new Date().toISOString(), mode);
-
-  if (mode === "day") {
-    if (anchor.getTime() === todayAnchor.getTime()) return t("cases.group_bucket.today");
-    const yesterday = new Date(todayAnchor);
-    yesterday.setDate(yesterday.getDate() - 1);
-    if (anchor.getTime() === yesterday.getTime()) return t("cases.group_bucket.yesterday");
-    return new Intl.DateTimeFormat(locale, {
-      weekday: "long",
-      day: "numeric",
-      month: "long",
-      year:
-        anchor.getFullYear() !== todayAnchor.getFullYear() ? "numeric" : undefined,
-    }).format(anchor);
-  }
-
-  if (mode === "week") {
-    if (anchor.getTime() === todayAnchor.getTime()) return t("cases.group_bucket.this_week");
-    const lastWeek = new Date(todayAnchor);
-    lastWeek.setDate(lastWeek.getDate() - 7);
-    if (anchor.getTime() === lastWeek.getTime()) return t("cases.group_bucket.last_week");
-    const endOfWeek = new Date(anchor);
-    endOfWeek.setDate(endOfWeek.getDate() + 6);
-    const fmt = new Intl.DateTimeFormat(locale, { day: "numeric", month: "short" });
-    const fmtYear = new Intl.DateTimeFormat(locale, {
-      day: "numeric",
-      month: "short",
-      year: "numeric",
-    });
-    return `${fmt.format(anchor)} – ${fmtYear.format(endOfWeek)}`;
-  }
-
-  // month
-  if (anchor.getTime() === todayAnchor.getTime()) return t("cases.group_bucket.this_month");
-  const lastMonth = new Date(todayAnchor);
-  lastMonth.setMonth(lastMonth.getMonth() - 1);
-  if (anchor.getTime() === lastMonth.getTime()) return t("cases.group_bucket.last_month");
-  return new Intl.DateTimeFormat(locale, { month: "long", year: "numeric" }).format(
-    anchor,
-  );
-}
-
-// `<input type="datetime-local">` always works in local time and uses
-// `YYYY-MM-DDTHH:mm`. We persist RFC3339 (UTC) on the wire, so convert
-// in both directions.
-function isoToLocalInput(iso: string): string {
-  const d = new Date(iso);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
-    d.getHours(),
-  )}:${pad(d.getMinutes())}`;
-}
-
-function localInputToIso(local: string): string {
-  // The Date constructor interprets `YYYY-MM-DDTHH:mm` as local time.
-  return new Date(local).toISOString();
-}
-
-/** Format an elapsed millisecond duration as `0:42` / `12:07` for
- *  short runs, and `1h 03m` once we cross the hour boundary. Tuned for
- *  the batch banner / per-row chip — they want compactness over
- *  precision. */
-function formatElapsed(ms: number): string {
-  if (!Number.isFinite(ms) || ms < 0) return "0:00";
-  const totalSec = Math.floor(ms / 1000);
-  if (totalSec < 3600) {
-    const m = Math.floor(totalSec / 60);
-    const s = totalSec % 60;
-    return `${m}:${String(s).padStart(2, "0")}`;
-  }
-  const h = Math.floor(totalSec / 3600);
-  const m = Math.floor((totalSec % 3600) / 60);
-  return `${h}h ${String(m).padStart(2, "0")}m`;
-}
-
-/** Per-case live status driven by `deliberation:progress` events. The
- *  cases list rolls this up into a chip on the row + (optionally) a
- *  detailed entry in the batch banner. Quick-mode runs never set this
- *  — they just toggle the `running` overlay. */
-type LiveCasePhase = {
-  phase: DeliberationPhase;
-  /** ms-since-page-load when this phase started; used to render the
-   *  ticking elapsed chip without a per-second re-render of the whole
-   *  list (the LiveTicker child reads it via state). */
-  startedAtMs: number;
-  status: "active" | "done" | "failed";
-};
 
 export function CasesPage({
   workspace,
@@ -4325,29 +4112,6 @@ function ProviderOfflineBanner({
   );
 }
 
-const PHASE_ORDER: DeliberationPhase[] = [
-  "briefing",
-  "drafting",
-  "redteam",
-  "finalize",
-];
-
-/**
- * The deliberation pipeline persists failures as
- * `"deliberation phase {phase} failed: {provider error}"` — sometimes
- * with a leading `"provider error: "` prefix when the verdict pipeline
- * re-wraps the error. Extract the phase tag (briefing / drafting /
- * redteam / finalize) so the UI can render a localized header. Returns
- * `null` for legacy or non-deliberation errors so the caller falls back
- * to the generic "ejecución ha fallado" header.
- */
-function parseFailedPhase(error: string): DeliberationPhase | null {
-  const match = error.match(
-    /deliberation phase (briefing|drafting|redteam|finalize) failed:/,
-  );
-  return (match?.[1] as DeliberationPhase | undefined) ?? null;
-}
-
 function FailedCaseErrorBlock({ error }: { error: string }) {
   const { t } = useTranslation();
   const phase = parseFailedPhase(error);
@@ -4410,59 +4174,6 @@ function PhaseIcon({
     case "finalize":
       return <IconClipboardCheck {...props} />;
   }
-}
-
-/** Strip optional ```json fences from an LLM response so it can be
- *  fed straight to JSON.parse. Mirrors the Rust-side `strip_code_fences`
- *  in `crates/verdict/src/validation.rs`. */
-function stripCodeFences(s: string): string {
-  const trimmed = s.trim();
-  if (trimmed.startsWith("```json")) {
-    return trimmed.slice("```json".length).trim().replace(/```$/, "").trim();
-  }
-  if (trimmed.startsWith("```")) {
-    return trimmed.slice(3).trim().replace(/```$/, "").trim();
-  }
-  return trimmed;
-}
-
-/** Best-effort parse of a phase output into a `Verdict`. Returns `null`
- *  on any structural mismatch — caller falls back to a raw JSON block. */
-function tryParseVerdict(raw: string): Verdict | null {
-  try {
-    const parsed = JSON.parse(stripCodeFences(raw)) as Partial<Verdict>;
-    if (
-      parsed &&
-      typeof parsed.case_summary === "string" &&
-      parsed.primary_recommendation &&
-      typeof parsed.primary_recommendation.action === "string" &&
-      typeof parsed.primary_recommendation.rationale === "string" &&
-      (parsed.certainty_level === "high" ||
-        parsed.certainty_level === "medium" ||
-        parsed.certainty_level === "low") &&
-      Array.isArray(parsed.key_clinical_data) &&
-      Array.isArray(parsed.alternatives) &&
-      Array.isArray(parsed.red_flags) &&
-      Array.isArray(parsed.follow_up_triggers) &&
-      Array.isArray(parsed.applied_evidence)
-    ) {
-      return {
-        case_summary: parsed.case_summary,
-        key_clinical_data: parsed.key_clinical_data,
-        applied_evidence: parsed.applied_evidence,
-        primary_recommendation: parsed.primary_recommendation,
-        alternatives: parsed.alternatives,
-        certainty_level: parsed.certainty_level,
-        certainty_justification: parsed.certainty_justification ?? "",
-        red_flags: parsed.red_flags,
-        follow_up_triggers: parsed.follow_up_triggers,
-        disclaimer: parsed.disclaimer ?? "",
-      };
-    }
-  } catch {
-    /* fall through to null */
-  }
-  return null;
 }
 
 /** Render one phase's `output`. `drafting` and `finalize` produce JSON;
