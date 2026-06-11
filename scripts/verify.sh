@@ -49,4 +49,7 @@ cargo test --workspace --locked --quiet
 step "pnpm --dir apps/desktop build"
 pnpm --dir apps/desktop build
 
+step "pnpm --dir apps/desktop test"
+pnpm --dir apps/desktop test
+
 printf "\n\033[1;32m✓ All local checks passed\033[0m\n"
