@@ -374,12 +374,30 @@ impl LlmProvider for CodexCliProvider {
             if looks_like_auth_failure(&stderr) {
                 return Err(ProviderError::Auth);
             }
+            // `codex exec` echoes its banner + the whole flattened prompt
+            // to stderr before the failure, so distil it to the actual
+            // `ERROR:` line(s) once and classify against that — matching
+            // the usage-limit signal on raw stderr would false-positive
+            // on prompt text, and surfacing raw stderr dumps the entire
+            // (de-identified, but page-long) case back into the UI.
+            let summary = codex_error_summary(&stderr);
+            // Subscription ceiling ("You've hit your usage limit … try
+            // again at …"). Structural until the stated reset: every
+            // further call fails identically, so surface it as
+            // `Unavailable` — whose "provider unavailable:" Display lets
+            // the batch runner cancel the remaining queued cases instead
+            // of replaying the limit N times — and keep Codex's own
+            // message, which names the reset time. Mirrors the claude-cli
+            // provider's `looks_like_usage_limit` path.
+            if looks_like_usage_limit(&summary) {
+                return Err(ProviderError::Unavailable(summary));
+            }
             return Err(ProviderError::Other(format!(
                 "codex exec exited {}: {}",
                 out.status
                     .code()
                     .map_or_else(|| "?".into(), |c| c.to_string()),
-                stderr.trim()
+                summary,
             )));
         }
 
@@ -468,6 +486,58 @@ fn looks_like_auth_failure(stderr: &str) -> bool {
         || lower.contains("auth.json")
 }
 
+/// Subscription / usage ceilings, matched against the distilled error
+/// line(s) from [`codex_error_summary`] — e.g. "ERROR: You've hit your
+/// usage limit … try again at …". Mirrors the claude-cli provider's
+/// classifier so both subscription proxies funnel a hit ceiling into the
+/// same structural-failure path.
+fn looks_like_usage_limit(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    lower.contains("usage limit")
+        || lower.contains("session limit")
+        || lower.contains("rate limit")
+        || lower.contains("too many requests")
+}
+
+/// Distil `codex exec` stderr down to the line(s) that matter.
+///
+/// In `exec` mode the CLI echoes the *entire* session to stderr — its
+/// banner, the flattened prompt, then the failure — so the raw text is
+/// dominated by the (de-identified, but page-long) prompt we sent.
+/// Surfacing it verbatim buried the real cause and dumped the whole case
+/// back into the UI. We keep the `ERROR:`/`Error:` line(s) Codex prints
+/// on failure, collapsing the consecutive duplicate it emits; failing
+/// that, the last few non-empty lines. Char-capped (never splitting a
+/// UTF-8 code point — see `crates/deident`'s hard-won lesson) to keep the
+/// payload small.
+fn codex_error_summary(stderr: &str) -> String {
+    let mut errs: Vec<&str> = Vec::new();
+    for line in stderr.lines().map(str::trim) {
+        let is_err =
+            line.starts_with("ERROR:") || line.starts_with("Error:") || line.starts_with("error:");
+        if is_err && errs.last() != Some(&line) {
+            errs.push(line);
+        }
+    }
+    let summary = if errs.is_empty() {
+        let tail: Vec<&str> = stderr
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect();
+        let start = tail.len().saturating_sub(3);
+        tail[start..].join(" | ")
+    } else {
+        errs.join("\n")
+    };
+    let summary = summary.trim();
+    if summary.chars().count() <= 500 {
+        summary.to_owned()
+    } else {
+        summary.chars().take(500).collect::<String>() + "…"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -515,6 +585,56 @@ mod tests {
         assert!(looks_like_auth_failure("missing api key"));
         assert!(looks_like_auth_failure("could not read auth.json"));
         assert!(!looks_like_auth_failure("rate limit exceeded"));
+    }
+
+    #[test]
+    fn usage_limit_heuristic_catches_codex_phrasing() {
+        assert!(looks_like_usage_limit(
+            "ERROR: You've hit your usage limit. Try again at Jun 13th, 2026 1:30 AM."
+        ));
+        assert!(looks_like_usage_limit("ERROR: rate limit exceeded"));
+        assert!(!looks_like_usage_limit(
+            "ERROR: Not logged in. Run `codex login`."
+        ));
+        assert!(!looks_like_usage_limit(
+            "codex exec did not write last-message file"
+        ));
+    }
+
+    #[test]
+    fn usage_limit_not_misread_as_auth() {
+        // The two heuristics must not overlap, or a hit ceiling would be
+        // surfaced as `Auth` and lose its reset-time message.
+        let msg = "ERROR: You've hit your usage limit. Upgrade to Pro.";
+        assert!(looks_like_usage_limit(msg));
+        assert!(!looks_like_auth_failure(msg));
+    }
+
+    #[test]
+    fn error_summary_keeps_error_line_not_echoed_prompt() {
+        // Live shape: `exec` echoes its banner + the whole flattened
+        // prompt to stderr, then prints the failure twice.
+        let stderr = "OpenAI Codex v0.139.0\n--------\nworkdir: /tmp/x\n\
+             model: gpt-5.5\n--------\nuser\nYou are the lead clinician of a \
+             multidisciplinary virtual board.\nERROR: You've hit your usage \
+             limit. Try again at Jun 13th, 2026 1:30 AM.\nERROR: You've hit \
+             your usage limit. Try again at Jun 13th, 2026 1:30 AM.";
+        let summary = codex_error_summary(stderr);
+        assert_eq!(
+            summary,
+            "ERROR: You've hit your usage limit. Try again at Jun 13th, 2026 1:30 AM."
+        );
+        assert!(!summary.contains("lead clinician"));
+        assert!(!summary.contains("workdir"));
+    }
+
+    #[test]
+    fn error_summary_falls_back_to_last_lines_without_error_marker() {
+        let stderr = "header a\nheader b\nmiddle detail\nfinal detail";
+        let summary = codex_error_summary(stderr);
+        assert!(summary.contains("final detail"));
+        assert!(summary.contains("middle detail"));
+        assert!(!summary.contains("header a"));
     }
 
     #[test]
