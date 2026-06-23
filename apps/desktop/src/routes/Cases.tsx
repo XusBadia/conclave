@@ -84,6 +84,14 @@ function retryStaleLabels(workspaceId: string, cases: CaseRecord[]): void {
   }
 }
 
+/** Sentinel limit meaning "every case". The Cases page has no pagination:
+ *  it loads the full list and sorts/groups/counts/exports client-side. A
+ *  local clinical committee has a modest number of cases, so loading them
+ *  all is cheap and avoids silently truncating the list (and miscounting
+ *  the header total). The backend treats any limit ≥ the row count as
+ *  "all". */
+const ALL_CASES = Number.MAX_SAFE_INTEGER;
+
 type View = "list" | "new" | "show";
 
 export function CasesPage({
@@ -152,9 +160,9 @@ export function CasesPage({
     onRefreshNow: () => refreshNowRef.current(),
   });
 
-  // Sorting / grouping / selection. All client-side over the 50 rows that
-  // listCases returns; the backend already sorts by case_date DESC so a
-  // refresh keeps the natural order when sortBy === "date_desc".
+  // Sorting / grouping / selection. All client-side over the full case
+  // list that listCases returns; the backend already sorts by case_date
+  // DESC so a refresh keeps the natural order when sortBy === "date_desc".
   const [sortBy, setSortBy] = useState<SortBy>("date_desc");
   const [groupBy, setGroupBy] = useState<GroupBy>("off");
   const [selectionMode, setSelectionMode] = useState(false);
@@ -195,7 +203,7 @@ export function CasesPage({
     setLoading(true);
     setError(null);
     try {
-      const list = await ipc.listCases(workspace.id, 50);
+      const list = await ipc.listCases(workspace.id, ALL_CASES);
       setCases(list);
       // Clear `rowBusy` for any case that has settled to a terminal
       // status — keeps the "Cancelling…" / "Retrying…" chips honest
@@ -426,8 +434,8 @@ export function CasesPage({
     cases.length > 0 && cases.every((c) => selectedIds.has(c.id));
 
   /** Select every loaded case, or clear the selection if they're all
-   *  already selected. Operates over `cases` — the up-to-50 rows the
-   *  list actually shows — so it matches exactly what the user sees. */
+   *  already selected. Operates over `cases` — the full list the page
+   *  shows — so it matches exactly what the user sees. */
   const toggleSelectAll = () => {
     setSelectedIds(allSelected ? new Set() : new Set(cases.map((c) => c.id)));
   };
