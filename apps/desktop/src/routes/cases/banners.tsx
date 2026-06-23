@@ -171,38 +171,52 @@ export function PdfExportResultBanner({
   onDismiss: () => void;
 }) {
   const { t } = useTranslation();
-  const none = result.saved === 0;
+  const { saved, skippedNoVerdict, failed, aborted, dir } = result;
+  // Amber whenever nothing landed or a render/IO error occurred; green for a
+  // clean (possibly partial) export where the only omissions were
+  // verdict-less cases.
+  const problem = saved === 0 || failed.length > 0;
   const parts: string[] = [];
-  if (none) {
-    parts.push(t("cases.batch_export_none"));
-  } else {
+  if (saved > 0) {
     parts.push(
       t(
-        result.saved === 1
+        saved === 1
           ? "cases.batch_export_done"
           : "cases.batch_export_done_plural",
-        { count: result.saved, dir: result.dir ?? "" },
+        { count: saved, dir: dir ?? "" },
       ),
     );
+  } else {
+    parts.push(t("cases.batch_export_none"));
   }
-  if (result.skipped.length > 0) {
+  if (skippedNoVerdict.length > 0) {
     parts.push(
       t(
-        result.skipped.length === 1
+        skippedNoVerdict.length === 1
           ? "cases.batch_export_skipped"
           : "cases.batch_export_skipped_plural",
-        { count: result.skipped.length },
+        { count: skippedNoVerdict.length },
       ),
     );
   }
-  if (result.aborted) {
+  if (failed.length > 0) {
+    parts.push(
+      t(
+        failed.length === 1
+          ? "cases.batch_export_failed"
+          : "cases.batch_export_failed_plural",
+        { count: failed.length },
+      ),
+    );
+  }
+  if (aborted) {
     parts.push(t("cases.batch_export_aborted"));
   }
   return (
     <div
       className={cn(
         "flex items-start justify-between gap-3 rounded-md border px-3 py-2 text-[13px]",
-        none
+        problem
           ? "border-warn/40 bg-warn/10 text-warn"
           : "border-ok/30 bg-ok/5 text-ok",
       )}
@@ -214,7 +228,7 @@ export function PdfExportResultBanner({
         aria-label={t("common.dismiss")}
         className={cn(
           "shrink-0 rounded p-0.5 transition",
-          none
+          problem
             ? "text-warn/70 hover:bg-warn/10 hover:text-warn"
             : "text-ok/70 hover:bg-ok/10 hover:text-ok",
         )}

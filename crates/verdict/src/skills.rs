@@ -76,11 +76,11 @@ fn built_in_skills() -> Result<Vec<Skill>> {
             r"---
 id: tumor-board
 title: Tumor board
-description: Multidisciplinary oncology review with staging, alternatives, uncertainty, and follow-up triggers.
+description: Multidisciplinary oncology review with staging, certainty, red flags, and follow-up triggers.
 recommended_workflow: guideline_review
 allowed_modes: deid_cloud,explicit_phi
 ---
-Frame the answer as a multidisciplinary oncology board. Explicitly separate staging assumptions, missing pathology/imaging data, treatment intent, alternatives, and follow-up triggers.
+Frame the answer as a multidisciplinary oncology board. Commit to a single management recommendation; explicitly separate staging assumptions, missing pathology/imaging data, treatment intent, red flags, and follow-up triggers.
 ",
         ),
         (

@@ -231,9 +231,11 @@
     "batch_export_progress": "Exportando PDF {{done}}/{{total}}…",
     "batch_export_done": "Se exportó {{count}} PDF a {{dir}}",
     "batch_export_done_plural": "Se exportaron {{count}} PDF a {{dir}}",
-    "batch_export_skipped": "{{count}} caso omitido (sin veredicto)",
-    "batch_export_skipped_plural": "{{count}} casos omitidos (sin veredicto)",
-    "batch_export_none": "Ninguno de los casos seleccionados tenía un veredicto que exportar.",
+    "batch_export_skipped": "{{count}} sin veredicto",
+    "batch_export_skipped_plural": "{{count}} sin veredicto",
+    "batch_export_failed": "{{count}} con error de exportación",
+    "batch_export_failed_plural": "{{count}} con error de exportación",
+    "batch_export_none": "No se exportó ningún PDF.",
     "batch_export_aborted": "Exportación cancelada antes de terminar.",
     "batch_export_error": "La exportación falló: {{error}}",
     "pdf": {
@@ -268,6 +270,7 @@
       "source_documents": "Documentos de origen",
       "generation_details": "Detalles de generación",
       "gen_tokens": "Tokens (entrada / salida)",
+      "gen_tokens_unreported": "no reportado",
       "gen_latency": "Latencia",
       "gen_generated": "Generado"
     },
@@ -403,13 +406,14 @@
       "drafting_title": "Borrador del veredicto",
       "drafting_subtitle": "Primera versión del veredicto basada en el briefing.",
       "redteam_title": "Crítica adversarial",
-      "redteam_subtitle": "Buscando alternativas perdidas, sobreinterpretaciones y huecos.",
+      "redteam_subtitle": "Buscando riesgos no vistos, sobreinterpretaciones y huecos.",
       "finalize_title": "Veredicto final",
       "finalize_subtitle": "Consolidando la crítica en el JSON definitivo."
     },
     "deliberation_phase_empty": "(esta fase no produjo texto)",
     "deliberation_trace_title": "Proceso de deliberación",
     "deliberation_trace_subtitle": "{{tokens}} tokens en total · {{duration}} s",
+    "deliberation_trace_subtitle_notokens": "{{duration}} s · el proveedor no reporta tokens",
     "deliberation_trace_expand": "Ver pasos",
     "deliberation_trace_collapse": "Ocultar",
     "deliberation_vision_used": "El modelo recibió las imágenes adjuntas directamente (visión activa).",
@@ -420,13 +424,20 @@
       "case_summary": "Resumen del caso",
       "key_clinical_data": "Datos clínicos clave",
       "primary_recommendation": "Recomendación principal",
-      "alternatives": "Alternativas",
-      "alternative_when": "cuándo: {{when}}",
       "certainty": "Certeza",
       "red_flags": "Banderas rojas",
       "follow_up_triggers": "Triggers de seguimiento",
       "applied_evidence": "Evidencia aplicada",
-      "disclaimer": "Aviso"
+      "disclaimer": "Aviso",
+      "disclaimer_body": "Conclave es un asistente experimental de soporte a la decisión clínica. NO es un dispositivo médico y NO sustituye el criterio de un profesional sanitario cualificado. Las respuestas pueden ser incompletas, sesgadas o erróneas. Verifica siempre cualquier sugerencia frente a las fuentes primarias y los protocolos institucionales antes de actuar.",
+      "help": {
+        "key_clinical_data": "Datos del caso que el comité consideró relevantes para la decisión.",
+        "primary_recommendation": "El veredicto del comité: la conducta recomendada para este caso.",
+        "certainty": "Confianza del comité en la recomendación según la evidencia disponible (alta / media / baja).",
+        "red_flags": "Hallazgos que exigen actuación o vigilancia urgente.",
+        "follow_up_triggers": "Situaciones que deberían motivar una reevaluación del caso.",
+        "applied_evidence": "Afirmaciones del veredicto con su fuente citada (E = base de conocimiento, A = adjunto del caso, X = literatura externa, P = caso previo)."
+      }
     }
   },
   "settings": {

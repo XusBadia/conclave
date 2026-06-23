@@ -3,8 +3,8 @@
 // semantics the backend relies on: queued→started→completed/failed/
 // cancelled ordering, batch_done reset, deliberation phase lifecycle,
 // workspace filtering and listener cleanup.
-import { act, renderHook } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, renderHook } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type Handler = (msg: { payload: unknown }) => void;
 const handlers = new Map<string, Handler>();
@@ -52,6 +52,16 @@ beforeEach(() => {
   handlers.clear();
   unlistenSpies.clear();
   batchCancel.mockClear();
+});
+
+// Unmount the rendered hook after every test so its 1s elapsed-tick
+// `setInterval` is cleared. Without this (vitest globals are off, so
+// Testing Library's auto-cleanup never registers) a pending tick can fire
+// after the environment is torn down — `setTickMs` then hits a gone
+// `window`, surfacing as an unhandled "window is not defined" that fails
+// the run under load even though every assertion passed.
+afterEach(() => {
+  cleanup();
 });
 
 describe("useBatchProgress", () => {

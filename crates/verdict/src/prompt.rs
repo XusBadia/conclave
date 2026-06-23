@@ -157,6 +157,10 @@ vision-capable model can interpret it later in this conversation.\n\
 - The case data has been de-identified. Do not invent personal details.\n\
 - If the supplied information is insufficient for a confident answer, set \
 certainty_level to \"low\" and list the missing data in red_flags.\n\
+- Commit to a single primary_recommendation: the board must decide. Do not \
+hedge with a menu of alternative options; weigh competing paths internally \
+and fold any decisive caveats into the rationale, red_flags or \
+follow_up_triggers.\n\
 - Workspace rules (see RULES) are constraints. Violating a rule invalidates \
 the response.\n\
 - Output language: {output_language}.\n\n\
@@ -177,7 +181,6 @@ Return a JSON object with exactly these keys:\n\n\
 {{\n  \"case_summary\": string,\n  \"key_clinical_data\": [{{\"label\": string, \"value\": string}}],\n  \
 \"applied_evidence\": [{{\"ref\": \"E1\"|\"X1\"|\"P1\"|\"A1\", \"claim\": string}}],\n  \
 \"primary_recommendation\": {{\"action\": string, \"rationale\": string}},\n  \
-\"alternatives\": [{{\"action\": string, \"when_to_consider\": string}}],\n  \
 \"certainty_level\": \"high\"|\"medium\"|\"low\",\n  \"certainty_justification\": string,\n  \
 \"red_flags\": [string],\n  \"follow_up_triggers\": [string],\n  \"disclaimer\": string\n}}\n\n\
 The \"disclaimer\" field must contain the standard Conclave disclaimer in {output_language}, \

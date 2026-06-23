@@ -200,22 +200,6 @@ const styles = StyleSheet.create({
     lineHeight: 1.35,
   },
 
-  /* Alternatives */
-  altRow: { flexDirection: "row", marginBottom: 10 },
-  altIndex: {
-    width: 18,
-    fontFamily: "Courier",
-    fontSize: 9.5,
-    color: color.inkSubtle,
-  },
-  altBody: { flex: 1 },
-  altWhen: {
-    fontFamily: "Helvetica-Oblique",
-    fontSize: 9.5,
-    color: color.inkSubtle,
-    marginTop: 2,
-  },
-
   /* Certainty */
   certaintyRow: {
     flexDirection: "row",
@@ -524,7 +508,6 @@ export default function CaseVerdictPDF({
         <Summary verdict={verdict} t={t} />
         <KeyClinicalData verdict={verdict} t={t} />
         <PrimaryRecommendation verdict={verdict} t={t} />
-        <Alternatives verdict={verdict} t={t} />
         <Certainty verdict={verdict} t={t} />
         <RedFlags verdict={verdict} t={t} />
         <FollowUp verdict={verdict} t={t} />
@@ -544,7 +527,7 @@ export default function CaseVerdictPDF({
           />
         )}
         {review && <Review review={review} t={t} locale={locale} />}
-        <Disclaimer verdict={verdict} t={t} />
+        <Disclaimer t={t} />
 
         <Footer
           t={t}
@@ -719,28 +702,6 @@ function PrimaryRecommendation({
   );
 }
 
-function Alternatives({ verdict, t }: { verdict: Verdict; t: TFunction }) {
-  if (verdict.alternatives.length === 0) return null;
-  return (
-    <Section>
-      <Eyebrow>{t("cases.verdict.alternatives")}</Eyebrow>
-      {verdict.alternatives.map((alt, i) => (
-        <View key={i} style={styles.altRow} wrap={false}>
-          <Text style={styles.altIndex}>{i + 1}.</Text>
-          <View style={styles.altBody}>
-            <Text style={styles.bodyStrong}>{alt.action}</Text>
-            {nonEmptyText(alt.when_to_consider) && (
-              <Text style={styles.altWhen}>
-                {t("cases.verdict.alternative_when", { when: alt.when_to_consider })}
-              </Text>
-            )}
-          </View>
-        </View>
-      ))}
-    </Section>
-  );
-}
-
 function Certainty({ verdict, t }: { verdict: Verdict; t: TFunction }) {
   const level = verdict.certainty_level;
   const palette = certaintyPalette[level];
@@ -867,7 +828,10 @@ function GenerationDetails({
     },
     {
       label: t("cases.pdf.gen_tokens"),
-      value: `${verdictRecord.input_tokens} / ${verdictRecord.output_tokens}`,
+      value:
+        verdictRecord.input_tokens + verdictRecord.output_tokens > 0
+          ? `${verdictRecord.input_tokens} / ${verdictRecord.output_tokens}`
+          : t("cases.pdf.gen_tokens_unreported"),
     },
     {
       label: t("cases.pdf.gen_latency"),
@@ -936,13 +900,17 @@ function Review({
   );
 }
 
-function Disclaimer({ verdict, t }: { verdict: Verdict; t: TFunction }) {
-  if (!nonEmptyText(verdict.disclaimer)) return null;
+/** The medical disclaimer is a fixed legal notice, not model output. Render
+ *  it from the active locale so it always matches the UI language (the
+ *  backend stores a canonical copy too, but display drives off i18n). */
+function Disclaimer({ t }: { t: TFunction }) {
+  const body = t("cases.verdict.disclaimer_body");
+  if (!nonEmptyText(body)) return null;
   return (
     <Section>
       <Eyebrow>{t("cases.verdict.disclaimer")}</Eyebrow>
       <View style={styles.disclaimerBox}>
-        <Text style={styles.disclaimerText}>{verdict.disclaimer}</Text>
+        <Text style={styles.disclaimerText}>{body}</Text>
       </View>
     </Section>
   );

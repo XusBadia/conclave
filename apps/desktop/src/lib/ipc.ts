@@ -161,7 +161,6 @@ export interface Verdict {
   key_clinical_data: { label: string; value: string }[];
   applied_evidence: { ref: string; claim: string }[];
   primary_recommendation: { action: string; rationale: string };
-  alternatives: { action: string; when_to_consider: string }[];
   certainty_level: "high" | "medium" | "low";
   certainty_justification: string;
   red_flags: string[];

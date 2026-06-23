@@ -17,9 +17,6 @@ pub struct Verdict {
     pub applied_evidence: Vec<EvidenceClaim>,
     /// Top recommendation with rationale.
     pub primary_recommendation: Recommendation,
-    /// Alternative paths and when to consider them.
-    #[serde(default)]
-    pub alternatives: Vec<Alternative>,
     /// Self-reported confidence level.
     pub certainty_level: CertaintyLevel,
     /// Justification for the confidence level.
@@ -53,22 +50,13 @@ pub struct EvidenceClaim {
     pub claim: String,
 }
 
-/// Primary or alternative recommendation.
+/// The committee's single recommendation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Recommendation {
     /// What to do.
     pub action: String,
     /// Why this is recommended.
     pub rationale: String,
-}
-
-/// An alternative path with the trigger to consider it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Alternative {
-    /// What to do instead.
-    pub action: String,
-    /// Condition that would make this alternative the right one.
-    pub when_to_consider: String,
 }
 
 /// Three-level confidence flag.
@@ -99,8 +87,8 @@ impl CertaintyLevel {
 /// schema verbatim to `claude -p --json-schema`, where the CLI's
 /// structured-output tool **enforces** it. The enforced shape stops
 /// the failure mode where the model double-encodes a nested container
-/// (e.g. `"alternatives": "[…]"` — a string holding serialised JSON —
-/// observed live with Sonnet 4.6), which `validate_verdict` would
+/// (e.g. `"key_clinical_data": "[…]"` — a string holding serialised
+/// JSON — observed live with Sonnet 4.6), which `validate_verdict` would
 /// only catch after the full four-phase run had already been paid for.
 ///
 /// Keep in sync with the structs above; the
@@ -115,7 +103,6 @@ pub fn verdict_json_schema() -> serde_json::Value {
             "key_clinical_data",
             "applied_evidence",
             "primary_recommendation",
-            "alternatives",
             "certainty_level",
             "certainty_justification",
             "red_flags",
@@ -157,18 +144,6 @@ pub fn verdict_json_schema() -> serde_json::Value {
                     "rationale": { "type": "string" }
                 }
             },
-            "alternatives": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["action", "when_to_consider"],
-                    "properties": {
-                        "action": { "type": "string" },
-                        "when_to_consider": { "type": "string" }
-                    }
-                }
-            },
             "certainty_level": { "type": "string", "enum": ["high", "medium", "low"] },
             "certainty_justification": { "type": "string" },
             "red_flags": { "type": "array", "items": { "type": "string" } },
@@ -203,10 +178,6 @@ mod tests {
                 action: "a".into(),
                 rationale: "r".into(),
             },
-            alternatives: vec![Alternative {
-                action: "a".into(),
-                when_to_consider: "w".into(),
-            }],
             certainty_level: CertaintyLevel::Medium,
             certainty_justification: "j".into(),
             red_flags: vec!["f".into()],

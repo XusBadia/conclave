@@ -14,10 +14,13 @@ export interface BatchExportProgress {
 export interface BatchExportResult {
   /** Number of PDFs actually written to disk. */
   saved: number;
-  /** Case ids that produced no PDF — no verdict on file, or a render/IO
-   *  error. The caller reports the count so a silent gap can't look like a
-   *  complete export. */
-  skipped: string[];
+  /** Case ids skipped because no verdict is on file (the case was never
+   *  run). A legitimate "nothing to export", not a failure. */
+  skippedNoVerdict: string[];
+  /** Case ids that HAVE a verdict but whose PDF failed to render or write
+   *  (e.g. a PDF-engine or IO error). Kept separate so a render failure is
+   *  never reported to the user as "no verdict". */
+  failed: string[];
   /** `true` when the user dismissed the folder picker — nothing was written
    *  and there is no summary to show. */
   cancelled: boolean;
@@ -88,24 +91,38 @@ export async function exportCasesToFolder(
     title: t("cases.batch_export_pick_dir") as string,
   });
   if (typeof dir !== "string") {
-    return { saved: 0, skipped: [], cancelled: true, aborted: false };
+    return {
+      saved: 0,
+      skippedNoVerdict: [],
+      failed: [],
+      cancelled: true,
+      aborted: false,
+    };
   }
 
   const prefix = t("cases.pdf.filename_prefix") as string;
   const used = new Set<string>();
-  const skipped: string[] = [];
+  const skippedNoVerdict: string[] = [];
+  const failed: string[] = [];
   let saved = 0;
   let done = 0;
   const total = caseIds.length;
 
   for (const id of caseIds) {
     if (signal?.aborted) {
-      return { saved, skipped, cancelled: false, aborted: true, dir };
+      return {
+        saved,
+        skippedNoVerdict,
+        failed,
+        cancelled: false,
+        aborted: true,
+        dir,
+      };
     }
     try {
       const detail = await ipc.showCase(workspaceId, id);
       if (!detail?.verdict) {
-        skipped.push(id);
+        skippedNoVerdict.push(id);
       } else {
         const blob = await pdf(
           <CaseVerdictPDF
@@ -122,14 +139,22 @@ export async function exportCasesToFolder(
         saved += 1;
       }
     } catch {
-      // One bad case shouldn't sink the whole batch — record it as skipped
-      // and keep going so the user still gets every other PDF.
-      skipped.push(id);
+      // One bad case shouldn't sink the whole batch — record it as a
+      // failure (it had a verdict; the render/write threw) and keep going
+      // so the user still gets every other PDF.
+      failed.push(id);
     } finally {
       done += 1;
       onProgress?.({ done, total });
     }
   }
 
-  return { saved, skipped, cancelled: false, aborted: false, dir };
+  return {
+    saved,
+    skippedNoVerdict,
+    failed,
+    cancelled: false,
+    aborted: false,
+    dir,
+  };
 }

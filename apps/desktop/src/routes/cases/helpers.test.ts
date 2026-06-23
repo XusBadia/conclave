@@ -117,7 +117,6 @@ describe("verdict parsing", () => {
         key_clinical_data: [],
         applied_evidence: [],
         primary_recommendation: { action: "a", rationale: "r" },
-        alternatives: [],
         certainty_level: "medium",
         red_flags: [],
         follow_up_triggers: [],

@@ -697,7 +697,7 @@ fn render_redteam_prompt(inputs: &DeliberationInputs, briefing: &str, draft_json
 RED-TEAM phase.\n\n\
 A draft verdict has been produced. Your job: find what's wrong with it.\n\n\
 Produce a **markdown critique** (NOT JSON) with these sections:\n\n\
-1. **Diagnostic alternatives missed** — competing diagnoses the draft did \
+1. **Differential diagnoses missed** — competing diagnoses the draft did \
 not consider, with a one-line rationale each.\n\
 2. **Evidence misuse** — places where the draft over-reaches what the \
 supplied evidence actually says, or misquotes an evidence id.\n\
@@ -729,8 +729,9 @@ You have a draft verdict and an adversarial critique of it. Produce the \
 **final JSON verdict** that:\n\n\
 - Incorporates the substantive points from the critique. Where the \
 critique flagged certainty pushback, lower certainty_level. Where it \
-flagged missed differentials, add them to `alternatives`. Where it \
-flagged safety gaps, add them to `red_flags` / `follow_up_triggers`.\n\
+flagged missed differentials, resolve them in the primary_recommendation \
+rationale (the board still commits to one course). Where it flagged safety \
+gaps, add them to `red_flags` / `follow_up_triggers`.\n\
 - Keeps citing only the supplied evidence ids. Do NOT invent ids.\n\
 - Returns the canonical JSON schema described in the EVIDENCE block — no \
 extra text, no preface, just the JSON object.\n\n\
@@ -813,7 +814,6 @@ mod tests {
                 "action": "ECG urgente + troponinas seriadas + AAS 300mg.",
                 "rationale": "Sospecha de SCA con elevación de riesgo."
             },
-            "alternatives": [],
             "certainty_level": "medium",
             "certainty_justification": "Datos clínicos sugestivos pero no confirmatorios.",
             "red_flags": [],
@@ -827,7 +827,7 @@ mod tests {
     async fn four_phase_run_emits_events_and_returns_verdict() {
         let provider: Arc<dyn LlmProvider> = Arc::new(MockProvider::new(vec![
             "Briefing markdown".into(),
-            r#"{"case_summary":"draft","key_clinical_data":[],"applied_evidence":[],"primary_recommendation":{"action":"a","rationale":"r"},"alternatives":[],"certainty_level":"low","certainty_justification":"j","red_flags":[],"follow_up_triggers":[],"disclaimer":"x"}"#.into(),
+            r#"{"case_summary":"draft","key_clinical_data":[],"applied_evidence":[],"primary_recommendation":{"action":"a","rationale":"r"},"certainty_level":"low","certainty_justification":"j","red_flags":[],"follow_up_triggers":[],"disclaimer":"x"}"#.into(),
             "Red-team critique".into(),
             final_json(),
         ]));

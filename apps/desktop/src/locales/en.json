@@ -231,9 +231,11 @@
     "batch_export_progress": "Exporting PDFs {{done}}/{{total}}…",
     "batch_export_done": "Exported {{count}} PDF to {{dir}}",
     "batch_export_done_plural": "Exported {{count}} PDFs to {{dir}}",
-    "batch_export_skipped": "{{count}} case skipped (no verdict)",
-    "batch_export_skipped_plural": "{{count}} cases skipped (no verdict)",
-    "batch_export_none": "None of the selected cases had a verdict to export.",
+    "batch_export_skipped": "{{count}} with no verdict",
+    "batch_export_skipped_plural": "{{count}} with no verdict",
+    "batch_export_failed": "{{count}} failed to export",
+    "batch_export_failed_plural": "{{count}} failed to export",
+    "batch_export_none": "No PDF was exported.",
     "batch_export_aborted": "Export cancelled before finishing.",
     "batch_export_error": "Export failed: {{error}}",
     "pdf": {
@@ -268,6 +270,7 @@
       "source_documents": "Source documents",
       "generation_details": "Generation details",
       "gen_tokens": "Tokens (in / out)",
+      "gen_tokens_unreported": "not reported",
       "gen_latency": "Latency",
       "gen_generated": "Generated"
     },
@@ -403,13 +406,14 @@
       "drafting_title": "Draft verdict",
       "drafting_subtitle": "First-pass verdict written from the briefing.",
       "redteam_title": "Adversarial critique",
-      "redteam_subtitle": "Hunting for missed alternatives, overreach, and gaps.",
+      "redteam_subtitle": "Hunting for missed risks, overreach, and gaps.",
       "finalize_title": "Final verdict",
       "finalize_subtitle": "Consolidating the critique into the final JSON."
     },
     "deliberation_phase_empty": "(this phase produced no text)",
     "deliberation_trace_title": "Deliberation process",
     "deliberation_trace_subtitle": "{{tokens}} tokens total · {{duration}} s",
+    "deliberation_trace_subtitle_notokens": "{{duration}} s · provider does not report tokens",
     "deliberation_trace_expand": "Show steps",
     "deliberation_trace_collapse": "Hide",
     "deliberation_vision_used": "The model received the attached images directly (vision enabled).",
@@ -420,13 +424,20 @@
       "case_summary": "Case summary",
       "key_clinical_data": "Key clinical data",
       "primary_recommendation": "Primary recommendation",
-      "alternatives": "Alternatives",
-      "alternative_when": "when: {{when}}",
       "certainty": "Certainty",
       "red_flags": "Red flags",
       "follow_up_triggers": "Follow-up triggers",
       "applied_evidence": "Applied evidence",
-      "disclaimer": "Disclaimer"
+      "disclaimer": "Disclaimer",
+      "disclaimer_body": "Conclave is an experimental clinical decision-support assistant. It is NOT a medical device and does NOT replace the judgement of a qualified clinician. Outputs may be incomplete, biased, or wrong. Always validate any suggestion against primary sources and institutional protocols before acting on it.",
+      "help": {
+        "key_clinical_data": "Case data the committee judged relevant to the decision.",
+        "primary_recommendation": "The committee's verdict: the course of action recommended for this case.",
+        "certainty": "The committee's confidence in the recommendation given the available evidence (high / medium / low).",
+        "red_flags": "Findings that demand urgent action or monitoring.",
+        "follow_up_triggers": "Situations that should prompt re-evaluation of the case.",
+        "applied_evidence": "Verdict claims with their cited source (E = knowledge base, A = case attachment, X = external literature, P = past case)."
+      }
     }
   },
   "settings": {

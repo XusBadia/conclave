@@ -72,7 +72,6 @@ mod tests {
               "key_clinical_data": [],
               "applied_evidence": [{applied}],
               "primary_recommendation": {{"action": "a", "rationale": "r"}},
-              "alternatives": [],
               "certainty_level": "medium",
               "certainty_justification": "j",
               "red_flags": [],

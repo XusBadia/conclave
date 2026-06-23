@@ -216,7 +216,6 @@ mod tests {
             "key_clinical_data": [],
             "applied_evidence": [{"ref": "E1", "claim": "Claim"}],
             "primary_recommendation": {"action": "Plan", "rationale": "R"},
-            "alternatives": [],
             "certainty_level": "low",
             "certainty_justification": "Faltan datos.",
             "red_flags": ["Alarma"],

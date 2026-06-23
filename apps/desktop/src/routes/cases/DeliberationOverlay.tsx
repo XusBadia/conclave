@@ -481,10 +481,16 @@ export function DeliberationTraceAccordion({
     <Card>
       <CardHeader
         title={t("cases.deliberation_trace_title")}
-        subtitle={t("cases.deliberation_trace_subtitle", {
-          tokens: totalTokens,
-          duration: seconds,
-        })}
+        subtitle={
+          totalTokens > 0
+            ? t("cases.deliberation_trace_subtitle", {
+                tokens: totalTokens,
+                duration: seconds,
+              })
+            : t("cases.deliberation_trace_subtitle_notokens", {
+                duration: seconds,
+              })
+        }
         right={
           <Button size="sm" variant="ghost" onClick={() => setOpen(!open)}>
             {open

@@ -682,15 +682,6 @@ fn render_pretty(case_id: &str, v: &Verdict) {
     println!("  ▶ {}", v.primary_recommendation.action);
     println!("    rationale: {}\n", v.primary_recommendation.rationale);
 
-    if !v.alternatives.is_empty() {
-        println!("ALTERNATIVES");
-        println!("────────────");
-        for alt in &v.alternatives {
-            println!("  • {} — when: {}", alt.action, alt.when_to_consider);
-        }
-        println!();
-    }
-
     let certainty_marker = match v.certainty_level {
         CertaintyLevel::High => "●●●",
         CertaintyLevel::Medium => "●●○",

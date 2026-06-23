@@ -1,13 +1,16 @@
-// Structured rendering of a Verdict: summary, key data, recommendation,
-// alternatives, certainty, red flags, follow-up triggers and evidence.
-// Shared by the case detail view and the deliberation overlay (compact
-// mode skips the disclaimer block the parent already shows).
+// Structured rendering of a Verdict: summary, key data, the committed
+// recommendation, certainty, red flags, follow-up triggers and evidence.
+// The page leads with the recommendation; supporting detail (clinical data,
+// red flags, triggers, applied evidence) is collapsed by default. Shared by
+// the case detail view and the deliberation overlay (compact mode skips the
+// disclaimer block the parent already shows).
 
 import { useTranslation } from "react-i18next";
 import { IconAlertTriangle } from "@tabler/icons-react";
 
 import type { Verdict } from "../../lib/ipc";
 import { CopyButton } from "./banners";
+import { CollapsibleSection, InfoTip } from "./CollapsibleSection";
 
 export function VerdictRenderer({
   verdict,
@@ -40,13 +43,14 @@ export function VerdictRenderer({
       </section>
 
       {verdict.key_clinical_data.length > 0 && (
-        <section>
-          <SectionRow
-            title={t("cases.verdict.key_clinical_data")}
-            copyText={verdict.key_clinical_data
-              .map((kv) => `${kv.label}: ${kv.value}`)
-              .join("\n")}
-          />
+        <CollapsibleSection
+          title={t("cases.verdict.key_clinical_data")}
+          count={verdict.key_clinical_data.length}
+          helpText={t("cases.verdict.help.key_clinical_data")}
+          copyText={verdict.key_clinical_data
+            .map((kv) => `${kv.label}: ${kv.value}`)
+            .join("\n")}
+        >
           <ul className="grid grid-cols-1 gap-2 md:grid-cols-2">
             {verdict.key_clinical_data.map((kv, i) => (
               <li
@@ -60,12 +64,13 @@ export function VerdictRenderer({
               </li>
             ))}
           </ul>
-        </section>
+        </CollapsibleSection>
       )}
 
       <section>
         <SectionRow
           title={t("cases.verdict.primary_recommendation")}
+          helpText={t("cases.verdict.help.primary_recommendation")}
           copyText={primaryRecText}
         />
         <div className="border border-border-strong bg-surface px-4 py-3">
@@ -78,35 +83,10 @@ export function VerdictRenderer({
         </div>
       </section>
 
-      {verdict.alternatives.length > 0 && (
-        <section>
-          <SectionRow
-            title={t("cases.verdict.alternatives")}
-            copyText={verdict.alternatives
-              .map((a) => `• ${a.action} — ${a.when_to_consider}`)
-              .join("\n")}
-          />
-          <ul className="space-y-2">
-            {verdict.alternatives.map((alt, i) => (
-              <li
-                key={i}
-                className="rounded-md border border-border-subtle bg-bg px-3 py-2"
-              >
-                <div className="text-[13px] text-ink-dim">{alt.action}</div>
-                <div className="mt-0.5 text-[12px] text-ink-faint">
-                  {t("cases.verdict.alternative_when", {
-                    when: alt.when_to_consider,
-                  })}
-                </div>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
       <section>
         <SectionRow
           title={t("cases.verdict.certainty")}
+          helpText={t("cases.verdict.help.certainty")}
           copyText={`${verdict.certainty_level.toUpperCase()} — ${verdict.certainty_justification}`}
         />
         <div className={`text-[14px] font-semibold ${certaintyColor}`}>
@@ -116,11 +96,13 @@ export function VerdictRenderer({
       </section>
 
       {verdict.red_flags.length > 0 && (
-        <section>
-          <SectionRow
-            title={t("cases.verdict.red_flags")}
-            copyText={verdict.red_flags.map((rf) => `• ${rf}`).join("\n")}
-          />
+        <CollapsibleSection
+          title={t("cases.verdict.red_flags")}
+          count={verdict.red_flags.length}
+          tone="warn"
+          helpText={t("cases.verdict.help.red_flags")}
+          copyText={verdict.red_flags.map((rf) => `• ${rf}`).join("\n")}
+        >
           <ul className="space-y-1.5">
             {verdict.red_flags.map((rf, i) => (
               <li
@@ -137,33 +119,35 @@ export function VerdictRenderer({
               </li>
             ))}
           </ul>
-        </section>
+        </CollapsibleSection>
       )}
 
       {verdict.follow_up_triggers.length > 0 && (
-        <section>
-          <SectionRow
-            title={t("cases.verdict.follow_up_triggers")}
-            copyText={verdict.follow_up_triggers
-              .map((tr) => `• ${tr}`)
-              .join("\n")}
-          />
+        <CollapsibleSection
+          title={t("cases.verdict.follow_up_triggers")}
+          count={verdict.follow_up_triggers.length}
+          helpText={t("cases.verdict.help.follow_up_triggers")}
+          copyText={verdict.follow_up_triggers
+            .map((tr) => `• ${tr}`)
+            .join("\n")}
+        >
           <ul className="list-inside list-disc space-y-1 text-[13px] text-ink-dim">
             {verdict.follow_up_triggers.map((tr, i) => (
               <li key={i}>{tr}</li>
             ))}
           </ul>
-        </section>
+        </CollapsibleSection>
       )}
 
       {verdict.applied_evidence.length > 0 && (
-        <section>
-          <SectionRow
-            title={t("cases.verdict.applied_evidence")}
-            copyText={verdict.applied_evidence
-              .map((ev) => `[${ev.ref}] ${ev.claim}`)
-              .join("\n")}
-          />
+        <CollapsibleSection
+          title={t("cases.verdict.applied_evidence")}
+          count={verdict.applied_evidence.length}
+          helpText={t("cases.verdict.help.applied_evidence")}
+          copyText={verdict.applied_evidence
+            .map((ev) => `[${ev.ref}] ${ev.claim}`)
+            .join("\n")}
+        >
           <ul className="space-y-1.5">
             {verdict.applied_evidence.map((ev, i) => (
               <li
@@ -177,14 +161,14 @@ export function VerdictRenderer({
               </li>
             ))}
           </ul>
-        </section>
+        </CollapsibleSection>
       )}
 
       {!compact && (
         <section>
           <SectionTitle>{t("cases.verdict.disclaimer")}</SectionTitle>
           <p className="text-[12px] leading-relaxed text-ink-subtle">
-            {verdict.disclaimer}
+            {t("cases.verdict.disclaimer_body")}
           </p>
         </section>
       )}
@@ -200,13 +184,24 @@ export function SectionTitle({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** Section title + a compact copy-to-clipboard affordance. Clinicians
- *  routinely paste recommendations into EHR notes, so every major
- *  verdict block gets one. */
-export function SectionRow({ title, copyText }: { title: string; copyText: string }) {
+/** Section title + an optional info tooltip + a compact copy-to-clipboard
+ *  affordance. Clinicians routinely paste recommendations into EHR notes, so
+ *  every major verdict block gets one. */
+export function SectionRow({
+  title,
+  copyText,
+  helpText,
+}: {
+  title: string;
+  copyText: string;
+  helpText?: string;
+}) {
   return (
     <div className="mb-1.5 flex items-center justify-between gap-2">
-      <SectionTitle>{title}</SectionTitle>
+      <div className="flex items-center gap-1.5">
+        <SectionTitle>{title}</SectionTitle>
+        {helpText && <InfoTip text={helpText} />}
+      </div>
       <CopyButton text={copyText} />
     </div>
   );

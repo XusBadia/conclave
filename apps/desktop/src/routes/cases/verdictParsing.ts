@@ -55,7 +55,6 @@ export function tryParseVerdict(raw: string): Verdict | null {
         parsed.certainty_level === "medium" ||
         parsed.certainty_level === "low") &&
       Array.isArray(parsed.key_clinical_data) &&
-      Array.isArray(parsed.alternatives) &&
       Array.isArray(parsed.red_flags) &&
       Array.isArray(parsed.follow_up_triggers) &&
       Array.isArray(parsed.applied_evidence)
@@ -65,7 +64,6 @@ export function tryParseVerdict(raw: string): Verdict | null {
         key_clinical_data: parsed.key_clinical_data,
         applied_evidence: parsed.applied_evidence,
         primary_recommendation: parsed.primary_recommendation,
-        alternatives: parsed.alternatives,
         certainty_level: parsed.certainty_level,
         certainty_justification: parsed.certainty_justification ?? "",
         red_flags: parsed.red_flags,

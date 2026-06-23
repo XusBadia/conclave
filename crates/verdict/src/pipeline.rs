@@ -875,9 +875,7 @@ mod tests {
             "primary_recommendation": {
                 "action": "Estabilizar y solicitar ECG y troponinas.",
                 "rationale": "Síntomas compatibles con SCA."
-            },
-            "alternatives": [],
-            "certainty_level": "medium",
+            },            "certainty_level": "medium",
             "certainty_justification": "Datos clínicos limitados.",
             "red_flags": ["TA elevada"],
             "follow_up_triggers": ["Repetir troponinas a las 3h"],
@@ -894,9 +892,7 @@ mod tests {
             "primary_recommendation": {
                 "action": "Estratificar riesgo y validar con protocolo local.",
                 "rationale": "La evidencia externa es auxiliar y no validada por el centro."
-            },
-            "alternatives": [],
-            "certainty_level": "low",
+            },            "certainty_level": "low",
             "certainty_justification": "Evidencia externa sin protocolo local suficiente.",
             "red_flags": [],
             "follow_up_triggers": [],

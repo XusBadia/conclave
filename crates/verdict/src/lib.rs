@@ -88,7 +88,7 @@ pub use prompt::{
     PromptTemplate, VERDICT_PROMPT_VERSION,
 };
 pub use qa::{QaPipeline, QaResponse, QaSource};
-pub use schema::{Alternative, CertaintyLevel, EvidenceClaim, KeyValue, Recommendation, Verdict};
+pub use schema::{CertaintyLevel, EvidenceClaim, KeyValue, Recommendation, Verdict};
 pub use skills::{load_skill, load_skills, Skill, SkillSource};
 pub use validation::{validate_verdict, ValidationError};
 pub use workflows::{run_workflow, ClinicalWorkflow, WorkflowOutput};
