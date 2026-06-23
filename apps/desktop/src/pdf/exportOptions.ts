@@ -25,7 +25,7 @@ export interface PdfExportOptions {
 }
 
 export const DEFAULT_PDF_EXPORT_OPTIONS: PdfExportOptions = {
-  includeSourceFiles: false,
+  includeSourceFiles: true,
   includeAttachmentMeta: false,
   headerNote: "",
   includeGenerationMeta: false,

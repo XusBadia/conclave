@@ -17,9 +17,9 @@ beforeEach(() => {
 });
 
 describe("DEFAULT_PDF_EXPORT_OPTIONS", () => {
-  it("keeps every flag off and the note empty (baseline PDF unchanged)", () => {
+  it("includes source files by default and leaves other flags off", () => {
     expect(DEFAULT_PDF_EXPORT_OPTIONS).toEqual({
-      includeSourceFiles: false,
+      includeSourceFiles: true,
       includeAttachmentMeta: false,
       headerNote: "",
       includeGenerationMeta: false,
