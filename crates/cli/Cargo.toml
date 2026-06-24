@@ -31,5 +31,6 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 indicatif = { workspace = true }
 rpassword = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }

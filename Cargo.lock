@@ -1072,6 +1072,7 @@ dependencies = [
  "conclave-verdict",
  "indicatif",
  "rpassword",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",

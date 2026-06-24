@@ -17,6 +17,7 @@ pub(crate) mod audit;
 pub(crate) mod case;
 pub(crate) mod deident;
 pub(crate) mod documents;
+pub(crate) mod eval;
 pub(crate) mod evidence;
 pub(crate) mod export;
 pub(crate) mod feedback;

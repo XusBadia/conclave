@@ -85,6 +85,8 @@ enum Command {
     Deident(commands::deident::DeidentArgs),
     /// Run the verdict engine on a clinical case (Phase 4).
     Case(commands::case::CaseArgs),
+    /// Batch-run cases and score concordance vs. a known decision.
+    Eval(commands::eval::EvalArgs),
     /// Record feedback on a previously generated case (Phase 5).
     Feedback(commands::feedback::FeedbackArgs),
     /// Aggregate counts / rates / latency over the active workspace.
@@ -136,6 +138,7 @@ async fn main() -> Result<()> {
         Command::Search(args) => commands::search::run(&ctx, args).await,
         Command::Deident(args) => commands::deident::run(&ctx, args),
         Command::Case(args) => commands::case::run(&ctx, args).await,
+        Command::Eval(args) => commands::eval::run(&ctx, args).await,
         Command::Feedback(args) => commands::feedback::run(&ctx, args),
         Command::Stats(args) => commands::stats::run(&ctx, args),
         Command::Export(args) => commands::export::run(&ctx, args),
