@@ -1,0 +1,20 @@
+[
+  {
+    "id": "synthetic-pt2n0-surveillance",
+    "text": "Varón de 62 años. Adenocarcinoma de colon sigmoide resecado mediante sigmoidectomía. Anatomía patológica: pT2N0 (0/18 ganglios), márgenes libres, sin invasión linfovascular ni perineural, bien diferenciado, MMR competente (pMMR). TC toracoabdominopélvico sin enfermedad a distancia. CEA normal postoperatorio.",
+    "question": "¿Cuál es el manejo recomendado?",
+    "expected_category": "surveillance"
+  },
+  {
+    "id": "synthetic-ambiguous-rectum",
+    "text": "Mujer de 70 años. Adenocarcinoma de recto medio a 8 cm del margen anal. RM de estadificación no concluyente entre cT2 y cT3 incipiente, sin adenopatías mesorrectales claramente patológicas. Pendiente de confirmar la afectación de la fascia mesorrectal y el estado MMR. Sin estudio de extensión completo.",
+    "question": "¿Cuál es el manejo recomendado?",
+    "expected_category": "further_staging"
+  },
+  {
+    "id": "synthetic-clear-palliative",
+    "text": "Varón de 81 años, ECOG 3, con adenocarcinoma de colon y metástasis hepáticas y pulmonares múltiples irresecables. Deterioro funcional progresivo, desnutrición y comorbilidad cardiorrespiratoria severa. La familia prioriza el confort.",
+    "question": "¿Cuál es el manejo recomendado?",
+    "expected_category": "palliative"
+  }
+]

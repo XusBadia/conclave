@@ -590,7 +590,7 @@ fn read_input(file: Option<&std::path::Path>, text: Option<&str>) -> Result<Stri
     Ok(buf)
 }
 
-fn case_store(
+pub(crate) fn case_store(
     ctx: &CommandContext,
     workspace: &conclave_core::Workspace,
 ) -> Result<Arc<Mutex<CaseStore>>> {
@@ -604,7 +604,10 @@ fn case_store(
     Ok(Arc::new(Mutex::new(store)))
 }
 
-async fn build_provider(id: &str, model: Option<String>) -> Result<Arc<dyn LlmProvider>> {
+pub(crate) async fn build_provider(
+    id: &str,
+    model: Option<String>,
+) -> Result<Arc<dyn LlmProvider>> {
     let api_key = match id {
         "ollama" | "anthropic-oauth" | "openai-oauth" => String::new(),
         _ => secrets::load(id)?

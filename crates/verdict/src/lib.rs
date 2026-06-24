@@ -53,6 +53,7 @@ pub mod attachments;
 pub mod clinical_services;
 pub mod connectors;
 pub mod deliberation;
+pub mod eval;
 pub mod persistence;
 pub mod pipeline;
 pub mod priors;
@@ -76,6 +77,9 @@ pub use connectors::{
 pub use deliberation::{
     run_deliberation, DeliberationEvent, DeliberationEvidence, DeliberationInputs,
     DeliberationOptions, DeliberationOutcome, DeliberationPastCase, DeliberationPhase,
+};
+pub use eval::{
+    CaseOutcome, Concordance, ConcordanceReport, DecisionCategory, StratifiedConcordance, Tally,
 };
 pub use persistence::{
     AuditRunRecord, AuditStatus, CaseAttachment, CaseRecord, CaseStatus, CaseStore,

@@ -22,6 +22,11 @@ conclave.toml.local
 /data/
 /tmp/
 
+# Real-patient evaluation corpus for `conclave-cli eval` — NEVER commit PHI.
+# The synthetic manifest (eval/synthetic.json) is committed; real cases live
+# here and stay local.
+/eval/corpus/
+
 # FastEmbed downloaded ONNX models (~470 MB). Cached at OS-standard cache
 # dir at runtime; this catches the legacy CWD-relative location.
 .fastembed_cache/
