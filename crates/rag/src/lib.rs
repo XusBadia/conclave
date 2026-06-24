@@ -16,7 +16,7 @@ pub mod store;
 
 pub use chunk::{chunk_text, Chunk, ChunkParams};
 pub use embed::{Embedder, FastEmbedEmbedder, MockEmbedder, E5_SMALL_DIM};
-pub use extract::{extract_from_path, DocType, ExtractedText};
+pub use extract::{extract_from_path, strip_boilerplate, DocType, ExtractedText};
 pub use pipeline::{
     FailedDocument, IngestionEvent, IngestionPipeline, IngestionReport, ProgressStage, SkipReason,
     SkippedDocument,

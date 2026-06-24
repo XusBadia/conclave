@@ -11,7 +11,7 @@ use conclave_core::{Error, Result};
 
 use crate::chunk::{chunk_text, ChunkParams};
 use crate::embed::Embedder;
-use crate::extract::{extract_from_path, DocType};
+use crate::extract::{extract_from_path, strip_boilerplate, DocType};
 use crate::store::{DocumentRecord, DocumentRepository};
 
 /// Drives extraction, chunking, embedding and persistence end-to-end.
@@ -210,7 +210,12 @@ impl IngestionPipeline {
             stage: ProgressStage::Chunking,
             percent: 30,
         });
-        let chunks = chunk_text(&extracted.content, &id, self.chunk_params)?;
+        // Strip running heads/feet, page numbers, copyright and TOC leaders
+        // before chunking so guideline evidence carries recommendations, not
+        // front-matter. Conservative: keeps the original text if it would
+        // otherwise be emptied.
+        let cleaned = strip_boilerplate(&extracted.content);
+        let chunks = chunk_text(&cleaned, &id, self.chunk_params)?;
 
         on_event(IngestionEvent::Progress {
             path: path.to_path_buf(),
