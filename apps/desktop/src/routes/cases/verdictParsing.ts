@@ -66,6 +66,7 @@ export function tryParseVerdict(raw: string): Verdict | null {
         primary_recommendation: parsed.primary_recommendation,
         certainty_level: parsed.certainty_level,
         certainty_justification: parsed.certainty_justification ?? "",
+        data_completeness: parsed.data_completeness,
         red_flags: parsed.red_flags,
         follow_up_triggers: parsed.follow_up_triggers,
         disclaimer: parsed.disclaimer ?? "",

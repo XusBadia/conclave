@@ -721,6 +721,13 @@ function Certainty({ verdict, t }: { verdict: Verdict; t: TFunction }) {
       {nonEmptyText(verdict.certainty_justification) && (
         <Text style={styles.body}>{verdict.certainty_justification}</Text>
       )}
+      {verdict.data_completeness && (
+        <Text style={styles.body}>
+          {`${t("cases.verdict.data_completeness")}: ${t(
+            `cases.verdict.data_completeness_value.${verdict.data_completeness}`,
+          )}`}
+        </Text>
+      )}
     </Section>
   );
 }

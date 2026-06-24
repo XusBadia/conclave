@@ -163,6 +163,9 @@ export interface Verdict {
   primary_recommendation: { action: string; rationale: string };
   certainty_level: "high" | "medium" | "low";
   certainty_justification: string;
+  /** Data-completeness axis (verdict_v3+). Optional: verdicts persisted
+   *  before v3 lack the field. */
+  data_completeness?: "complete" | "partial" | "insufficient";
   red_flags: string[];
   follow_up_triggers: string[];
   disclaimer: string;

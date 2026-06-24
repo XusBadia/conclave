@@ -21,6 +21,11 @@ pub struct Verdict {
     pub certainty_level: CertaintyLevel,
     /// Justification for the confidence level.
     pub certainty_justification: String,
+    /// How complete the supplied case data is — distinct from certainty.
+    /// `#[serde(default)]` keeps verdicts persisted before `verdict_v3`
+    /// (which lack the field) deserialisable.
+    #[serde(default)]
+    pub data_completeness: DataCompleteness,
     /// Hard contraindications, missing data, escalation triggers.
     #[serde(default)]
     pub red_flags: Vec<String>,
@@ -79,6 +84,36 @@ impl CertaintyLevel {
     }
 }
 
+/// How complete the supplied case data is — a SEPARATE axis from
+/// [`CertaintyLevel`].
+///
+/// Missing data lowers completeness; it lowers certainty only when it could
+/// realistically change the recommendation. Decoupling the two stops "data is
+/// missing" from collapsing every verdict to low certainty.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DataCompleteness {
+    /// All data needed for a confident decision is present.
+    Complete,
+    /// Some relevant data is missing but the recommendation still stands. Also
+    /// the neutral default for verdicts persisted before `verdict_v3`.
+    #[default]
+    Partial,
+    /// Key data is missing; the case cannot be properly assessed as supplied.
+    Insufficient,
+}
+
+impl DataCompleteness {
+    /// Short human label used by the CLI renderer.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Complete => "COMPLETE",
+            Self::Partial => "PARTIAL",
+            Self::Insufficient => "INSUFFICIENT",
+        }
+    }
+}
+
 /// JSON Schema mirroring [`Verdict`], passed as
 /// `CompletionRequest::json_schema` on JSON-mode calls.
 ///
@@ -105,6 +140,7 @@ pub fn verdict_json_schema() -> serde_json::Value {
             "primary_recommendation",
             "certainty_level",
             "certainty_justification",
+            "data_completeness",
             "red_flags",
             "follow_up_triggers",
             "disclaimer"
@@ -146,6 +182,7 @@ pub fn verdict_json_schema() -> serde_json::Value {
             },
             "certainty_level": { "type": "string", "enum": ["high", "medium", "low"] },
             "certainty_justification": { "type": "string" },
+            "data_completeness": { "type": "string", "enum": ["complete", "partial", "insufficient"] },
             "red_flags": { "type": "array", "items": { "type": "string" } },
             "follow_up_triggers": { "type": "array", "items": { "type": "string" } },
             "disclaimer": { "type": "string" }
@@ -180,6 +217,7 @@ mod tests {
             },
             certainty_level: CertaintyLevel::Medium,
             certainty_justification: "j".into(),
+            data_completeness: DataCompleteness::Complete,
             red_flags: vec!["f".into()],
             follow_up_triggers: vec!["t".into()],
             disclaimer: "d".into(),
@@ -235,5 +273,10 @@ mod tests {
             .as_array()
             .unwrap()
             .contains(&serde_json::json!("medium")));
+        assert_eq!(serialized["data_completeness"], "complete");
+        assert!(schema["properties"]["data_completeness"]["enum"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("complete")));
     }
 }

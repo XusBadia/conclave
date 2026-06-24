@@ -12,7 +12,12 @@
 /// attached to the specific patient case. Pre-v2 callers without
 /// attachments produce the same wire format as v1 (the block renders an
 /// explicit "none" placeholder).
-pub const VERDICT_PROMPT_VERSION: &str = "verdict_v2";
+///
+/// `verdict_v3` decouples confidence from data completeness: it adds the
+/// `data_completeness` output field, an explicit high/medium/low certainty
+/// rubric, and forbids "review in committee" as the primary recommendation
+/// (Conclave *is* the board).
+pub const VERDICT_PROMPT_VERSION: &str = "verdict_v3";
 
 /// Inputs needed to assemble the verdict prompt.
 #[derive(Debug, Clone)]
@@ -155,12 +160,30 @@ patient. Their snippets are de-identified. Cite them with `A1..AN`.\n\
 the file is an image or OCR-pending; only treat it as evidence if a \
 vision-capable model can interpret it later in this conversation.\n\
 - The case data has been de-identified. Do not invent personal details.\n\
-- If the supplied information is insufficient for a confident answer, set \
-certainty_level to \"low\" and list the missing data in red_flags.\n\
-- Commit to a single primary_recommendation: the board must decide. Do not \
-hedge with a menu of alternative options; weigh competing paths internally \
-and fold any decisive caveats into the rationale, red_flags or \
-follow_up_triggers.\n\
+- Report two SEPARATE axes. `data_completeness` describes how much of the \
+data needed for THIS decision is present (complete / partial / insufficient); \
+list any missing data in red_flags. `certainty_level` describes how robust \
+your primary_recommendation is — NOT how complete the data is. Missing data \
+lowers certainty ONLY when it could realistically change the recommendation.\n\
+- Calibrate certainty_level against this rubric:\n\
+  • high — the recommendation is the clear standard of care and stays the \
+same across the plausible values of any missing data (e.g. a pT2N0 tumour → \
+surveillance; an unambiguous palliative situation).\n\
+  • medium — the recommendation holds under most but not all plausible \
+scenarios, or rests on indirect or single-source evidence.\n\
+  • low — a missing or ambiguous datum could realistically flip the \
+primary_recommendation.\n\
+  Do NOT default to \"low\" merely because data is missing or because no \
+local guideline extract was usable: when the standard of care is clear, state \
+it with the certainty it deserves.\n\
+- Commit to ONE concrete primary_recommendation: a specific clinical action \
+(e.g. \"complete pelvic MRI and MMR/MSI testing, then proceed to total \
+mesorectal excision if restaging confirms residual tumour\"). You ARE the \
+multidisciplinary board, so \"review in the multidisciplinary committee\" is \
+NOT an acceptable primary_recommendation — at most it is a follow_up_trigger. \
+Do not hedge with a menu of options: give the single action, the assumptions \
+it rests on, and what finding would change it, folding those into the \
+rationale, red_flags and follow_up_triggers.\n\
 - Workspace rules (see RULES) are constraints. Violating a rule invalidates \
 the response.\n\
 - Output language: {output_language}.\n\n\
@@ -182,6 +205,7 @@ Return a JSON object with exactly these keys:\n\n\
 \"applied_evidence\": [{{\"ref\": \"E1\"|\"X1\"|\"P1\"|\"A1\", \"claim\": string}}],\n  \
 \"primary_recommendation\": {{\"action\": string, \"rationale\": string}},\n  \
 \"certainty_level\": \"high\"|\"medium\"|\"low\",\n  \"certainty_justification\": string,\n  \
+\"data_completeness\": \"complete\"|\"partial\"|\"insufficient\",\n  \
 \"red_flags\": [string],\n  \"follow_up_triggers\": [string],\n  \"disclaimer\": string\n}}\n\n\
 The \"disclaimer\" field must contain the standard Conclave disclaimer in {output_language}, \
 taken verbatim:\n\n{disclaimer}\n",
@@ -321,6 +345,34 @@ mod tests {
         assert!(prompt.contains("(no evidence retrieved"));
         assert!(prompt.contains("the clinician did not attach files"));
         assert!(prompt.contains("What is the recommended management?"));
+    }
+
+    #[test]
+    fn calibration_rubric_and_data_completeness_present() {
+        let inputs = PromptInputs {
+            specialty: "colorrectal",
+            output_language: "es",
+            rules_block: "",
+            active_skill_id: None,
+            active_skill_instructions: None,
+            evidence_chunks: &[],
+            external_evidence: &[],
+            past_cases: &[],
+            case_attachments: &[],
+            de_identified_case_text: "case",
+            user_question: "",
+            disclaimer: "x",
+        };
+        let prompt = PromptTemplate.render(&inputs);
+        // Two decoupled axes + the explicit certainty rubric anchors.
+        assert!(prompt.contains("data_completeness"));
+        assert!(prompt.contains("high — the recommendation is the clear standard"));
+        assert!(prompt.contains("medium — the recommendation holds"));
+        assert!(prompt.contains("low — a missing or ambiguous datum"));
+        // W3: committee deferral is banned as the primary recommendation.
+        assert!(prompt.contains("NOT an acceptable primary_recommendation"));
+        // The output schema lists the new field.
+        assert!(prompt.contains("\"complete\"|\"partial\"|\"insufficient\""));
     }
 
     #[test]
