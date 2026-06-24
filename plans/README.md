@@ -26,7 +26,7 @@ under "Audited but not planned" — ask for a plan for any of them.
 | 009 | Strict CSP in tauri.conf.json (+ devCsp) | P2 | S | — | DONE (e7d6c38) — ⚠ needs manual dev-run check |
 | 010 | Atomic draft+attachments insert (`insert_case_with_attachments`) | P2 | S | — | DONE (31dca12) |
 | 011 | Cases.tsx decomposition: 5,186 → 1,203 lines, 12 modules under routes/cases/, useBatchProgress characterized | P2 | L | 005 | DONE (4299428…f30f35f, 6 commits) — ⚠ needs manual functional check |
-| 012 | [Clinical reasoning quality: RAG signal, calibration, committed recs, colorectal priors, eval harness](012-clinical-reasoning-quality.md) — fix the four blinded-CMT-validation defects | P1 | XL | — | TODO |
+| 012 | [Clinical reasoning quality: RAG signal, calibration, committed recs, colorectal priors, eval harness](012-clinical-reasoning-quality.md) — fix the four blinded-CMT-validation defects | P1 | XL | — | IN PROGRESS (branch `feat/012`; W1–W5 landed + gate green; pending clinician sign-off on priors, KB-floor tuning, and the 65-case revalidation) |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)
 
