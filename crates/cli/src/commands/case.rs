@@ -693,6 +693,7 @@ fn render_pretty(case_id: &str, v: &Verdict) {
         v.certainty_level.label()
     );
     println!("  {}\n", v.certainty_justification);
+    println!("DATA COMPLETENESS: {}\n", v.data_completeness.label());
 
     if !v.red_flags.is_empty() {
         println!("RED FLAGS");

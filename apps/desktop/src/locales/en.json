@@ -425,6 +425,12 @@
       "key_clinical_data": "Key clinical data",
       "primary_recommendation": "Primary recommendation",
       "certainty": "Certainty",
+      "data_completeness": "Data completeness",
+      "data_completeness_value": {
+        "complete": "Complete",
+        "partial": "Partial",
+        "insufficient": "Insufficient"
+      },
       "red_flags": "Red flags",
       "follow_up_triggers": "Follow-up triggers",
       "applied_evidence": "Applied evidence",
@@ -434,6 +440,7 @@
         "key_clinical_data": "Case data the committee judged relevant to the decision.",
         "primary_recommendation": "The committee's verdict: the course of action recommended for this case.",
         "certainty": "The committee's confidence in the recommendation given the available evidence (high / medium / low).",
+        "data_completeness": "How complete the supplied data is — separate from confidence. Missing data lowers this, but only lowers certainty when it could change the recommendation.",
         "red_flags": "Findings that demand urgent action or monitoring.",
         "follow_up_triggers": "Situations that should prompt re-evaluation of the case.",
         "applied_evidence": "Verdict claims with their cited source (E = knowledge base, A = case attachment, X = external literature, P = past case)."

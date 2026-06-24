@@ -6,7 +6,7 @@
 // disclaimer block the parent already shows).
 
 import { useTranslation } from "react-i18next";
-import { IconAlertTriangle } from "@tabler/icons-react";
+import { IconAlertTriangle, IconDatabase } from "@tabler/icons-react";
 
 import type { Verdict } from "../../lib/ipc";
 import { CopyButton } from "./banners";
@@ -93,6 +93,18 @@ export function VerdictRenderer({
           {verdict.certainty_level.toUpperCase()}
         </div>
         <p className="mt-1">{verdict.certainty_justification}</p>
+        {verdict.data_completeness && (
+          <div
+            className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-border-subtle bg-bg px-2 py-1 text-[11px] uppercase tracking-wide text-ink-faint"
+            title={t("cases.verdict.help.data_completeness")}
+          >
+            <IconDatabase size={12} stroke={1.7} aria-hidden />
+            {t("cases.verdict.data_completeness")}:{" "}
+            {t(
+              `cases.verdict.data_completeness_value.${verdict.data_completeness}`,
+            )}
+          </div>
+        )}
       </section>
 
       {verdict.red_flags.length > 0 && (

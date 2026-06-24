@@ -702,8 +702,11 @@ not consider, with a one-line rationale each.\n\
 2. **Evidence misuse** — places where the draft over-reaches what the \
 supplied evidence actually says, or misquotes an evidence id.\n\
 3. **Certainty pushback** — argue whether the certainty_level is \
-honest. If the draft says \"high\" but only one evidence source supports \
-it, say so.\n\
+honest IN BOTH DIRECTIONS. If the draft says \"high\" but only one weak \
+source supports it, say so; equally, if it hedged to \"low\" when the \
+standard of care is actually clear, call that out as under-confident. Do \
+not let merely-missing data justify \"low\" when it would not change the \
+recommendation.\n\
 4. **Safety gaps** — red flags or follow-up triggers the draft missed.\n\
 5. **Verdict** — a single line: ACCEPT / MODIFY / REJECT, with a 1-line \
 justification.\n\n\
@@ -728,10 +731,13 @@ fn render_finalize_prompt(
 You have a draft verdict and an adversarial critique of it. Produce the \
 **final JSON verdict** that:\n\n\
 - Incorporates the substantive points from the critique. Where the \
-critique flagged certainty pushback, lower certainty_level. Where it \
-flagged missed differentials, resolve them in the primary_recommendation \
-rationale (the board still commits to one course). Where it flagged safety \
-gaps, add them to `red_flags` / `follow_up_triggers`.\n\
+critique flagged certainty pushback, ADJUST certainty_level to match the \
+rubric — raise it when the recommendation is clearly standard of care, lower \
+it only when a missing or ambiguous datum could realistically flip it. Where \
+it flagged missed differentials, resolve them in the primary_recommendation \
+rationale (the board still commits to one concrete course; never defer to \
+\"review in committee\"). Where it flagged safety gaps, add them to \
+`red_flags` / `follow_up_triggers`.\n\
 - Keeps citing only the supplied evidence ids. Do NOT invent ids.\n\
 - Returns the canonical JSON schema described in the EVIDENCE block — no \
 extra text, no preface, just the JSON object.\n\n\

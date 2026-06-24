@@ -425,6 +425,12 @@
       "key_clinical_data": "Datos clínicos clave",
       "primary_recommendation": "Recomendación principal",
       "certainty": "Certeza",
+      "data_completeness": "Completitud de datos",
+      "data_completeness_value": {
+        "complete": "Completa",
+        "partial": "Parcial",
+        "insufficient": "Insuficiente"
+      },
       "red_flags": "Banderas rojas",
       "follow_up_triggers": "Triggers de seguimiento",
       "applied_evidence": "Evidencia aplicada",
@@ -434,6 +440,7 @@
         "key_clinical_data": "Datos del caso que el comité consideró relevantes para la decisión.",
         "primary_recommendation": "El veredicto del comité: la conducta recomendada para este caso.",
         "certainty": "Confianza del comité en la recomendación según la evidencia disponible (alta / media / baja).",
+        "data_completeness": "Cómo de completos son los datos aportados — distinto de la confianza. Los datos que faltan bajan esto, pero solo bajan la certeza cuando podrían cambiar la recomendación.",
         "red_flags": "Hallazgos que exigen actuación o vigilancia urgente.",
         "follow_up_triggers": "Situaciones que deberían motivar una reevaluación del caso.",
         "applied_evidence": "Afirmaciones del veredicto con su fuente citada (E = base de conocimiento, A = adjunto del caso, X = literatura externa, P = caso previo)."

@@ -3058,7 +3058,7 @@ pub(crate) async fn run_case_deliberated_impl(
     let verdict_record = VerdictRecord {
         id: format!("verdict-{}", uuid::Uuid::new_v4()),
         case_id: case.id.clone(),
-        prompt_version: "verdict_v2_deliberated".to_owned(),
+        prompt_version: "verdict_v3_deliberated".to_owned(),
         provider_id: provider.id().to_owned(),
         model: outcome.model.clone(),
         latency_ms: elapsed_ms,
