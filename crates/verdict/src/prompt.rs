@@ -5,8 +5,6 @@
 //! the structure is simple and we want every prompt to be reproducible
 //! byte-for-byte across runs.
 
-use crate::priors::load_specialty_priors;
-
 /// Stable version string persisted alongside every generated verdict so we
 /// can reproduce the exact prompt later if the template changes.
 ///
@@ -119,7 +117,11 @@ impl PromptTemplate {
         let past_cases = render_past_cases(inputs.past_cases);
         let attachments = render_attachments(inputs.case_attachments);
         let skill = render_skill(inputs.active_skill_id, inputs.active_skill_instructions);
-        let rules = render_rules(load_specialty_priors(inputs.specialty), inputs.rules_block);
+        let rules = if inputs.rules_block.trim().is_empty() {
+            "No workspace rules defined."
+        } else {
+            inputs.rules_block
+        };
         let question = if inputs.user_question.trim().is_empty() {
             "What is the recommended management?"
         } else {
@@ -226,19 +228,6 @@ fn render_skill(id: Option<&str>, body: Option<&str>) -> String {
     match (id, body.map(str::trim).filter(|b| !b.is_empty())) {
         (Some(id), Some(body)) => format!("[{id}]\n{body}\n\n"),
         _ => "(none)\n\n".to_owned(),
-    }
-}
-
-/// Compose the `WORKSPACE RULES` block from always-on specialty priors and any
-/// user-defined workspace rules. Priors lead so domain safety rules are read
-/// first and cannot be buried by later workspace text.
-fn render_rules(priors: Option<&str>, rules_block: &str) -> String {
-    let rules_block = rules_block.trim();
-    match (priors.map(str::trim), rules_block.is_empty()) {
-        (Some(priors), true) => priors.to_owned(),
-        (Some(priors), false) => format!("{priors}\n\n{rules_block}"),
-        (None, true) => "No workspace rules defined.".to_owned(),
-        (None, false) => rules_block.to_owned(),
     }
 }
 
@@ -384,34 +373,6 @@ mod tests {
         assert!(prompt.contains("NOT an acceptable primary_recommendation"));
         // The output schema lists the new field.
         assert!(prompt.contains("\"complete\"|\"partial\"|\"insufficient\""));
-    }
-
-    #[test]
-    fn colorectal_priors_injected_by_specialty() {
-        let make = |specialty: &str| {
-            let inputs = PromptInputs {
-                specialty,
-                output_language: "es",
-                rules_block: "",
-                active_skill_id: None,
-                active_skill_instructions: None,
-                evidence_chunks: &[],
-                external_evidence: &[],
-                past_cases: &[],
-                case_attachments: &[],
-                de_identified_case_text: "case",
-                user_question: "",
-                disclaimer: "x",
-            };
-            PromptTemplate.render(&inputs)
-        };
-        // Colorectal workspace: the always-on priors ride in WORKSPACE RULES.
-        let colo = make("oncología colorrectal");
-        assert!(colo.contains("negative biopsy does NOT rule out local regrowth"));
-        // Unrelated workspace: no priors, default placeholder.
-        let cardio = make("cardiología");
-        assert!(!cardio.contains("local regrowth"));
-        assert!(cardio.contains("No workspace rules defined."));
     }
 
     #[test]
