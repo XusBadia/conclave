@@ -55,6 +55,7 @@ pub mod connectors;
 pub mod deliberation;
 pub mod persistence;
 pub mod pipeline;
+pub mod priors;
 pub mod privacy;
 pub mod prompt;
 pub mod qa;
@@ -82,6 +83,7 @@ pub use persistence::{
     RetrievalTrace, ReviewDecision, ReviewMetadataRecord, StoreStats, VerdictRecord,
 };
 pub use pipeline::{VerdictOptions, VerdictPipeline, VerdictRun};
+pub use priors::load_specialty_priors;
 pub use privacy::{sha256_hex, AuditPayloadMode, DataBoundaryMode, RawTextRetention};
 pub use prompt::{
     CaseAttachmentInput, EvidenceChunkInput, ExternalEvidenceInput, PastCaseInput, PromptInputs,
