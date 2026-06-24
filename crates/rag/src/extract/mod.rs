@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use conclave_core::{Error, Result};
 
+mod clean;
 mod docx;
 mod html;
 mod image;
@@ -26,6 +27,8 @@ mod text;
 
 #[cfg(feature = "ocr")]
 pub mod ocr;
+
+pub use clean::strip_boilerplate;
 
 /// Result of running a document through an extractor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

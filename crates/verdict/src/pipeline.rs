@@ -33,7 +33,7 @@ use conclave_core::{Error, Result, Workspace, MEDICAL_DISCLAIMER};
 use conclave_deident::Deidentifier;
 use conclave_evidence::EvidenceItem;
 use conclave_providers::{CompletionRequest, LlmProvider, Message, ProviderError};
-use conclave_rag::{DocumentRepository, Embedder};
+use conclave_rag::{DocumentRepository, Embedder, VectorHit};
 
 use crate::persistence::{
     AuditRunRecord, CaseAttachment, CaseRecord, CaseStatus, CaseStore, PastCaseHit, RetrievalTrace,
@@ -52,6 +52,13 @@ use crate::{sha256_hex, AuditPayloadMode, DataBoundaryMode, RawTextRetention};
 pub struct VerdictOptions {
     /// Top-K chunks to retrieve from the knowledge base.
     pub top_k: usize,
+    /// Minimum cosine relevance for a knowledge-base chunk to be injected as
+    /// `[E*]` evidence. Mirrors `past_cases_min_similarity` for the KB path.
+    /// `0.0` (the default) disables the floor — behaviour is unchanged until a
+    /// workspace tunes it against its own re-ingested guideline corpus. When a
+    /// positive floor filters every hit, the single closest hit is kept so the
+    /// EVIDENCE block never silently empties.
+    pub kb_min_relevance: f32,
     /// Workspace rules, formatted as bullet list (or empty).
     pub rules_block: String,
     /// Output language hint passed to the LLM (default `es`).
@@ -88,6 +95,7 @@ impl Default for VerdictOptions {
     fn default() -> Self {
         Self {
             top_k: 8,
+            kb_min_relevance: 0.0,
             rules_block: String::new(),
             output_language: "es".into(),
             temperature: 0.2,
@@ -185,7 +193,7 @@ impl VerdictPipeline {
 
         // 3) Retrieve evidence.
         let chunks = self
-            .retrieve_evidence_with_vec(&case_embedding, options.top_k)
+            .retrieve_evidence_with_vec(&case_embedding, options.top_k, options.kb_min_relevance)
             .await?;
         let evidence_refs: Vec<String> = (1..=chunks.len()).map(|i| format!("E{i}")).collect();
 
@@ -444,7 +452,7 @@ Return the JSON object only, citing only the supplied evidence ids."
 
         // 2) Retrieve evidence.
         let chunks = self
-            .retrieve_evidence_with_vec(&case_embedding, options.top_k)
+            .retrieve_evidence_with_vec(&case_embedding, options.top_k, options.kb_min_relevance)
             .await?;
         let evidence_refs: Vec<String> = (1..=chunks.len()).map(|i| format!("E{i}")).collect();
 
@@ -688,11 +696,13 @@ Return the JSON object only, citing only the supplied evidence ids."
         &self,
         query_vec: &[f32],
         top_k: usize,
+        min_relevance: f32,
     ) -> Result<Vec<EvidenceChunk>> {
         if top_k == 0 {
             return Ok(Vec::new());
         }
         let hits = self.repository.search(query_vec, top_k).await?;
+        let hits = filter_hits_by_relevance(hits, min_relevance);
         let mut out = Vec::with_capacity(hits.len());
         for h in hits {
             let details = self.repository.show(&h.document_id)?;
@@ -844,6 +854,39 @@ fn truncate(s: &str, max_chars: usize) -> String {
     out
 }
 
+/// Cosine similarity implied by the `L2` distance between two unit vectors.
+///
+/// Both embedders (fastembed `multilingual-e5-small` and the test
+/// `MockEmbedder`) emit L2-normalised vectors, so `‖a-b‖² = 2 - 2·cos` and
+/// therefore `cos = 1 - d²/2`.
+fn cosine_from_l2(distance: f32) -> f32 {
+    1.0 - (distance * distance) / 2.0
+}
+
+/// Drop knowledge-base hits whose implied cosine relevance is below the floor.
+///
+/// A non-positive floor disables filtering (current behaviour). When a
+/// positive floor would filter every hit, the single closest hit is kept so
+/// the EVIDENCE block never silently empties on a KB that did return matches.
+fn filter_hits_by_relevance(hits: Vec<VectorHit>, min_relevance: f32) -> Vec<VectorHit> {
+    if min_relevance <= 0.0 || hits.is_empty() {
+        return hits;
+    }
+    let kept: Vec<VectorHit> = hits
+        .iter()
+        .filter(|h| cosine_from_l2(h.distance) >= min_relevance)
+        .cloned()
+        .collect();
+    if !kept.is_empty() {
+        return kept;
+    }
+    // top-1 fallback: keep the closest (lowest L2 distance) hit.
+    hits.into_iter()
+        .min_by(|a, b| a.distance.total_cmp(&b.distance))
+        .into_iter()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -854,6 +897,48 @@ mod tests {
         CompletionResponse, MockProvider, ProviderCapabilities, ProviderScope, Usage,
     };
     use conclave_rag::{MockEmbedder, RepositoryLayout};
+
+    fn hit(id: &str, distance: f32) -> VectorHit {
+        VectorHit {
+            chunk_id: id.to_owned(),
+            document_id: format!("doc-{id}"),
+            text: format!("text {id}"),
+            distance,
+        }
+    }
+
+    #[test]
+    fn cosine_from_l2_maps_unit_vectors() {
+        // Identical vectors: distance 0 -> cosine 1.
+        assert!((cosine_from_l2(0.0) - 1.0).abs() < 1e-6);
+        // Orthogonal unit vectors: distance sqrt(2) -> cosine 0.
+        assert!(cosine_from_l2(std::f32::consts::SQRT_2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn relevance_floor_disabled_keeps_all_hits() {
+        let hits = vec![hit("a", 0.2), hit("b", 1.41)];
+        let kept = filter_hits_by_relevance(hits.clone(), 0.0);
+        assert_eq!(kept.len(), 2);
+    }
+
+    #[test]
+    fn relevance_floor_drops_below_threshold() {
+        // distance 0.5 -> cosine 0.875 (kept); distance 1.3 -> cosine ~0.155 (dropped).
+        let hits = vec![hit("near", 0.5), hit("far", 1.3)];
+        let kept = filter_hits_by_relevance(hits, 0.5);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].chunk_id, "near");
+    }
+
+    #[test]
+    fn relevance_floor_keeps_closest_when_all_below() {
+        // Both are orthogonal-ish; the floor filters both, so the closest survives.
+        let hits = vec![hit("closest", 1.30), hit("farther", 1.40)];
+        let kept = filter_hits_by_relevance(hits, 0.9);
+        assert_eq!(kept.len(), 1, "top-1 fallback must keep one hit");
+        assert_eq!(kept[0].chunk_id, "closest");
+    }
 
     fn sample_workspace() -> Workspace {
         Workspace {
