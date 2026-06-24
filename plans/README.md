@@ -26,6 +26,7 @@ under "Audited but not planned" — ask for a plan for any of them.
 | 009 | Strict CSP in tauri.conf.json (+ devCsp) | P2 | S | — | DONE (e7d6c38) — ⚠ needs manual dev-run check |
 | 010 | Atomic draft+attachments insert (`insert_case_with_attachments`) | P2 | S | — | DONE (31dca12) |
 | 011 | Cases.tsx decomposition: 5,186 → 1,203 lines, 12 modules under routes/cases/, useBatchProgress characterized | P2 | L | 005 | DONE (4299428…f30f35f, 6 commits) — ⚠ needs manual functional check |
+| 012 | [Clinical reasoning quality: RAG signal, calibration, committed recs, colorectal priors, eval harness](012-clinical-reasoning-quality.md) — fix the four blinded-CMT-validation defects | P1 | XL | — | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)
 
@@ -75,7 +76,8 @@ All five items above were implemented in the 2026-06-11 session (rows
   `rules add|list|remove`; `VerdictOptions.rules_block` defaults to `""` and
   nothing populates it from storage anywhere (desktop or CLI). Either build
   workspace rules (PLAN.md scope) or cut the claim (006 annotates it
-  meanwhile). M–L.
+  meanwhile). M–L. **Partially picked up by plan 012 (W4)**, which auto-loads
+  bundled specialty priors into `rules_block`; the general CRUD UI stays open.
 - **Phase 5/6 are shipped-but-invisible**: learning loop (case memory →
   past-cases prompt block) and online evidence (PubMed/Europe PMC + cache +
   `use_online_evidence`) are wired but documented as "deferred" and barely
