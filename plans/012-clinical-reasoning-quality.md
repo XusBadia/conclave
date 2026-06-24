@@ -231,7 +231,16 @@ real decision.
 
 ---
 
-## W4 — Always-on colorectal domain priors  *(P1, M, risk HIGH — clinician-gated)*
+## W4 — Always-on colorectal domain priors  *(DROPPED by maintainer decision)*
+
+> **Status: DROPPED.** Hardcoding clinical facts in the binary is stale-prone
+> and redundant: the model already knows standard colorectal oncology, and #4
+> is most likely a *symptom* of #1/#2/#3 (noisy RAG + over-cautious prompting),
+> which W1/W2/W3 address. We removed the priors and will check whether #4
+> resolves on revalidation. If a domain rule is still needed, its correct home
+> is **user-editable workspace rules** (clinician-owned, non-stale) via the
+> still-empty `rules_block` — not baked-in content. The text below is retained
+> for context only.
 
 Fixes #4. Decision taken: **always-on specialty priors via `rules_block`.**
 
