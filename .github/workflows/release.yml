@@ -88,8 +88,13 @@ jobs:
           # shipping x86_64-apple-darwin prebuilt binaries with ort 2.x, so a
           # universal build is not currently feasible without compiling ORT
           # from source. Intel Macs (≤ 2020) are excluded from this release.
+          # macos-26 (Xcode 26 / macOS 26 SDK), not macos-latest: the Apple
+          # Intelligence provider links `-framework FoundationModels`, which
+          # only exists in the macOS 26 SDK. On the older macos-latest image
+          # (Xcode 16.x) the linker fails with "framework 'FoundationModels'
+          # not found". Pin to macos-26 to match the local Tahoe build.
           - name: macos-arm64
-            os: macos-latest
+            os: macos-26
             rust-targets: aarch64-apple-darwin
             tauri-args: --target aarch64-apple-darwin
           # ubuntu-24.04 (glibc 2.39), not 22.04: the ONNX Runtime prebuilt
@@ -178,7 +183,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # macos-26 for the FoundationModels SDK (see build-tauri note above).
+        os: [ubuntu-latest, macos-26, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
