@@ -26,7 +26,7 @@ export function Header() {
           href="/"
           className="flex items-center gap-2.5 text-ink hover:opacity-80 transition-opacity"
         >
-          <Logo size={22} ariaLabel="Conclave" />
+          <Logo size={22} ariaLabel="Conclave MD" />
           <Wordmark />
         </Link>
         <nav className="hidden md:flex items-center gap-7 text-[13px] text-ink-dim ml-4">

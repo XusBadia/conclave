@@ -34,7 +34,7 @@ pub const APP_NAME: &str = "conclave";
 /// decisions and must not be used as a substitute for qualified medical
 /// judgement.
 pub const MEDICAL_DISCLAIMER_EN: &str = "\
-Conclave is an experimental clinical decision-support assistant. It is NOT a \
+Conclave MD is an experimental clinical decision-support assistant. It is NOT a \
 medical device and does NOT replace the judgement of a qualified clinician. \
 Outputs may be incomplete, biased, or wrong. Always validate any suggestion \
 against primary sources and institutional protocols before acting on it.";
@@ -45,7 +45,7 @@ against primary sources and institutional protocols before acting on it.";
 /// both versions in the core crate ensures the text never drifts between
 /// the CLI (English by default) and the GUI (locale-aware).
 pub const MEDICAL_DISCLAIMER_ES: &str = "\
-Conclave es un asistente experimental de soporte a la decisión clínica. NO es \
+Conclave MD es un asistente experimental de soporte a la decisión clínica. NO es \
 un dispositivo médico y NO sustituye el criterio de un profesional sanitario \
 cualificado. Las respuestas pueden ser incompletas, sesgadas o erróneas. \
 Verifica siempre cualquier sugerencia frente a las fuentes primarias y los \

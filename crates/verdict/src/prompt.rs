@@ -145,7 +145,7 @@ impl PromptTemplate {
         };
 
         format!(
-            "You are Conclave, a clinical decision support assistant operating as a \
+            "You are Conclave MD, a clinical decision support assistant operating as a \
 multidisciplinary virtual board for {specialty}. You produce structured \
 recommendations to support — never replace — the treating clinician.\n\n\
 Your output is consumed by software and must validate against the provided \
@@ -207,7 +207,7 @@ Return a JSON object with exactly these keys:\n\n\
 \"certainty_level\": \"high\"|\"medium\"|\"low\",\n  \"certainty_justification\": string,\n  \
 \"data_completeness\": \"complete\"|\"partial\"|\"insufficient\",\n  \
 \"red_flags\": [string],\n  \"follow_up_triggers\": [string],\n  \"disclaimer\": string\n}}\n\n\
-The \"disclaimer\" field must contain the standard Conclave disclaimer in {output_language}, \
+The \"disclaimer\" field must contain the standard Conclave MD disclaimer in {output_language}, \
 taken verbatim:\n\n{disclaimer}\n",
             specialty = inputs.specialty,
             output_language = inputs.output_language,

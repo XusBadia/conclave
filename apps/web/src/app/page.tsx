@@ -6,7 +6,7 @@ import type { Metadata } from "next";
 // React 19 hoists <meta> and <script> elements automatically into <head>.
 
 export const metadata: Metadata = {
-  title: "Conclave",
+  title: "Conclave MD",
   robots: { index: false, follow: false },
 };
 
@@ -24,7 +24,7 @@ export default function RootRedirect() {
   return (
     <>
       <meta httpEquiv="refresh" content="0;url=/es/" />
-      <link rel="canonical" href="https://conclave.app/es/" />
+      <link rel="canonical" href="https://conclavemd.com/es/" />
       <script
         dangerouslySetInnerHTML={{ __html: REDIRECT_SCRIPT }}
         suppressHydrationWarning
@@ -32,7 +32,7 @@ export default function RootRedirect() {
       <noscript>
         <p style={{ padding: 24, fontFamily: "system-ui", textAlign: "center" }}>
           <a href="/es/" style={{ color: "currentColor" }}>
-            Continuar a Conclave / Continue to Conclave →
+            Continuar a Conclave MD / Continue to Conclave MD →
           </a>
         </p>
       </noscript>

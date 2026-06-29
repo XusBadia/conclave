@@ -1,9 +1,9 @@
-# Running Conclave
+# Running Conclave MD
 
 This file walks through everything you need to launch the desktop app and
 the CLI on macOS.
 
-> Conclave is **not a medical device**. Anything that comes out of it is
+> Conclave MD is **not a medical device**. Anything that comes out of it is
 > decision support, not a clinical decision. You accept the medical
 > disclaimer the first time you launch the app; the CLI prints it on
 > every invocation.

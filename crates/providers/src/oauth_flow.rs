@@ -287,7 +287,7 @@ impl OpenAILoginFlow {
             &mut stream,
             "200 OK",
             "<html><body style=\"font-family: -apple-system, sans-serif; padding: 4rem; \
-text-align: center; color: #0b0f14;\"><h1>Conclave — signed in</h1><p>You can close this window.</p></body></html>",
+text-align: center; color: #0b0f14;\"><h1>Conclave MD — signed in</h1><p>You can close this window.</p></body></html>",
         )
         .await;
 

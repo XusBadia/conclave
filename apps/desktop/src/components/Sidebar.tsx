@@ -9,6 +9,7 @@ import {
 
 import { cn } from "../lib/cn";
 import { Logo } from "./Logo";
+import { MdSuffix } from "./MdSuffix";
 import { ProviderStatusPill } from "./ProviderStatusPill";
 import { metaFor } from "../lib/providers";
 import type { ProviderInfo } from "../lib/ipc";
@@ -49,6 +50,7 @@ export function Sidebar({
         <div className="leading-tight">
           <div className="font-mono text-[11px] uppercase tracking-[0.14em] text-ink">
             {t("app.brand")}
+            <MdSuffix />
           </div>
           <div className="mt-0.5 text-[10px] uppercase tracking-[0.1em] text-ink-faint">
             {t("sidebar.tagline")}

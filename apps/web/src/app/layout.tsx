@@ -23,7 +23,7 @@ const jetbrainsMono = localFont({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://conclave.app"),
+  metadataBase: new URL("https://conclavemd.com"),
   title: { default: SITE_NAME, template: "%s" },
   applicationName: SITE_NAME,
   authors: [{ name: "Xus Badia" }],

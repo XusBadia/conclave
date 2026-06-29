@@ -78,8 +78,8 @@ export default async function LocaleLayout(props: {
     license: "https://github.com/XusBadia/conclave/blob/main/LICENSE-MIT",
     disclaimer:
       locale === "es"
-        ? "Conclave no es un dispositivo médico. La autoridad final sobre cualquier decisión clínica siempre corresponde al profesional sanitario."
-        : "Conclave is not a medical device. Final authority over any clinical decision always rests with the healthcare professional.",
+        ? "Conclave MD no es un dispositivo médico. La autoridad final sobre cualquier decisión clínica siempre corresponde al profesional sanitario."
+        : "Conclave MD is not a medical device. Final authority over any clinical decision always rests with the healthcare professional.",
   };
 
   return (

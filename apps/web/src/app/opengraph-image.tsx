@@ -2,7 +2,7 @@ import { ImageResponse } from "next/og";
 
 export const dynamic = "force-static";
 
-export const alt = "Conclave — A virtual committee for clinical decision support";
+export const alt = "Conclave MD — A virtual committee for clinical decision support";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
@@ -42,6 +42,8 @@ export default async function OpenGraphImage() {
           </svg>
           <div
             style={{
+              display: "flex",
+              alignItems: "center",
               fontFamily: "'JetBrains Mono', monospace",
               fontSize: 26,
               color: "#121214",
@@ -50,6 +52,17 @@ export default async function OpenGraphImage() {
             }}
           >
             Conclave
+            <span
+              style={{
+                marginLeft: 3,
+                color: "#0e7490",
+                fontSize: 15,
+                fontWeight: 500,
+                transform: "translateY(-10px)",
+              }}
+            >
+              MD
+            </span>
           </div>
         </div>
 

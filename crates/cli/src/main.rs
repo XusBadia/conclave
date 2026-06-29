@@ -45,8 +45,8 @@ mod commands;
     name = "conclave-cli",
     bin_name = "conclave-cli",
     version,
-    about = "Conclave — virtual multidisciplinary clinical committee (CLI)",
-    long_about = "Conclave runs a virtual multidisciplinary committee over a clinical \
+    about = "Conclave MD — virtual multidisciplinary clinical committee (CLI)",
+    long_about = "Conclave MD runs a virtual multidisciplinary committee over a clinical \
                   question using a configurable panel of LLM providers.\n\n\
                   This binary is the testing entry point used while the desktop UI is \
                   under construction."
@@ -101,7 +101,7 @@ enum Command {
     Skills(commands::skills::SkillsArgs),
     /// Inspect, list and test configured LLM providers.
     Providers(commands::providers::ProvidersArgs),
-    /// Manage Conclave workspaces (the per-project config + data root).
+    /// Manage Conclave MD workspaces (the per-project config + data root).
     Workspace(commands::workspace::WorkspaceArgs),
 }
 
@@ -159,7 +159,7 @@ fn resolve_paths(workspace_root: Option<&std::path::Path>) -> Result<Paths> {
 
 fn print_disclaimer() {
     eprintln!("──────────────────────────────────────────────────────────────────────");
-    eprintln!("  CONCLAVE — MEDICAL DISCLAIMER");
+    eprintln!("  CONCLAVE MD — MEDICAL DISCLAIMER");
     eprintln!("──────────────────────────────────────────────────────────────────────");
     for line in wrap_paragraph(MEDICAL_DISCLAIMER, 70) {
         eprintln!("  {line}");

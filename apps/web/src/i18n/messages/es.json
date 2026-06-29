@@ -1,8 +1,8 @@
 {
   "meta": {
-    "title": "Conclave — Comité virtual para apoyo a la decisión clínica",
+    "title": "Conclave MD — Comité virtual para apoyo a la decisión clínica",
     "description": "Un comité de IA que delibera contra sí mismo antes de responder. 100% local, sin telemetría. Tus documentos, tus claves, tu equipo.",
-    "ogAlt": "Conclave — Comité virtual para apoyo a la decisión clínica"
+    "ogAlt": "Conclave MD — Comité virtual para apoyo a la decisión clínica"
   },
   "nav": {
     "howItWorks": "Cómo funciona",
@@ -20,19 +20,19 @@
     "eyebrow": "Local-first · Sin telemetría · No es un dispositivo médico",
     "h1Line1": "Un comité virtual.",
     "h1Line2": "En tu máquina.",
-    "dek": "Conclave delibera cada caso contra sí mismo —cuatro pasos, una crítica adversarial— antes de proponer un veredicto. Tú decides.",
+    "dek": "Conclave MD delibera cada caso contra sí mismo —cuatro pasos, una crítica adversarial— antes de proponer un veredicto. Tú decides.",
     "ctaPrimary": "Descargar para macOS",
     "ctaSecondary": "Ver código fuente",
     "mockupLabel": "Vista previa de la app"
   },
   "how": {
     "title": "Cuatro pasos. Una sola respuesta.",
-    "subtitle": "La mayoría de las herramientas de IA te dan la primera idea que se les ocurre. Conclave la pone a debate.",
+    "subtitle": "La mayoría de las herramientas de IA te dan la primera idea que se les ocurre. Conclave MD la pone a debate.",
     "steps": {
       "briefing": {
         "number": "01",
         "title": "Briefing",
-        "desc": "Conclave de-identifica el caso y recupera evidencia de tus documentos antes de que ningún LLM lo vea.",
+        "desc": "Conclave MD de-identifica el caso y recupera evidencia de tus documentos antes de que ningún LLM lo vea.",
         "label": "DE-IDENTIFICACIÓN + RAG"
       },
       "draft": {
@@ -57,7 +57,7 @@
   },
   "privacy": {
     "title": "Datos que nunca salen del equipo.",
-    "subtitle": "Conclave fue diseñado para que la pregunta más incómoda de cualquier herramienta clínica —¿dónde van mis datos de pacientes?— tenga una respuesta de una palabra: aquí.",
+    "subtitle": "Conclave MD fue diseñado para que la pregunta más incómoda de cualquier herramienta clínica —¿dónde van mis datos de pacientes?— tenga una respuesta de una palabra: aquí.",
     "cards": [
       {
         "title": "100% local",
@@ -69,10 +69,10 @@
       },
       {
         "title": "Tus claves, tu cuenta",
-        "desc": "Eliges qué motor LLM usar y conectas tu propia clave de API. Conclave nunca proxea tu tráfico ni guarda tus prompts."
+        "desc": "Eliges qué motor LLM usar y conectas tu propia clave de API. Conclave MD nunca proxea tu tráfico ni guarda tus prompts."
       }
     ],
-    "disclaimer": "Conclave no es un dispositivo médico. Es una herramienta de apoyo: el clínico mantiene siempre la autoridad final sobre cualquier decisión.",
+    "disclaimer": "Conclave MD no es un dispositivo médico. Es una herramienta de apoyo: el clínico mantiene siempre la autoridad final sobre cualquier decisión.",
     "disclaimerLink": "Leer el disclaimer completo"
   },
   "features": {
@@ -81,7 +81,7 @@
     "cards": [
       {
         "title": "Documentos como fuente de verdad",
-        "desc": "Sube PDFs, DOCX y notas. Conclave los segmenta, los embebe y los cita por número de página."
+        "desc": "Sube PDFs, DOCX y notas. Conclave MD los segmenta, los embebe y los cita por número de página."
       },
       {
         "title": "Workspaces por especialidad",
@@ -107,8 +107,8 @@
   },
   "providers": {
     "title": "Tu motor. Tus reglas.",
-    "subtitle": "Conclave es agnóstico al proveedor. Trae las claves que ya pagas o usa modelos locales completamente offline.",
-    "caption": "Conclave nunca proxea tu tráfico. Hablas directamente con el proveedor que elijas.",
+    "subtitle": "Conclave MD es agnóstico al proveedor. Trae las claves que ya pagas o usa modelos locales completamente offline.",
+    "caption": "Conclave MD nunca proxea tu tráfico. Hablas directamente con el proveedor que elijas.",
     "list": [
       "Anthropic Claude",
       "OpenAI",
@@ -121,7 +121,7 @@
   },
   "download": {
     "eyebrow": "Próximamente",
-    "title": "Conclave 0.1 — próximamente",
+    "title": "Conclave MD 0.1 — próximamente",
     "subtitle": "Estamos cerrando la primera release pública. Observa el repositorio para recibir el aviso cuando los binarios estén disponibles para macOS, Windows y Linux.",
     "ctaPrimary": "Observar el repo en GitHub",
     "ctaSecondary": "Ver código fuente",
@@ -139,10 +139,10 @@
   },
   "faq": {
     "title": "Preguntas frecuentes",
-    "subtitle": "Las dudas más habituales antes de instalar Conclave.",
+    "subtitle": "Las dudas más habituales antes de instalar Conclave MD.",
     "items": [
       {
-        "q": "¿Conclave es un dispositivo médico?",
+        "q": "¿Conclave MD es un dispositivo médico?",
         "a": "No. Es una herramienta de apoyo a la decisión clínica. La autoridad final sobre cualquier decisión médica siempre es del profesional sanitario. Lee el disclaimer completo antes de usarlo en escenarios reales."
       },
       {
@@ -163,7 +163,7 @@
       },
       {
         "q": "¿Puedo usarlo con pacientes reales?",
-        "a": "Es tu responsabilidad profesional decidirlo. Lee el disclaimer y considera tu marco normativo local. Conclave está diseñado para asistir, no para reemplazar el juicio clínico."
+        "a": "Es tu responsabilidad profesional decidirlo. Lee el disclaimer y considera tu marco normativo local. Conclave MD está diseñado para asistir, no para reemplazar el juicio clínico."
       },
       {
         "q": "¿Hay versión para Linux?",
@@ -195,7 +195,7 @@
       "issues": "Issues",
       "license": "Licencia"
     },
-    "copyright": "Conclave es software de apoyo a la decisión clínica, no un dispositivo médico.",
+    "copyright": "Conclave MD es software de apoyo a la decisión clínica, no un dispositivo médico.",
     "version": "Versión {version}",
     "year": "© {year}"
   },
@@ -214,7 +214,7 @@
   },
   "disclaimerPage": {
     "title": "Disclaimer médico",
-    "subtitle": "Lo que Conclave es —y lo que no es.",
+    "subtitle": "Lo que Conclave MD es —y lo que no es.",
     "backHome": "Volver al inicio"
   },
   "privacyPage": {
@@ -225,19 +225,19 @@
     "sections": {
       "intro": {
         "title": "Resumen en una frase",
-        "body": "Conclave es una aplicación de escritorio. No recogemos absolutamente nada sobre ti ni sobre tus pacientes en nuestros servidores, porque no tenemos servidores."
+        "body": "Conclave MD es una aplicación de escritorio. No recogemos absolutamente nada sobre ti ni sobre tus pacientes en nuestros servidores, porque no tenemos servidores."
       },
       "data": {
         "title": "Datos que procesa la aplicación",
-        "body": "Conclave almacena en tu equipo los documentos que subes, los casos que analizas y los veredictos generados. Estos datos viven en SQLite y LanceDB locales. Nunca se envían a servidores controlados por nosotros."
+        "body": "Conclave MD almacena en tu equipo los documentos que subes, los casos que analizas y los veredictos generados. Estos datos viven en SQLite y LanceDB locales. Nunca se envían a servidores controlados por nosotros."
       },
       "llm": {
         "title": "Proveedores LLM externos",
-        "body": "Si configuras Conclave con Anthropic, OpenAI, OpenRouter o un proveedor remoto similar, las consultas pasan por una capa de de-identificación local y después se envían a ese proveedor bajo tu propia clave de API. La política de privacidad de ese proveedor aplica a esos datos. Si quieres cero salida de datos, usa Ollama o Apple Intelligence."
+        "body": "Si configuras Conclave MD con Anthropic, OpenAI, OpenRouter o un proveedor remoto similar, las consultas pasan por una capa de de-identificación local y después se envían a ese proveedor bajo tu propia clave de API. La política de privacidad de ese proveedor aplica a esos datos. Si quieres cero salida de datos, usa Ollama o Apple Intelligence."
       },
       "telemetry": {
         "title": "Telemetría y analítica",
-        "body": "Ninguna. Conclave no envía datos de uso, no incluye Google Analytics ni equivalente, no usa cookies, no registra qué documentos abres ni qué casos analizas."
+        "body": "Ninguna. Conclave MD no envía datos de uso, no incluye Google Analytics ni equivalente, no usa cookies, no registra qué documentos abres ni qué casos analizas."
       },
       "website": {
         "title": "Esta web",
@@ -257,15 +257,15 @@
     "sections": {
       "license": {
         "title": "Licencia",
-        "body": "Conclave se distribuye bajo licencia dual AGPL-3.0 y MIT. Puedes usar la versión open source bajo AGPL, o adquirir una licencia comercial para usos que no encajen con AGPL. Consulta el archivo LICENSE en el repositorio para detalles."
+        "body": "Conclave MD se distribuye bajo licencia dual AGPL-3.0 y MIT. Puedes usar la versión open source bajo AGPL, o adquirir una licencia comercial para usos que no encajen con AGPL. Consulta el archivo LICENSE en el repositorio para detalles."
       },
       "warranty": {
         "title": "Garantía",
-        "body": "Conclave se entrega \"tal cual\", sin garantía expresa ni implícita. No nos hacemos responsables del uso que se dé al software en contextos clínicos. El usuario asume todos los riesgos."
+        "body": "Conclave MD se entrega \"tal cual\", sin garantía expresa ni implícita. No nos hacemos responsables del uso que se dé al software en contextos clínicos. El usuario asume todos los riesgos."
       },
       "medical": {
         "title": "Uso médico",
-        "body": "Conclave no es un dispositivo médico ni un sustituto del juicio clínico profesional. Cualquier decisión clínica basada total o parcialmente en la salida de Conclave es responsabilidad exclusiva del profesional sanitario que la tome. Consulta el disclaimer médico completo."
+        "body": "Conclave MD no es un dispositivo médico ni un sustituto del juicio clínico profesional. Cualquier decisión clínica basada total o parcialmente en la salida de Conclave MD es responsabilidad exclusiva del profesional sanitario que la tome. Consulta el disclaimer médico completo."
       },
       "modifications": {
         "title": "Modificaciones",

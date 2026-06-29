@@ -6,7 +6,7 @@ type LogoProps = {
   title?: string;
 };
 
-export function Logo({ size = 28, className, title = "Conclave" }: LogoProps) {
+export function Logo({ size = 28, className, title = "Conclave MD" }: LogoProps) {
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"

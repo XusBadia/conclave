@@ -489,9 +489,9 @@ export default function CaseVerdictPDF({
   return (
     <Document
       title={`${t("cases.pdf.title")} — ${detail.case.patient_label || detail.case.id.slice(0, 8)}`}
-      author="Conclave"
-      creator="Conclave"
-      producer="Conclave"
+      author="Conclave MD"
+      creator="Conclave MD"
+      producer="Conclave MD"
     >
       <Page size="A4" style={styles.page}>
         <Header
@@ -565,7 +565,7 @@ function Header({
 
   return (
     <View style={styles.header} wrap={false}>
-      <Text style={styles.wordmark}>Conclave</Text>
+      <Text style={styles.wordmark}>Conclave MD</Text>
       <Text style={styles.h1}>{t("cases.pdf.title")}</Text>
       <Text style={styles.patientLabel}>{patientLabel}</Text>
       <View style={styles.metaStrip}>
@@ -945,7 +945,7 @@ function Footer({
   return (
     <View style={styles.footer} fixed>
       <Text style={styles.footerText}>
-        <Text style={styles.footerWordmark}>Conclave</Text>
+        <Text style={styles.footerWordmark}>Conclave MD</Text>
         {` · ${t("cases.pdf.footer_generated", { date: generatedAtText })}`}
       </Text>
       <Text style={styles.footerId}>{caseId}</Text>

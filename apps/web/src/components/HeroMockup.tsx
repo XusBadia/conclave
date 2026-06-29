@@ -1,5 +1,5 @@
 /**
- * Stylized SVG mockup of the Conclave desktop app — a placeholder until a
+ * Stylized SVG mockup of the Conclave MD desktop app — a placeholder until a
  * real screenshot is exported. Shows the macOS chrome (title bar dots),
  * the sidebar with workspaces, the case list, and a verdict pane mid-
  * deliberation. Inline SVG = zero requests, scales perfectly, respects
@@ -13,7 +13,7 @@ export function HeroMockup({ className }: { className?: string }) {
         className ?? "",
       ].join(" ")}
       role="img"
-      aria-label="Vista del app Conclave en pleno proceso de deliberación"
+      aria-label="Vista del app Conclave MD en pleno proceso de deliberación"
     >
       <svg
         xmlns="http://www.w3.org/2000/svg"
@@ -36,7 +36,7 @@ export function HeroMockup({ className }: { className?: string }) {
           fill="currentColor"
           fillOpacity="0.4"
         >
-          Conclave — Cardiología
+          Conclave MD — Cardiología
         </text>
 
         {/* Sidebar */}

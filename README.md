@@ -1,6 +1,6 @@
-# Conclave Bootstrap
+# Conclave MD Bootstrap
 
-Everything you need to hand to Claude Code to build Conclave end-to-end.
+Everything you need to hand to Claude Code to build Conclave MD end-to-end.
 
 ## What’s inside
 
@@ -64,7 +64,7 @@ For each subsequent phase:
 1. Paste the corresponding `phase-N-*.md` file as the first message.
 1. Claude Code will plan, post the plan, then implement, then commit
    and push.
-1. Come back to the Conclave chat with me (Claude) if you want to
+1. Come back to the Conclave MD chat with me (Claude) if you want to
    refine anything before the next phase.
 
 ### Step 4 — Phase 4 needs a checkpoint
@@ -90,7 +90,7 @@ on autopilot — that’s the 80%-of-the-product moment.
 
 ## Local verification (Git hook)
 
-Conclave runs **no CI on push or PR** — the project is local-first and so
+Conclave MD runs **no CI on push or PR** — the project is local-first and so
 is the verification loop. After cloning, activate the versioned Git hook
 once per clone:
 
