@@ -54,10 +54,8 @@ jobs:
                 '## Install',
                 '',
                 '- **macOS (Apple Silicon — M1/M2/M3/M4)**: download the `.dmg`, open it,',
-                '  drag `Conclave.app` to Applications. First launch is blocked by Gatekeeper',
-                '  because the app is not yet signed by Apple. Workaround: open System',
-                '  Settings → Privacy & Security and click "Open Anyway" for Conclave.',
-                '  Signing/notarisation lands when we enrol in the Apple Developer Program.',
+                '  and drag `Conclave.app` to Applications. The app is signed and',
+                '  notarised by Apple, so it opens without Gatekeeper warnings.',
                 '  Intel Macs are not supported in this release.',
                 '- **Windows**: download the `.msi` and run it.',
                 '- **Linux**: download the `.deb` (Debian/Ubuntu) or `.AppImage` (any distro).',
@@ -148,6 +146,15 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS code signing + notarisation. Unused (empty) on Windows/Linux
+          # runners; on macOS, tauri-action imports the Developer ID cert and
+          # notarises the .dmg/.app via notarytool. All values are repo secrets.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           projectPath: apps/desktop
