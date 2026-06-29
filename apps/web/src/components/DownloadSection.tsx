@@ -1,5 +1,6 @@
 import { useTranslations } from "next-intl";
 import { DownloadButton } from "./DownloadButton";
+import { PlatformLinks } from "./PlatformLinks";
 import { Reveal } from "./Reveal";
 import { SectionEyebrow } from "./SectionEyebrow";
 import { downloads, RELEASES_AVAILABLE } from "~/lib/downloads";
@@ -61,13 +62,9 @@ export function DownloadSection() {
         </Reveal>
 
         {RELEASES_AVAILABLE && (
-          <div className="mt-10 inline-flex flex-wrap gap-2 font-mono text-[12px] uppercase tracking-widest text-ink-subtle">
-            <span>{t("macos")}</span>
-            <span aria-hidden>·</span>
-            <span>{t("windows")}</span>
-            <span aria-hidden>·</span>
-            <span>{t("linux")}</span>
-          </div>
+          <Reveal delay={360}>
+            <PlatformLinks />
+          </Reveal>
         )}
 
         <Reveal delay={400}>

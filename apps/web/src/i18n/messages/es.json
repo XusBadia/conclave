@@ -14,10 +14,11 @@
     "skipToContent": "Saltar al contenido"
   },
   "header": {
-    "download": "Descargar"
+    "download": "Descargar",
+    "github": "Ver código en GitHub"
   },
   "hero": {
-    "eyebrow": "Local-first · Sin telemetría · No es un dispositivo médico",
+    "eyebrow": "Local-first · Código abierto · Sin telemetría · No es un dispositivo médico",
     "h1Line1": "Un comité virtual.",
     "h1Line2": "En tu máquina.",
     "dek": "Conclave MD delibera cada caso contra sí mismo —cuatro pasos, una crítica adversarial— antes de proponer un veredicto. Tú decides.",
@@ -120,12 +121,14 @@
     ]
   },
   "download": {
-    "eyebrow": "Próximamente",
-    "title": "Conclave MD 0.1 — próximamente",
-    "subtitle": "Estamos cerrando la primera release pública. Observa el repositorio para recibir el aviso cuando los binarios estén disponibles para macOS, Windows y Linux.",
-    "ctaPrimary": "Observar el repo en GitHub",
+    "eyebrow": "Disponible ya",
+    "title": "Descarga Conclave MD",
+    "subtitle": "Gratis y de código abierto. Descarga el instalador firmado para tu plataforma — macOS, Windows o Linux.",
+    "ctaPrimary": "Descargar para macOS",
     "ctaSecondary": "Ver código fuente",
-    "footnote": "Sin lista de espera. Sin email. El día que esté listo, lo verás en GitHub Releases.",
+    "footnote": "Firmado y notarizado. Código abierto bajo MIT — cada build sale directa de un commit etiquetado en GitHub Releases, así puedes inspeccionar exactamente lo que ejecutas.",
+    "detected": "Recomendado",
+    "downloadVerb": "Descargar",
     "macos": "macOS",
     "windows": "Windows",
     "linux": "Linux",
@@ -134,7 +137,7 @@
       "title": "Requisitos del sistema",
       "macos": "macOS 11 (Big Sur) o posterior con chip Apple (M1/M2/M3/M4).",
       "ai": "Las funciones de Apple Intelligence requieren macOS 26 (Tahoe).",
-      "other": "El soporte para Windows y Linux llegará en una versión posterior."
+      "other": "Windows 10+ (.msi) y Linux (.AppImage o .deb, glibc 2.39+ — Ubuntu 24.04+, Fedora 39+)."
     }
   },
   "faq": {

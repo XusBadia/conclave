@@ -14,10 +14,11 @@
     "skipToContent": "Skip to content"
   },
   "header": {
-    "download": "Download"
+    "download": "Download",
+    "github": "View source on GitHub"
   },
   "hero": {
-    "eyebrow": "Local-first · No telemetry · Not a medical device",
+    "eyebrow": "Local-first · Open source · No telemetry · Not a medical device",
     "h1Line1": "A virtual committee.",
     "h1Line2": "On your machine.",
     "dek": "Conclave MD debates every case against itself —four passes, one adversarial critique— before proposing a verdict. You decide.",
@@ -120,12 +121,14 @@
     ]
   },
   "download": {
-    "eyebrow": "Coming soon",
-    "title": "Conclave MD 0.1 — coming soon",
-    "subtitle": "We're closing the first public release. Watch the repository to be notified when binaries are available for macOS, Windows, and Linux.",
-    "ctaPrimary": "Watch the repo on GitHub",
+    "eyebrow": "Available now",
+    "title": "Download Conclave MD",
+    "subtitle": "Free and open source. Grab the signed installer for your platform — macOS, Windows, or Linux.",
+    "ctaPrimary": "Download for macOS",
     "ctaSecondary": "View source",
-    "footnote": "No waitlist. No email. The day it ships, you'll see it on GitHub Releases.",
+    "footnote": "Signed and notarised. Open source under MIT — every build comes straight from a tagged commit on GitHub Releases, so you can inspect exactly what you run.",
+    "detected": "Recommended",
+    "downloadVerb": "Download",
     "macos": "macOS",
     "windows": "Windows",
     "linux": "Linux",
@@ -134,7 +137,7 @@
       "title": "System requirements",
       "macos": "macOS 11 (Big Sur) or later on Apple Silicon (M1/M2/M3/M4).",
       "ai": "Apple Intelligence features require macOS 26 (Tahoe).",
-      "other": "Windows and Linux support is coming in a later release."
+      "other": "Windows 10+ (.msi) and Linux (.AppImage or .deb, glibc 2.39+ — Ubuntu 24.04+, Fedora 39+)."
     }
   },
   "faq": {
