@@ -164,8 +164,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # macOS code signing + notarisation. Unused (empty) on Windows/Linux
-          # runners; on macOS, tauri-action imports the Developer ID cert and
-          # notarises the .dmg/.app via notarytool. All values are repo secrets.
+          # runners; on macOS, tauri-action imports the Developer ID cert,
+          # signs, and notarises + staples the .app via notarytool (the .dmg
+          # wrapper is handled by the next step). All values are repo secrets.
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -176,6 +177,33 @@ jobs:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           projectPath: apps/desktop
           args: ${{ matrix.platform.tauri-args }}
+
+      # tauri-action notarises and staples the .app, but the .dmg it then wraps
+      # around it is only signed — a freshly-downloaded dmg can therefore trip
+      # Gatekeeper once on mount ("cannot verify… is free of malware"). Notarise
+      # and staple the dmg itself, then replace the asset tauri-action already
+      # uploaded to this run's draft so the public download is fully clean.
+      - name: notarise & staple the macOS dmg
+        if: matrix.platform.name == 'macos-arm64'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          dmg=$(ls target/aarch64-apple-darwin/release/bundle/dmg/*.dmg)
+          echo "Notarising $dmg"
+          xcrun notarytool submit "$dmg" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$dmg"
+          xcrun stapler validate "$dmg"
+          echo "Re-uploading stapled dmg to the draft release"
+          gh release upload "${{ github.ref_name }}" "$dmg" \
+            --clobber --repo "${{ github.repository }}"
 
   build-cli:
     name: cli / ${{ matrix.os }}
