@@ -1,142 +1,155 @@
-# Conclave MD Bootstrap
+<div align="center">
 
-Everything you need to hand to Claude Code to build Conclave MD end-to-end.
+<img src=".github/assets/banner.svg" alt="Conclave MD — a virtual clinical committee, on your machine" width="100%">
 
-## What’s inside
+<br>
 
-```
-conclave-bootstrap/
-├── README.md                  ← you are here
-├── docs/                      ← copy these into your repo at /docs
-│   ├── README.md
-│   ├── ARCHITECTURE.md
-│   ├── PLAN.md
-│   ├── PROMPTING.md
-│   ├── DISCLAIMER.md
-│   └── CONTRIBUTING.md
-└── prompts/                   ← paste one at a time to Claude Code
-    ├── phase-0-foundations.md
-    ├── phase-1-knowledge-base.md
-    ├── phase-2-providers.md
-    ├── phase-3-deidentification.md
-    ├── phase-4-verdict-engine.md
-    ├── phase-5-learning-loop.md
-    ├── phase-6-online-evidence.md
-    └── phase-7-8-ui-and-distribution.md
-```
+**A local-first clinical decision-support desktop app — a virtual multidisciplinary committee that deliberates over _your_ protocols, on _your_ machine.**
 
-## How to use
+<br>
 
-### Step 1 — Seed the repo with the docs
+[![Release](https://img.shields.io/github/v/release/XusBadia/conclave?style=flat-square&color=0e7490&label=release&sort=semver)](https://github.com/XusBadia/conclave/releases)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=flat-square)](#license)
+[![Platforms](https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-3a424a?style=flat-square)](#install)
+[![Privacy](https://img.shields.io/badge/privacy-local--first%20%C2%B7%20no%20telemetry-0e7490?style=flat-square)](#privacy-by-design)
+[![Stars](https://img.shields.io/github/stars/XusBadia/conclave?style=flat-square&color=e2b340)](https://github.com/XusBadia/conclave/stargazers)
 
-The repo exists already. From iPhone, you have two easy ways to add
-these files:
+[![Rust](https://img.shields.io/badge/Rust-000000?style=flat-square&logo=rust&logoColor=white)](#)
+[![Tauri 2](https://img.shields.io/badge/Tauri%202-24C8DB?style=flat-square&logo=tauri&logoColor=white)](#)
+[![React 18](https://img.shields.io/badge/React%2018-20232A?style=flat-square&logo=react&logoColor=61DAFB)](#)
+[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)](#)
 
-**Option A — Tell Claude Code to do it.**
+[**Download**](https://github.com/XusBadia/conclave/releases/latest) ·
+[Build from source](#build-from-source) ·
+[How it works](#how-it-works) ·
+[Privacy](#privacy-by-design)
 
-After your current Phase 0 session ends (or in a fresh one), paste:
+</div>
 
-> “I’m attaching seven Markdown files (the ones in `docs/`). Place them
-> in the `docs/` directory at the repo root, exactly as named, and
-> commit them with message `docs: add architecture, plan and guidelines`. Push to main.”
+---
 
-Then upload the seven files from `docs/` in the chat with Claude Code.
+Most AI tools hand you the first idea that comes to mind. **Conclave MD puts it on
+trial.** It runs a four-phase deliberation — brief, draft, critique, verdict —
+where the model argues *against itself* before committing to a recommendation,
+grounded in the guidelines and protocols you feed it. Everything runs on your
+machine: your documents are never sent to a Conclave server, because there is no
+Conclave server.
 
-**Option B — Upload via GitHub mobile.**
+## Preview
 
-In GitHub mobile, open the repo, tap `+` → Upload files → select the
-seven files from `docs/`. Commit directly to main. Faster but uses
-GitHub’s basic editor.
+<div align="center">
+<img src=".github/assets/preview.svg" alt="Conclave MD mid-deliberation: a clinical case, a draft verdict with cited sources, and red-flag warnings" width="92%">
+</div>
 
-### Step 2 — Phase 0
+## Why Conclave MD
 
-If you’ve already kicked off Phase 0 with the earlier prompt, perfect
-— let it finish. The detailed `phase-0-foundations.md` here is the
-same spirit, fleshed out a bit more; if Phase 0 is still in progress
-you can ignore this file. If it’s not started yet, use this version.
+- **Adversarial by design** — a draft is critiqued and revised before you ever
+  see a verdict, surfacing the uncomfortable questions a single-shot answer skips.
+- **Grounded in your protocols** — ingest PDFs, DOCX, HTML and scanned documents;
+  every recommendation cites the exact source and page.
+- **Local-first and private** — patient text is de-identified before any model
+  call, secrets live in the OS keychain, and there is zero telemetry.
+- **Bring your own engine** — Anthropic, OpenAI, OpenRouter, your Claude/ChatGPT
+  subscription, or fully offline via Ollama and Apple Intelligence.
+- **Auditable** — cases, verdicts and run history are persisted locally in SQLite
+  so every conclusion can be traced back.
 
-### Step 3 — Subsequent phases
+## How it works
 
-For each subsequent phase:
+Each case runs through a structured committee instead of a single prompt:
 
-1. Wait until the previous phase is fully green locally (`./scripts/verify.sh`).
-1. Open a fresh Claude Code session in the repo.
-1. Paste the corresponding `phase-N-*.md` file as the first message.
-1. Claude Code will plan, post the plan, then implement, then commit
-   and push.
-1. Come back to the Conclave MD chat with me (Claude) if you want to
-   refine anything before the next phase.
+| Phase | What happens |
+|------:|--------------|
+| **1 · Brief** | The case is de-identified and framed against the relevant protocols retrieved from your knowledge base. |
+| **2 · Draft** | The committee proposes an initial recommendation with citations. |
+| **3 · Critique** | The draft is challenged — missing data, contraindications, red flags, weak evidence. |
+| **4 · Verdict** | A structured, cited verdict with confidence, alternatives and follow-up triggers. |
 
-### Step 4 — Phase 4 needs a checkpoint
+Online evidence (PubMed / Europe PMC) can be layered in when you want the
+committee to look beyond your local corpus.
 
-Phase 4 is the verdict engine and it’s the most product-defining part.
-The prompt instructs Claude Code to **stop after planning and wait for
-your review** before coding. When that happens, paste the proposed
-plan back into our chat and we iterate together. Don’t let it implement
-on autopilot — that’s the 80%-of-the-product moment.
+## Privacy by design
 
-## Tips for working with Claude Code on iPhone
+These are normative invariants, not aspirations (see [`ARCHITECTURE.md`](ARCHITECTURE.md)):
 
-- Push directly to `main` while solo; PR discipline later.
-- If a session is long, summarise progress as a comment in the
-  tracking issue before closing — restart Claude Code reads the issue
-  faster than the full chat history.
-- If the pre-commit hook fails, screenshot the failure and paste the
-  error into a new Claude Code session: “fix the failure shown below,
-  then commit and push”.
-- If Claude Code starts making decisions you didn’t approve (changing
-  stack, adding deps, restructuring crates), interrupt and point it
-  at `docs/ARCHITECTURE.md`.
+1. The `core`, `rag` and `deident` crates make **no network calls**.
+2. Patient text is **de-identified before any prompt**; the masked form is
+   persisted, never the raw.
+3. Secrets live in the **OS keychain**; OAuth token files are written `0600`.
+4. **No telemetry.** The webview runs under a strict Content-Security-Policy.
 
-## Local verification (Git hook)
+## Install
 
-Conclave MD runs **no CI on push or PR** — the project is local-first and so
-is the verification loop. After cloning, activate the versioned Git hook
-once per clone:
+### Download
+
+Grab the latest installer for your platform from the
+[**Releases page**](https://github.com/XusBadia/conclave/releases/latest):
+
+- **macOS** (Apple Silicon) — `.dmg`, signed and notarised by Apple.
+- **Windows** — `.msi`.
+- **Linux** — `.deb` (Debian/Ubuntu) or `.AppImage` (glibc 2.39+).
+
+### Build from source
+
+You'll need Rust (stable), Node 20 + pnpm, and the Tauri 2
+[prerequisites](https://tauri.app/start/prerequisites/) for your OS.
 
 ```sh
-git config core.hooksPath .githooks
+git clone https://github.com/XusBadia/conclave.git
+cd conclave
+git config core.hooksPath .githooks   # once per clone — see "Verification" below
+pnpm --dir apps/desktop install
+pnpm --dir apps/desktop tauri dev      # run the desktop app
 ```
 
-Every `git commit` will then run, before creating the commit:
+To produce installers locally, `pnpm --dir apps/desktop tauri build`.
 
-1. `cargo fmt --all --check`
-2. `cargo clippy --workspace --all-targets --locked -- -D warnings`
-3. `cargo test --workspace --locked --quiet`
-4. `pnpm --dir apps/desktop build`
+## Project layout
 
-On a warm Cargo cache it takes ~3-5 minutes. If a step fails, the commit
-is aborted. Bypass for an emergency commit with `git commit --no-verify`,
-but don’t make it a habit.
+A Rust workspace + a Tauri 2 desktop app + a Next.js marketing site:
 
-You can also run the same checks on demand without committing:
+```
+crates/
+  core        shared types, config, paths, logging  (no network)
+  providers   LLM provider trait + impls, keychain, OAuth
+  rag         ingestion (PDF/DOCX/HTML/OCR), embeddings, LanceDB + SQLite
+  deident     PII masking — privacy-critical, property-tested
+  verdict     the product core: quick pipeline + 4-phase deliberation
+  evidence    PubMed / Europe PMC + cache
+  cli         conclave-cli
+apps/
+  desktop     Tauri 2 shell + React 18 / TypeScript UI
+  web         marketing site (Next.js)
+```
+
+## Verification
+
+There is **no CI on push** — a versioned Git hook is the gate. After cloning,
+enable it once with `git config core.hooksPath .githooks`. Every commit then runs
+format, lint (clippy, `-D warnings`), tests and the frontend build. You can run
+the same suite anytime:
 
 ```sh
 ./scripts/verify.sh
 ```
 
-GitHub Actions only fires when you push a release tag (`vX.Y.Z`),
-producing release binaries for macOS, Linux and Windows. Day-to-day
-pushes to `main` don’t burn Actions minutes.
+Release binaries are built by GitHub Actions only when a `vX.Y.Z` tag is pushed.
 
-## Decisions already made (don’t relitigate)
+## Contributing
 
-- **Stack**: Rust core + Tauri 2 UI. Not Electron, not pure Swift, not
-  pure web.
-- **Embeddings**: `multilingual-e5-small` via `fastembed-rs`.
-- **Storage**: SQLite + LanceDB, local under user data dir.
-- **Providers**: API-key first, OAuth-subscription optional, local
-  (Ollama + Apple Intelligence) supported.
-- **Privacy**: mandatory de-identification before any LLM call.
-- **License**: MIT.
-- **Phase order is fixed**: don’t skip ahead.
+Contributions are welcome — please read [`CONTRIBUTING.md`](CONTRIBUTING.md) and
+keep the [privacy invariants](#privacy-by-design) intact. Run `./scripts/verify.sh`
+before opening a PR.
 
-## What’s deliberately not specified
+## License
 
-- Exact dependency versions: let Claude Code pick recent stable, then
-  pin via `Cargo.lock`.
-- UI design tokens: defined later in Phase 7 with the Mac in hand.
-- Specific NER model choice: locked in during Phase 3.
-- OAuth providers (Phase 2.5): skipped unless we hit a real need.
+Dual-licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE),
+at your option.
 
-Good luck. Ship it.
+## Disclaimer
+
+> **Conclave MD is not a medical device.** It is an experimental decision-support
+> tool for qualified healthcare professionals and does **not** replace clinical
+> judgement. Outputs may be incomplete, biased, or wrong — always validate against
+> primary sources and institutional protocols. Final authority over any clinical
+> decision rests with the treating professional. See [`DISCLAIMER.md`](DISCLAIMER.md).

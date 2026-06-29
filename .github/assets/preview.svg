@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 640" width="1000" height="640" role="img" aria-label="Conclave MD desktop app preview: a clinical case mid-deliberation with a draft verdict and cited sources">
+  <defs>
+    <clipPath id="win"><rect x="20" y="20" width="960" height="600" rx="14"/></clipPath>
+  </defs>
+  <rect x="20" y="20" width="960" height="600" rx="14" fill="#0b0e12" stroke="#1c2329" stroke-width="1"/>
+
+  <g clip-path="url(#win)" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
+    <rect x="20" y="20" width="960" height="44" fill="#0e1217"/>
+    <line x1="20" y1="64" x2="980" y2="64" stroke="#1c2329"/>
+    <circle cx="44" cy="42" r="6" fill="#ff5f57"/>
+    <circle cx="66" cy="42" r="6" fill="#febc2e"/>
+    <circle cx="88" cy="42" r="6" fill="#28c840"/>
+    <text x="500" y="46" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, Menlo, monospace" font-size="12" fill="#7b828a">Conclave<tspan baseline-shift="super" font-size="8" fill="#7dd3fc">MD</tspan>  —  Cardiología</text>
+
+    <rect x="20" y="64" width="232" height="556" fill="#0c1015"/>
+    <line x1="252" y1="64" x2="252" y2="620" stroke="#1c2329"/>
+    <text x="44" y="104" font-family="'JetBrains Mono', monospace" font-size="10" fill="#5b626a" letter-spacing="2">WORKSPACES</text>
+    <rect x="36" y="116" width="200" height="30" rx="6" fill="#141a20"/>
+    <circle cx="52" cy="131" r="3" fill="#7dd3fc"/>
+    <text x="66" y="135" font-size="13" fill="#e6e9ec">Cardiología</text>
+    <circle cx="52" cy="167" r="3" fill="#3a424a"/>
+    <text x="66" y="171" font-size="13" fill="#8b9197">Oncología</text>
+    <circle cx="52" cy="199" r="3" fill="#3a424a"/>
+    <text x="66" y="203" font-size="13" fill="#8b9197">Urgencias</text>
+
+    <text x="44" y="252" font-family="'JetBrains Mono', monospace" font-size="10" fill="#5b626a" letter-spacing="2">CASOS</text>
+    <rect x="36" y="264" width="200" height="28" rx="6" fill="#10151a"/>
+    <text x="48" y="283" font-size="12.5" fill="#cdd2d7">FA paroxística — 68 a.</text>
+    <text x="48" y="315" font-size="12.5" fill="#7b828a">IAMCEST inferior — 54 a.</text>
+    <text x="48" y="345" font-size="12.5" fill="#7b828a">ICC NYHA III — 71 a.</text>
+
+    <rect x="252" y="64" width="728" height="556" fill="#0b0e12"/>
+
+    <rect x="284" y="92" width="664" height="172" rx="10" fill="#10151a" stroke="#1c2329"/>
+    <text x="304" y="120" font-family="'JetBrains Mono', monospace" font-size="10" fill="#5b626a" letter-spacing="2">CASO · DELIBERACIÓN EN CURSO</text>
+    <text x="304" y="150" font-size="18" font-weight="500" fill="#f1f3f5">Fibrilación auricular paroxística, paciente de 68 años</text>
+    <text x="304" y="176" font-size="13" fill="#9aa0a6">Anticoagulación en CHA₂DS₂-VASc ≥ 2 sin antecedente hemorrágico.</text>
+
+    <g font-family="'JetBrains Mono', monospace" font-size="10">
+      <g transform="translate(304,196)"><rect width="104" height="24" rx="5" fill="#161c22"/><text x="52" y="16" text-anchor="middle" fill="#9aa0a6" letter-spacing="1">01 BRIEFING ✓</text></g>
+      <g transform="translate(416,196)"><rect width="104" height="24" rx="5" fill="#161c22"/><text x="52" y="16" text-anchor="middle" fill="#9aa0a6" letter-spacing="1">02 BORRADOR ✓</text></g>
+      <g transform="translate(528,196)"><rect width="104" height="24" rx="5" fill="#7dd3fc"/><text x="52" y="16" text-anchor="middle" fill="#06222e" letter-spacing="1">03 CRÍTICA…</text></g>
+      <g transform="translate(640,196)"><rect width="104" height="24" rx="5" fill="#10151a" stroke="#1c2329"/><text x="52" y="16" text-anchor="middle" fill="#5b626a" letter-spacing="1">04 VEREDICTO</text></g>
+    </g>
+    <g>
+      <circle cx="304" cy="240" r="2.5" fill="#7dd3fc"/>
+      <circle cx="316" cy="240" r="2.5" fill="#7dd3fc" opacity="0.6"/>
+      <circle cx="328" cy="240" r="2.5" fill="#7dd3fc" opacity="0.3"/>
+      <text x="344" y="244" font-size="12.5" fill="#9aa0a6">Revisando el borrador contra las guías ESC 2024…</text>
+    </g>
+
+    <rect x="284" y="288" width="664" height="300" rx="10" fill="#10151a" stroke="#1c2329"/>
+    <text x="304" y="316" font-family="'JetBrains Mono', monospace" font-size="10" fill="#5b626a" letter-spacing="2">BORRADOR DE VEREDICTO</text>
+    <text x="304" y="346" font-size="16" font-weight="500" fill="#f1f3f5">Anticoagulación con DOAC (apixabán 5 mg / 12 h)</text>
+    <text x="304" y="370" font-size="12.5" fill="#9aa0a6">Recomendación principal · certeza: <tspan fill="#7dd3fc">alta</tspan></text>
+
+    <g font-family="'JetBrains Mono', monospace" font-size="11.5" fill="#8b9197">
+      <text x="304" y="408">§ <tspan fill="#aeb4ba">guia-esc-fa-2024.pdf · p. 47</tspan></text>
+      <text x="304" y="432">§ <tspan fill="#aeb4ba">protocolo-hospital-fa.docx · p. 3</tspan></text>
+      <text x="304" y="456">§ <tspan fill="#aeb4ba">aha-2023-update.pdf · p. 12</tspan></text>
+    </g>
+
+    <line x1="304" y1="484" x2="928" y2="484" stroke="#1c2329"/>
+    <text x="304" y="510" font-family="'JetBrains Mono', monospace" font-size="10" fill="#e2715a" letter-spacing="2">BANDERAS ROJAS</text>
+    <text x="304" y="534" font-size="12.5" fill="#9aa0a6">· Ajustar dosis si ClCr &lt; 50 mL/min</text>
+    <text x="304" y="556" font-size="12.5" fill="#9aa0a6">· Revisar interacciones P-gp / CYP3A4</text>
+  </g>
+</svg>
