@@ -1,6 +1,6 @@
-# Conclave — Architecture
+# Conclave MD — Architecture
 
-This document describes the structural decisions behind Conclave. It is the
+This document describes the structural decisions behind Conclave MD. It is the
 authoritative reference for how the codebase should be organised. When in
 doubt, this file wins over ad-hoc choices.
 
@@ -217,7 +217,7 @@ These are non-negotiable and must be enforced by code:
    contains patient text. The verdict pipeline must call `deident` first
    and must persist the masked version, not the raw.
 1. **Secrets in keychain only.** No tokens or API keys in config files.
-1. **No telemetry.** Conclave does not phone home. Period.
+1. **No telemetry.** Conclave MD does not phone home. Period.
 
 ## Future considerations (not now)
 

@@ -2,6 +2,7 @@ import { useEffect, useState, type PointerEvent as ReactPointerEvent } from "rea
 import { useTranslation } from "react-i18next";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
+import { MdSuffix } from "./components/MdSuffix";
 import { Onboarding } from "./components/Onboarding";
 import { ProviderStatusPill } from "./components/ProviderStatusPill";
 import { Sidebar, type Section } from "./components/Sidebar";
@@ -119,6 +120,7 @@ export function App() {
           className="font-mono text-[11px] uppercase tracking-[0.16em] text-ink"
         >
           {t("app.brand")}
+          <MdSuffix data-tauri-drag-region />
         </div>
         <span
           data-tauri-drag-region

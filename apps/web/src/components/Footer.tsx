@@ -19,7 +19,7 @@ export function Footer() {
         <div className="grid grid-cols-2 gap-10 sm:grid-cols-4 lg:gap-16">
           <div className="col-span-2 sm:col-span-1">
             <div className="flex items-center gap-2.5 text-ink">
-              <Logo size={22} ariaLabel="Conclave" />
+              <Logo size={22} ariaLabel="Conclave MD" />
               <Wordmark />
             </div>
             <p className="mt-5 max-w-[28ch] text-[13.5px] leading-[1.55] text-ink-dim">

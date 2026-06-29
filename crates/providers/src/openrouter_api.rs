@@ -95,7 +95,7 @@ impl LlmProvider for OpenRouterProvider {
                 bearer: Some(&self.api_key),
                 extra: &[
                     ("HTTP-Referer", "https://github.com/XusBadia/conclave"),
-                    ("X-Title", "Conclave"),
+                    ("X-Title", "Conclave MD"),
                 ],
             },
             ChatBody {

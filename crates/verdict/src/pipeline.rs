@@ -1064,7 +1064,7 @@ mod tests {
         assert!(run
             .verdict
             .disclaimer
-            .starts_with("Conclave is an experimental"));
+            .starts_with("Conclave MD is an experimental"));
         assert_eq!(run.case.workspace_id, "test-ws");
         assert_eq!(run.verdict_record.prompt_version, VERDICT_PROMPT_VERSION);
     }
@@ -1318,7 +1318,7 @@ mod tests {
                 assert!(run
                     .verdict
                     .disclaimer
-                    .starts_with("Conclave is an experimental"));
+                    .starts_with("Conclave MD is an experimental"));
 
                 // The persisted row and the audit trail match the contract.
                 let g = store.lock().unwrap();

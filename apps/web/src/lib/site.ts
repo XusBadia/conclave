@@ -1,5 +1,5 @@
-export const SITE_URL = "https://conclave.app";
-export const SITE_NAME = "Conclave";
+export const SITE_URL = "https://conclavemd.com";
+export const SITE_NAME = "Conclave MD";
 export const VERSION = "0.1.0";
 export const REPO = "XusBadia/conclave";
 export const REPO_URL = `https://github.com/${REPO}`;

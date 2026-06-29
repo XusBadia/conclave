@@ -1,5 +1,5 @@
 /**
- * Conclave brand mark — inline SVG so it inherits currentColor and ships
+ * Conclave MD brand mark — inline SVG so it inherits currentColor and ships
  * zero extra requests. Geometry matches public/mark.svg.
  */
 type LogoProps = {
@@ -44,6 +44,12 @@ export function Wordmark({ className }: { className?: string }) {
       ].join(" ")}
     >
       Conclave
+      <sup
+        className="ml-0.5 text-[0.55em] font-medium tracking-normal"
+        style={{ color: "var(--color-accent)" }}
+      >
+        MD
+      </sup>
     </span>
   );
 }

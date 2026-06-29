@@ -26,7 +26,7 @@ function formatDate(rfc3339: string): string {
 
 /** Builds the default filename suggested by the save dialog when exporting a
  *  case verdict to PDF. Shape: `<prefix>_<patient-or-id>_<YYYY-MM-DD>.pdf`. */
-export function buildPdfFilename(detail: CaseDetail, prefix = "Conclave"): string {
+export function buildPdfFilename(detail: CaseDetail, prefix = "ConclaveMD"): string {
   const { patient_label, id, case_date, created_at } = detail.case;
   const label =
     sanitise(patient_label || "").slice(0, 60) ||

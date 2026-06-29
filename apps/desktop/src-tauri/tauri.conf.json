@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Conclave",
+  "productName": "Conclave MD",
   "version": "0.1.0",
   "identifier": "me.badia.conclave",
   "build": {
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Conclave",
+        "title": "Conclave MD",
         "width": 1280,
         "height": 820,
         "minWidth": 1024,
@@ -45,8 +45,8 @@
       "icons/icon.ico"
     ],
     "category": "Productivity",
-    "shortDescription": "Conclave — virtual clinical committee",
-    "longDescription": "Conclave is a local-first clinical decision-support tool that runs a virtual multidisciplinary board over your own protocols. It does not replace clinical judgement."
+    "shortDescription": "Conclave MD — virtual clinical committee",
+    "longDescription": "Conclave MD is a local-first clinical decision-support tool that runs a virtual multidisciplinary board over your own protocols. It does not replace clinical judgement."
   },
   "plugins": {}
 }
