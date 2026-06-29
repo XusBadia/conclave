@@ -92,8 +92,13 @@ jobs:
             os: macos-latest
             rust-targets: aarch64-apple-darwin
             tauri-args: --target aarch64-apple-darwin
+          # ubuntu-24.04 (glibc 2.39), not 22.04: the ONNX Runtime prebuilt
+          # binary pulled in via fastembed now references glibc 2.38+ symbols
+          # (__isoc23_strtoll &c.), which fail to link against 22.04's glibc
+          # 2.35. Trade-off: the resulting AppImage/deb now require glibc 2.39
+          # (Ubuntu 24.04+, Debian 13+, Fedora 39+).
           - name: linux-x64
-            os: ubuntu-22.04
+            os: ubuntu-24.04
             rust-targets: ""
             tauri-args: ""
           - name: windows-x64
@@ -131,7 +136,7 @@ jobs:
       # Linux. Pin Ubuntu 22.04 so the resulting AppImage's glibc requirement
       # stays compatible with older distros.
       - name: install Linux bundler deps
-        if: matrix.platform.os == 'ubuntu-22.04'
+        if: matrix.platform.os == 'ubuntu-24.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
