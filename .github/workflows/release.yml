@@ -19,6 +19,13 @@ on:
       - "v*"
   workflow_dispatch:
 
+# The create-release job and tauri-action both write to GitHub Releases via
+# GITHUB_TOKEN. Repos default to a read-only workflow token, which 403s the
+# createRelease call ("Resource not accessible by integration"), so grant
+# write here explicitly.
+permissions:
+  contents: write
+
 concurrency:
   group: release-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
