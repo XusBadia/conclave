@@ -1,0 +1,116 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+
+:root{
+  --paper:#0a0d11; --paper-2:#0b0e12; --paper-3:#0c1015;
+  --card:#10151a; --card-2:#12161b; --card-3:#141a20;
+  --hair:#1c2329; --hair-2:#232a31;
+  --ink:#f5f6f8; --ink-2:#f1f3f5; --ink-3:#e6e9ec;
+  --dim:#a3a9af; --dim-2:#959ba1; --dim-3:#868d94; --dim-4:#79818a;
+  --label:#8d949c;
+  --cyan:#7dd3fc; --teal:#0e7490; --amber:#e2b340; --red:#e2715a;
+  --green:#28c840; --local:#62d385;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,monospace;
+  --sans:'Inter',-apple-system,system-ui,sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{background:transparent}
+.frame{
+  position:relative;overflow:hidden;color:var(--ink);font-family:var(--sans);
+  background:
+    radial-gradient(900px 520px at 78% -8%, rgba(125,211,252,.10), transparent 60%),
+    radial-gradient(700px 500px at 8% 108%, rgba(14,116,144,.10), transparent 60%),
+    var(--paper);
+}
+/* faint grid texture */
+.frame::before{
+  content:"";position:absolute;inset:0;pointer-events:none;opacity:.5;
+  background-image:
+    linear-gradient(rgba(255,255,255,.022) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(255,255,255,.022) 1px,transparent 1px);
+  background-size:44px 44px;
+  mask-image:radial-gradient(120% 120% at 50% 30%, #000 35%, transparent 78%);
+}
+.frame::after{ /* inner border */
+  content:"";position:absolute;inset:0;pointer-events:none;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.04);
+}
+
+/* ---- mark + wordmark ---- */
+.brand{display:flex;align-items:center;gap:16px}
+.mark{flex:none}
+.wordmark{font-family:var(--mono);font-weight:500;letter-spacing:-.04em;line-height:1;color:var(--ink)}
+.wordmark sup{color:var(--cyan);font-size:.42em;vertical-align:super;letter-spacing:0;margin-left:1px}
+
+/* ---- pills ---- */
+.pills{display:flex;gap:12px;flex-wrap:wrap}
+.pill{display:inline-flex;align-items:center;gap:9px;background:var(--card-2);
+  border:1px solid var(--hair-2);border-radius:999px;padding:9px 16px;
+  font-family:var(--mono);font-size:14px;color:#c7ccd1;letter-spacing:.3px}
+.pill .dot{width:7px;height:7px;border-radius:999px;background:var(--cyan)}
+.pill .dot.amber{background:var(--amber)}
+.pill .dot.green{background:var(--green)}
+
+.eyebrow{font-family:var(--mono);font-size:14px;letter-spacing:.22em;color:var(--dim-4);text-transform:uppercase}
+.headline{font-weight:600;letter-spacing:-.03em;line-height:1.02;color:var(--ink)}
+.sub{color:var(--dim);line-height:1.5}
+.accent{color:var(--cyan)}
+
+/* ---- app window mockup ---- */
+.win{background:var(--paper-2);border:1px solid var(--hair);border-radius:12px;overflow:hidden;
+  box-shadow:0 50px 120px -40px rgba(0,0,0,.8),0 0 0 1px rgba(255,255,255,.02)}
+.win .bar{height:38px;background:#0e1217;border-bottom:1px solid var(--hair);
+  display:flex;align-items:center;padding:0 14px;gap:8px;position:relative}
+.tl{width:11px;height:11px;border-radius:999px}
+.tl.r{background:#ff5f57}.tl.y{background:#febc2e}.tl.g{background:#28c840}
+.bar .title{position:absolute;left:0;right:0;text-align:center;font-family:var(--mono);
+  font-size:12px;color:var(--dim-3)}
+.bar .title sup{color:var(--cyan);font-size:8px}
+
+/* ============================================================
+ * v2 — shared upgrades (depth, material, realistic MacBook)
+ * ============================================================ */
+
+/* brighter pill text + material */
+.pill{color:#d2d7dc;border-color:#2a323a}
+.pill .dot.green{background:var(--local)}
+
+/* card material: hairline border + top highlight (Bugatti glass) */
+.win, .card, .ph, .fc, .src, .p, .step{
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.045), 0 1px 2px rgba(0,0,0,.3);
+}
+
+/* contact shadow under a physical object */
+.contact{position:absolute;left:50%;bottom:-3%;transform:translateX(-50%);
+  width:74%;height:6%;background:rgba(0,0,0,.7);filter:blur(34px);border-radius:50%;z-index:0}
+
+/* one disciplined focal glow */
+.focal-glow{position:absolute;inset:0;z-index:0;pointer-events:none;
+  background:radial-gradient(58% 46% at 50% 42%, rgba(125,211,252,.13), transparent 72%);
+  filter:blur(20px)}
+
+/* ---- realistic MacBook (drive size via --lid on .device) ---- */
+.device{position:relative;display:inline-block;z-index:1}
+.device .scrglow{position:absolute;left:50%;top:46%;transform:translate(-50%,-50%);
+  width:86%;height:70%;background:radial-gradient(closest-side,rgba(125,211,252,.16),transparent 72%);
+  filter:blur(36px);z-index:0}
+.lid{position:relative;z-index:1;background:linear-gradient(#252d35,#10151b);
+  border:1px solid #353f49;border-radius:24px;padding:11px;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.08), 0 60px 120px -42px rgba(0,0,0,.9)}
+.bezel{position:relative;background:#04060a;border-radius:13px;padding:11px 11px 17px}
+.bezel::before{content:"";position:absolute;top:7px;left:50%;transform:translateX(-50%);
+  width:6px;height:6px;border-radius:50%;background:#0e1319;box-shadow:inset 0 0 0 1px #1b222a} /* camera */
+.screen{position:relative;overflow:hidden;border-radius:5px;background:#000}
+.screen .scr{transform-origin:top left}
+.screen .gloss{position:absolute;inset:0;z-index:3;pointer-events:none;
+  background:linear-gradient(118deg, rgba(255,255,255,.07), rgba(255,255,255,0) 26%)}
+.deck{position:relative;z-index:1;height:18px;margin:-2px auto 0;
+  background:linear-gradient(#646e78 0%,#39424c 34%,#171d24 100%);
+  border-radius:0 0 9px 9px / 0 0 70px 70px;
+  box-shadow:0 24px 34px -14px rgba(0,0,0,.7)}
+.deck::before{content:"";position:absolute;top:0;left:50%;transform:translateX(-50%);
+  width:16%;height:9px;background:linear-gradient(#0c1117,#161d24);border-radius:0 0 9px 9px} /* hinge notch */
+.deck::after{content:"";position:absolute;top:0;left:0;right:0;height:1px;background:rgba(255,255,255,.14)}
+
+/* unified flow arrow (SVG) */
+.arw{flex:none;display:flex;align-items:center;justify-content:center}
+.arw svg{stroke:var(--dim-4);fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}

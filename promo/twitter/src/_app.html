@@ -1,0 +1,72 @@
+<!-- reusable Conclave MD app deliberation screen (HTML/CSS) -->
+<style>
+.app{display:flex;height:100%;font-family:var(--sans);background:var(--paper-2)}
+.app .side{width:30%;min-width:200px;background:var(--paper-3);border-right:1px solid var(--hair);padding:18px 0}
+.app .lbl{font-family:var(--mono);font-size:10px;letter-spacing:2.4px;color:var(--dim-4);padding:0 20px;margin:14px 0 9px}
+.app .row{display:flex;align-items:center;gap:11px;padding:7px 20px;font-size:13.5px;color:var(--dim-2)}
+.app .row .nd{width:6px;height:6px;border-radius:999px;background:#3a424a;flex:none}
+.app .row.on{background:var(--card-3);color:var(--ink-3)}
+.app .row.on .nd{background:var(--cyan)}
+.app .case{padding:7px 20px;font-size:13px;color:var(--dim-3)}
+.app .case.on{color:var(--ink-3);background:#10151a}
+.app .main{flex:1;padding:26px;display:flex;flex-direction:column;gap:18px;min-width:0}
+.app .card{background:var(--card);border:1px solid var(--hair);border-radius:10px;padding:22px 24px}
+.app .k{font-family:var(--mono);font-size:10px;letter-spacing:2.4px;color:var(--dim-4)}
+.app .h{font-size:19px;font-weight:500;color:var(--ink-2);margin-top:12px;letter-spacing:-.01em}
+.app .h.sm{font-size:16px}
+.app .p{font-size:13.5px;color:var(--dim);margin-top:9px;line-height:1.4}
+.app .steps{display:flex;gap:10px;margin-top:18px}
+.app .step{flex:1;text-align:center;font-family:var(--mono);font-size:10.5px;letter-spacing:.6px;
+  padding:8px 4px;border-radius:5px;background:var(--card-2);color:var(--dim);border:1px solid transparent}
+.app .step.done{color:var(--dim)}
+.app .step.now{background:var(--cyan);color:#06222e;font-weight:600}
+.app .step.todo{background:var(--paper-2);border-color:var(--hair);color:var(--dim-4)}
+.app .live{display:flex;align-items:center;gap:7px;margin-top:18px;font-size:13px;color:var(--dim)}
+.app .live .b{width:5px;height:5px;border-radius:999px;background:var(--cyan)}
+.app .live .b:nth-child(2){opacity:.6}.app .live .b:nth-child(3){opacity:.3}
+.app .cite{font-family:var(--mono);font-size:12.5px;color:#aeb4ba;margin-top:10px}
+.app .cite .s{color:var(--dim-4);margin-right:8px}
+.app .div{height:1px;background:var(--hair);margin:18px 0}
+.app .rf{font-family:var(--mono);font-size:10px;letter-spacing:2.4px;color:var(--red)}
+.app .rfx{font-size:13px;color:var(--dim);margin-top:9px}
+.app .badge{display:inline-block;font-size:12.5px;color:var(--dim);margin-top:6px}
+.app .badge .hi{color:var(--cyan)}
+</style>
+<div class="app">
+  <div class="side">
+    <div class="lbl">WORKSPACES</div>
+    <div class="row on"><span class="nd"></span>Cardiología</div>
+    <div class="row"><span class="nd"></span>Oncología</div>
+    <div class="row"><span class="nd"></span>Urgencias</div>
+    <div class="lbl" style="margin-top:26px">CASOS</div>
+    <div class="case on">FA paroxística — 68 a.</div>
+    <div class="case">IAMCEST inferior — 54 a.</div>
+    <div class="case">ICC NYHA III — 71 a.</div>
+  </div>
+  <div class="main">
+    <div class="card">
+      <div class="k">CASO · DELIBERACIÓN EN CURSO</div>
+      <div class="h">Fibrilación auricular paroxística, paciente de 68 años</div>
+      <div class="p">Anticoagulación en CHA₂DS₂-VASc ≥ 2 sin antecedente hemorrágico.</div>
+      <div class="steps">
+        <div class="step done">01 BRIEFING ✓</div>
+        <div class="step done">02 BORRADOR ✓</div>
+        <div class="step now">03 CRÍTICA…</div>
+        <div class="step todo">04 VEREDICTO</div>
+      </div>
+      <div class="live"><span class="b"></span><span class="b"></span><span class="b"></span>
+        Revisando el borrador contra las guías ESC 2024…</div>
+    </div>
+    <div class="card">
+      <div class="k">BORRADOR DE VEREDICTO</div>
+      <div class="h sm">Anticoagulación con DOAC (apixabán 5 mg / 12 h)</div>
+      <div class="badge">Recomendación principal · certeza: <span class="hi">alta</span></div>
+      <div class="cite"><span class="s">§</span>guia-esc-fa-2024.pdf · p. 47</div>
+      <div class="cite"><span class="s">§</span>protocolo-hospital-fa.docx · p. 3</div>
+      <div class="cite"><span class="s">§</span>aha-2023-update.pdf · p. 12</div>
+      <div class="div"></div>
+      <div class="rf">BANDERAS ROJAS</div>
+      <div class="rfx">· Ajustar dosis si ClCr &lt; 50 mL/min&nbsp;&nbsp;· Revisar interacciones P-gp / CYP3A4</div>
+    </div>
+  </div>
+</div>

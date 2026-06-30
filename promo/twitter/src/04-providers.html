@@ -1,0 +1,37 @@
+<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="style.css">
+<style>
+.frame{width:1600px;height:900px;padding:84px;display:flex;flex-direction:column}
+.top{display:flex;justify-content:space-between;align-items:flex-start}
+.headline{font-size:52px;margin-top:24px;max-width:900px}
+.sub{font-size:20px;max-width:720px;margin-top:20px}
+.grid{margin-top:auto;display:grid;grid-template-columns:repeat(3,1fr);gap:22px}
+.prov{background:var(--card);border:1px solid var(--hair);border-radius:12px;padding:26px 28px;display:flex;flex-direction:column;gap:12px;min-height:150px}
+.prov .nm{font-size:21px;font-weight:600;color:var(--ink-2);letter-spacing:-.01em}
+.prov .ds{font-size:14.5px;color:var(--dim);line-height:1.45}
+.prov .tg{font-family:var(--mono);font-size:11.5px;letter-spacing:1.4px;padding:4px 10px;border-radius:999px;align-self:flex-start;margin-top:auto}
+.tg.cloud{background:rgba(125,211,252,.10);color:var(--cyan);border:1px solid rgba(125,211,252,.25)}
+.tg.local{background:rgba(40,200,64,.10);color:#5fd17a;border:1px solid rgba(40,200,64,.22)}
+.tg.sub{background:var(--card-3);color:var(--dim);border:1px solid var(--hair-2)}
+.brand .wordmark{font-size:30px}
+</style>
+<div class="frame">
+  <div class="top">
+    <div>
+      <div class="eyebrow">Bring your own engine</div>
+      <div class="headline">Your model. Your keys.<br><span class="accent">Or fully offline.</span></div>
+      <div class="sub">Run on a frontier API, your existing Claude or ChatGPT subscription, or with zero internet at all — the deliberation is the same either way.</div>
+    </div>
+    <div class="brand">
+      <svg class="mark" width="46" height="46" viewBox="0 0 64 64"><path d="M43 20.5C39.9 17.4 35.8 15.5 31.4 15.5C22.5 15.5 15.5 22.8 15.5 32C15.5 41.2 22.5 48.5 31.4 48.5C35.8 48.5 39.9 46.6 43 43.5" fill="none" stroke="#f5f6f8" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="43.5" cy="20.5" r="4.75" fill="#7dd3fc"/><circle cx="43.5" cy="43.5" r="4.75" fill="#7dd3fc"/><circle cx="32" cy="32" r="4.25" fill="#f5f6f8"/></svg>
+      <div class="wordmark">Conclave<sup>MD</sup></div>
+    </div>
+  </div>
+  <div class="grid">
+    <div class="prov"><div class="nm">Anthropic · OpenAI</div><div class="ds">Claude and GPT models straight from the source, with your own API key.</div><span class="tg cloud">CLOUD API</span></div>
+    <div class="prov"><div class="nm">OpenRouter</div><div class="ds">One key, hundreds of models — swap engines without touching your setup.</div><span class="tg cloud">CLOUD API</span></div>
+    <div class="prov"><div class="nm">Claude · ChatGPT plan</div><div class="ds">Reuse the subscription you already pay for via OAuth or the local CLIs.</div><span class="tg sub">SUBSCRIPTION</span></div>
+    <div class="prov"><div class="nm">Ollama</div><div class="ds">Open-weight models running entirely on your machine — nothing leaves it.</div><span class="tg local">FULLY OFFLINE</span></div>
+    <div class="prov"><div class="nm">Apple Intelligence</div><div class="ds">On-device foundation models on supported Macs, no network required.</div><span class="tg local">FULLY OFFLINE</span></div>
+    <div class="prov"><div class="nm">Your protocols, grounded</div><div class="ds">Whichever engine you pick, every verdict is cited back to your own documents.</div><span class="tg sub">RAG · LOCAL CORPUS</span></div>
+  </div>
+</div>

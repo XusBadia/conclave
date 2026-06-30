@@ -1,0 +1,76 @@
+<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="style.css">
+<style>
+.frame{width:1600px;height:900px;padding:64px 84px;display:flex;flex-direction:column;justify-content:center}
+.top{position:absolute;top:64px;left:84px}
+.brand .wordmark{font-size:24px}
+.head{text-align:center;margin:0 0 56px}
+.head .h{font-size:58px;font-weight:600;letter-spacing:-.032em;line-height:1.02;color:var(--ink)}
+.head .h .accent{color:var(--cyan)}
+.head .s{font-size:20px;color:var(--dim);margin-top:16px}
+.split{display:grid;grid-template-columns:1fr 1fr;gap:0;align-items:center;position:relative}
+.col{padding:0 46px;display:flex;flex-direction:column}
+.col.left{opacity:.6;filter:grayscale(.5)}
+.col .lbl{font-family:var(--mono);font-size:12px;letter-spacing:2.4px;color:var(--dim-3);margin-bottom:18px;display:flex;align-items:center;gap:10px}
+.col.right .lbl{color:var(--cyan)}
+.col .lbl .ic{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.vs{position:absolute;left:50%;top:56%;transform:translate(-50%,-50%);z-index:3;
+  width:64px;height:64px;border-radius:99px;background:var(--paper);border:1px solid var(--hair-2);
+  display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:16px;color:var(--dim-2);box-shadow:0 10px 30px rgba(0,0,0,.6)}
+.divline{position:absolute;left:50%;top:0;bottom:0;width:1px;background:linear-gradient(transparent,var(--hair-2) 20%,var(--hair-2) 80%,transparent)}
+/* chat side */
+.chat{background:var(--card);border:1px solid var(--hair);border-radius:16px;padding:26px;display:flex;flex-direction:column;gap:16px}
+.bub{max-width:88%;padding:14px 18px;border-radius:14px;font-size:15.5px;line-height:1.4}
+.bub.u{align-self:flex-end;background:#1b2128;color:var(--ink-3);border-bottom-right-radius:4px}
+.bub.a{align-self:flex-start;background:#10151a;border:1px solid var(--hair);color:var(--ink-2);border-bottom-left-radius:4px}
+.bub.a .chk{display:inline-flex;align-items:center;gap:7px;color:#5fd17a;font-family:var(--mono);font-size:12px;margin-top:10px}
+.note{font-size:14px;color:var(--dim);margin-top:18px;display:flex;align-items:center;gap:9px}
+.note .x{color:var(--red);flex:none}
+/* committee side */
+.comm{background:var(--card);border:1px solid rgba(125,211,252,.28);border-radius:16px;padding:26px;display:flex;flex-direction:column;gap:14px;box-shadow:inset 0 1px 0 rgba(255,255,255,.05), 0 30px 70px -32px rgba(125,211,252,.25)}
+.turn{display:flex;gap:11px;align-items:flex-start;font-size:14.5px;color:var(--dim);line-height:1.4}
+.role{font-family:var(--mono);font-size:9.5px;letter-spacing:.6px;padding:3px 8px;border-radius:99px;flex:none;margin-top:1px}
+.role.crit{background:rgba(226,113,90,.14);color:#e2715a}
+.role.pon{background:rgba(125,211,252,.14);color:var(--cyan)}
+.vcard{margin-top:16px;padding-top:16px;border-top:1px solid var(--hair)}
+.vcard .r{font-size:16px;font-weight:600;color:var(--ink-2)}
+.vcard .cite{font-family:var(--mono);font-size:13px;color:#b3bac0;margin-top:9px;display:flex;gap:8px}
+.vcard .cite .s{color:var(--cyan)}
+.vcard .rf{display:flex;align-items:center;gap:8px;font-size:13.5px;color:var(--dim);margin-top:10px}
+.vcard .rf .fl{color:var(--red);flex:none}
+</style>
+<div class="frame">
+  <div class="top">
+    <div class="brand">
+      <svg class="mark" width="36" height="36" viewBox="0 0 64 64"><path d="M43 20.5C39.9 17.4 35.8 15.5 31.4 15.5C22.5 15.5 15.5 22.8 15.5 32C15.5 41.2 22.5 48.5 31.4 48.5C35.8 48.5 39.9 46.6 43 43.5" fill="none" stroke="#f5f6f8" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="43.5" cy="20.5" r="4.75" fill="#7dd3fc"/><circle cx="43.5" cy="43.5" r="4.75" fill="#7dd3fc"/><circle cx="32" cy="32" r="4.25" fill="#f5f6f8"/></svg>
+      <div class="wordmark">Conclave<sup>MD</sup></div>
+    </div>
+  </div>
+  <div class="head">
+    <div class="h">Una respuesta no es <span class="accent">una decisión</span>.</div>
+    <div class="s">El chat afirma. Conclave delibera — y deja el rastro.</div>
+  </div>
+  <div class="split">
+    <div class="divline"></div>
+    <div class="vs">vs</div>
+    <div class="col left">
+      <div class="lbl"><svg class="ic" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>UN CHAT CUALQUIERA</div>
+      <div class="chat">
+        <div class="bub u">Mujer 68 a., FA paroxística, CHA₂DS₂-VASc 3. ¿Anticoagulo?</div>
+        <div class="bub a">Sí. Apixabán 5 mg cada 12 h.<div class="chk"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#5fd17a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 6"/></svg>respuesta final</div></div>
+        <div class="note"><svg class="x" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#e2715a" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>Sin fuente. Sin discutir la ClCr al límite.</div>
+      </div>
+    </div>
+    <div class="col right">
+      <div class="lbl"><svg class="ic" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/></svg>EL COMITÉ DE CONCLAVE</div>
+      <div class="comm">
+        <div class="turn"><span class="role pon">PONENTE</span><span>Apixabán 5 mg/12 h — guía ESC 2024 y protocolo del centro.</span></div>
+        <div class="turn"><span class="role crit">CRÍTICO</span><span>La ClCr está al límite y hubo un antifúngico previo. ¿Dosis e interacciones?</span></div>
+        <div class="vcard">
+          <div class="r">Apixabán 5 mg / 12 h · certeza alta</div>
+          <div class="cite"><span class="s">§</span>guia-esc-fa-2024.pdf · p. 47</div>
+          <div class="rf"><svg class="fl" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#e2715a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg>Reduce a 2,5 mg si ClCr &lt; 50 · revisa CYP3A4 / P-gp</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

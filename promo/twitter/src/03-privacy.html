@@ -1,0 +1,54 @@
+<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="style.css">
+<style>
+.frame{width:1600px;height:900px;display:flex;align-items:center;padding:0 84px;gap:80px}
+.left{flex:1}
+.headline{font-size:54px;margin:26px 0 22px;max-width:620px}
+.sub{font-size:20px;max-width:560px;margin-bottom:40px}
+.inv{display:flex;flex-direction:column;gap:18px;max-width:640px}
+.item{display:flex;gap:18px;align-items:flex-start;background:var(--card);border:1px solid var(--hair);border-radius:10px;padding:18px 22px}
+.item .ix{font-family:var(--mono);font-size:15px;color:var(--cyan);flex:none;width:26px;padding-top:2px}
+.item .it{font-size:16.5px;color:var(--ink-3);line-height:1.45}
+.item .it b{color:var(--ink);font-weight:600}
+.right{width:430px;flex:none;display:flex;align-items:center;justify-content:center}
+.shield{position:relative;width:360px;height:430px}
+.shield svg{position:absolute;inset:0}
+.glow{position:absolute;inset:0;background:radial-gradient(closest-side,rgba(125,211,252,.18),transparent 70%);filter:blur(6px)}
+.brand .wordmark{font-size:30px}
+</style>
+<div class="frame">
+  <div class="left">
+    <div class="brand">
+      <svg class="mark" width="46" height="46" viewBox="0 0 64 64"><path d="M43 20.5C39.9 17.4 35.8 15.5 31.4 15.5C22.5 15.5 15.5 22.8 15.5 32C15.5 41.2 22.5 48.5 31.4 48.5C35.8 48.5 39.9 46.6 43 43.5" fill="none" stroke="#f5f6f8" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="43.5" cy="20.5" r="4.75" fill="#7dd3fc"/><circle cx="43.5" cy="43.5" r="4.75" fill="#7dd3fc"/><circle cx="32" cy="32" r="4.25" fill="#f5f6f8"/></svg>
+      <div class="wordmark">Conclave<sup>MD</sup></div>
+    </div>
+    <div class="headline">Your patients' data never leaves <span class="accent">your machine</span>.</div>
+    <div class="sub">Not a policy. Normative invariants, enforced in the architecture — there is no Conclave server to send anything to.</div>
+    <div class="inv">
+      <div class="item"><span class="ix">01</span><span class="it">The <b>core, rag &amp; deident</b> crates make <b>no network calls</b>.</span></div>
+      <div class="item"><span class="ix">02</span><span class="it">Patient text is <b>de-identified before any prompt</b>; the masked form is persisted, never the raw.</span></div>
+      <div class="item"><span class="ix">03</span><span class="it">Secrets live in the <b>OS keychain</b>; OAuth token files are written <b>0600</b>.</span></div>
+      <div class="item"><span class="ix">04</span><span class="it"><b>No telemetry.</b> The webview runs under a strict Content-Security-Policy.</span></div>
+    </div>
+  </div>
+  <div class="right">
+    <div class="shield">
+      <div class="glow"></div>
+      <svg viewBox="0 0 360 430" fill="none">
+        <path d="M180 14 L330 70 V215 C330 320 264 388 180 416 C96 388 30 320 30 215 V70 Z"
+          fill="#0d1217" stroke="#1c2329" stroke-width="2"/>
+        <path d="M180 14 L330 70 V215 C330 320 264 388 180 416 C96 388 30 320 30 215 V70 Z"
+          fill="none" stroke="rgba(125,211,252,.25)" stroke-width="1"/>
+        <!-- lock -->
+        <rect x="138" y="200" width="84" height="68" rx="8" fill="#10151a" stroke="#232a31" stroke-width="2"/>
+        <path d="M152 200 v-16 a28 28 0 0 1 56 0 v16" fill="none" stroke="#7dd3fc" stroke-width="9" stroke-linecap="round"/>
+        <circle cx="180" cy="228" r="9" fill="#7dd3fc"/>
+        <rect x="176" y="232" width="8" height="20" rx="4" fill="#7dd3fc"/>
+        <!-- mark echo -->
+        <g transform="translate(148,300) scale(1.05)">
+          <path d="M43 20.5C39.9 17.4 35.8 15.5 31.4 15.5C22.5 15.5 15.5 22.8 15.5 32C15.5 41.2 22.5 48.5 31.4 48.5C35.8 48.5 39.9 46.6 43 43.5" fill="none" stroke="#3a444c" stroke-width="6" stroke-linecap="round"/>
+          <circle cx="43.5" cy="20.5" r="4" fill="#4a5660"/><circle cx="43.5" cy="43.5" r="4" fill="#4a5660"/><circle cx="32" cy="32" r="3.5" fill="#4a5660"/>
+        </g>
+      </svg>
+    </div>
+  </div>
+</div>

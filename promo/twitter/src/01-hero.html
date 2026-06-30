@@ -1,0 +1,37 @@
+<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="style.css">
+<style>
+.frame{width:1600px;height:900px;display:flex;align-items:center}
+.left{width:560px;padding:0 0 0 84px;flex:none}
+.right{flex:1;height:100%;position:relative;display:flex;align-items:center;justify-content:center;padding-right:64px}
+.headline{font-size:58px;margin:30px 0 22px}
+.sub{font-size:20px;max-width:470px;margin-bottom:34px}
+.win{width:880px;transform:perspective(2600px) rotateY(-13deg) rotateX(3deg);transform-origin:left center}
+.app-wrap{height:560px}
+.tag{font-family:var(--mono);font-size:13px;letter-spacing:.18em;color:var(--dim-3);margin-top:30px;text-transform:uppercase}
+</style>
+<div class="frame">
+  <div class="left">
+    <div class="brand">
+      <svg class="mark" width="58" height="58" viewBox="0 0 64 64">
+        <path d="M43 20.5C39.9 17.4 35.8 15.5 31.4 15.5C22.5 15.5 15.5 22.8 15.5 32C15.5 41.2 22.5 48.5 31.4 48.5C35.8 48.5 39.9 46.6 43 43.5" fill="none" stroke="#f5f6f8" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="43.5" cy="20.5" r="4.75" fill="#7dd3fc"/><circle cx="43.5" cy="43.5" r="4.75" fill="#7dd3fc"/><circle cx="32" cy="32" r="4.25" fill="#f5f6f8"/>
+      </svg>
+      <div class="wordmark" style="font-size:40px">Conclave<sup>MD</sup></div>
+    </div>
+    <div class="headline">A virtual clinical<br>committee, on <span class="accent">your</span> machine.</div>
+    <div class="sub">Local-first clinical decision support that deliberates over <em>your</em> protocols — and never phones home.</div>
+    <div class="pills">
+      <span class="pill"><span class="dot"></span>Local-first</span>
+      <span class="pill"><span class="dot"></span>No telemetry</span>
+      <span class="pill"><span class="dot amber"></span>Not a medical device</span>
+    </div>
+    <div class="tag">macOS · Windows · Linux — free &amp; open source</div>
+  </div>
+  <div class="right">
+    <div class="win">
+      <div class="bar"><span class="tl r"></span><span class="tl y"></span><span class="tl g"></span>
+        <span class="title">Conclave<sup>MD</sup> &nbsp;—&nbsp; Cardiología</span></div>
+      <div class="app-wrap">__APP__</div>
+    </div>
+  </div>
+</div>

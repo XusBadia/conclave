@@ -1,0 +1,41 @@
+<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="style.css">
+<style>
+.frame{width:1500px;height:500px;display:flex;align-items:center;padding:0 90px;gap:54px}
+.brand .wordmark{font-size:52px}
+.tagline{font-size:23px;color:var(--dim);margin-top:18px;letter-spacing:-.01em}
+.pills{margin-top:26px}
+.divv{width:1px;height:240px;background:var(--hair);flex:none}
+.right{flex:1;display:flex;flex-direction:column;gap:16px}
+.flowrow{display:flex;align-items:center;gap:14px}
+.fp{flex:1;background:var(--card);border:1px solid var(--hair);border-radius:10px;padding:16px 18px}
+.fp .n{font-family:var(--mono);font-size:11px;color:var(--dim-4);letter-spacing:1.5px}
+.fp .t{font-size:18px;font-weight:600;color:var(--ink-2);margin-top:6px}
+.fp.crit{border-color:rgba(125,211,252,.35);background:linear-gradient(180deg,rgba(125,211,252,.06),var(--card))}
+.fp.crit .t{color:var(--cyan)}
+.ar{color:var(--dim-4);font-size:18px;flex:none}
+</style>
+<div class="frame">
+  <div>
+    <div class="brand" style="align-items:flex-end">
+      <svg class="mark" width="64" height="64" viewBox="0 0 64 64"><path d="M43 20.5C39.9 17.4 35.8 15.5 31.4 15.5C22.5 15.5 15.5 22.8 15.5 32C15.5 41.2 22.5 48.5 31.4 48.5C35.8 48.5 39.9 46.6 43 43.5" fill="none" stroke="#f5f6f8" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="43.5" cy="20.5" r="4.75" fill="#7dd3fc"/><circle cx="43.5" cy="43.5" r="4.75" fill="#7dd3fc"/><circle cx="32" cy="32" r="4.25" fill="#f5f6f8"/></svg>
+      <div class="wordmark">Conclave<sup>MD</sup></div>
+    </div>
+    <div class="tagline">A virtual clinical committee — on your machine.</div>
+    <div class="pills">
+      <span class="pill"><span class="dot"></span>Local-first</span>
+      <span class="pill"><span class="dot"></span>No telemetry</span>
+      <span class="pill"><span class="dot amber"></span>Open source</span>
+    </div>
+  </div>
+  <div class="divv"></div>
+  <div class="right">
+    <div class="flowrow">
+      <div class="fp"><div class="n">01</div><div class="t">Brief</div></div><div class="ar">→</div>
+      <div class="fp"><div class="n">02</div><div class="t">Draft</div></div><div class="ar">→</div>
+      <div class="fp crit"><div class="n">03</div><div class="t">Critique</div></div><div class="ar">→</div>
+      <div class="fp"><div class="n">04</div><div class="t">Verdict</div></div>
+    </div>
+    <div style="font-family:var(--mono);font-size:14px;color:var(--dim-3);letter-spacing:.04em">
+      Adversarial deliberation, grounded in <span style="color:#aeb4ba">your</span> protocols. Cited. Auditable.</div>
+  </div>
+</div>

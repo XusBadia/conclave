@@ -1,0 +1,35 @@
+<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="style.css">
+<style>
+.frame{width:1600px;height:900px;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.brand{margin-bottom:16px}
+.brand .wordmark{font-size:30px}
+.tagline{font-size:46px;font-weight:600;letter-spacing:-.03em;color:var(--ink);text-align:center;
+  line-height:1.04;margin-bottom:8px;max-width:1080px}
+.tagline .accent{color:var(--cyan)}
+.subline{font-family:var(--mono);font-size:14px;letter-spacing:.14em;color:var(--dim-3);text-transform:uppercase;margin-bottom:34px}
+/* device sizing */
+.lid{width:880px}
+.screen{width:836px;height:522px}
+.screen .scr{transform:scale(.58055)}
+.device{transform:perspective(2600px) rotateX(3.5deg)}
+.pills{margin-top:30px}
+</style>
+<div class="frame">
+  <div class="brand">
+    <svg class="mark" width="40" height="40" viewBox="0 0 64 64"><path d="M43 20.5C39.9 17.4 35.8 15.5 31.4 15.5C22.5 15.5 15.5 22.8 15.5 32C15.5 41.2 22.5 48.5 31.4 48.5C35.8 48.5 39.9 46.6 43 43.5" fill="none" stroke="#f5f6f8" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="43.5" cy="20.5" r="4.75" fill="#7dd3fc"/><circle cx="43.5" cy="43.5" r="4.75" fill="#7dd3fc"/><circle cx="32" cy="32" r="4.25" fill="#f5f6f8"/></svg>
+    <div class="wordmark">Conclave<sup>MD</sup></div>
+  </div>
+  <div class="tagline">Una segunda opinión<br>que <span class="accent">discute</span> la primera.</div>
+  <div class="subline">Apoyo a la decisión clínica · en local · open source</div>
+  <div class="device">
+    <div class="scrglow"></div>
+    <div class="lid"><div class="bezel"><div class="screen">__SCREEN__<div class="gloss"></div></div></div></div>
+    <div class="deck"></div>
+    <div class="contact"></div>
+  </div>
+  <div class="pills">
+    <span class="pill"><span class="dot"></span>Cita la fuente</span>
+    <span class="pill"><span class="dot green"></span>Funciona sin internet</span>
+    <span class="pill"><span class="dot amber"></span>Código abierto</span>
+  </div>
+</div>
