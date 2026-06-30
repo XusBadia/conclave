@@ -1,0 +1,39 @@
+<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="style.css">
+<style>
+.frame{width:1600px;height:900px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 84px;position:relative}
+.brand{position:absolute;left:84px;top:74px}
+.brand .wordmark{font-size:24px}
+.eb{font-family:var(--mono);font-size:14px;letter-spacing:.22em;color:var(--dim-4);text-transform:uppercase;margin-bottom:24px}
+.headline{font-size:62px;font-weight:600;letter-spacing:-.035em;line-height:1.02;text-align:center;max-width:1180px}
+.headline .accent{color:var(--cyan)}
+.card{margin-top:50px;width:880px;background:var(--card);border:1px solid var(--hair-2);border-radius:16px;padding:32px 36px;position:relative;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.05), 0 50px 110px -36px rgba(0,0,0,.9)}
+.cardglow{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:70%;height:120%;
+  background:radial-gradient(closest-side,rgba(125,211,252,.14),transparent 72%);filter:blur(36px);z-index:-1}
+.src{display:flex;align-items:center;gap:14px;font-family:var(--mono);font-size:24px;color:var(--ink-2)}
+.src .s{color:var(--cyan);font-size:26px}
+.src .pg{color:var(--dim-3)}
+.snippet{font-size:18px;color:var(--ink-3);line-height:1.5;margin-top:22px;padding-left:18px;border-left:2px solid rgba(125,211,252,.4)}
+.snippet .hl{background:rgba(125,211,252,.14);color:#cdeafd;padding:1px 4px;border-radius:3px}
+.rel{display:flex;align-items:center;gap:12px;margin-top:24px;font-family:var(--mono);font-size:13px;color:var(--dim-3)}
+.rel .bar{width:200px;height:6px;border-radius:99px;background:var(--hair-2);overflow:hidden}
+.rel .bar>i{display:block;height:100%;width:94%;background:var(--cyan)}
+.sub{margin-top:40px;font-size:22px;color:var(--dim);text-align:center}
+.sub .hi{color:var(--ink-3);font-weight:500}
+</style>
+<div class="frame">
+  <div class="brand">
+    <svg class="mark" width="36" height="36" viewBox="0 0 64 64"><path d="M43 20.5C39.9 17.4 35.8 15.5 31.4 15.5C22.5 15.5 15.5 22.8 15.5 32C15.5 41.2 22.5 48.5 31.4 48.5C35.8 48.5 39.9 46.6 43 43.5" fill="none" stroke="#f5f6f8" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="43.5" cy="20.5" r="4.75" fill="#7dd3fc"/><circle cx="43.5" cy="43.5" r="4.75" fill="#7dd3fc"/><circle cx="32" cy="32" r="4.25" fill="#f5f6f8"/></svg>
+    <div class="wordmark">Conclave<sup>MD</sup></div>
+  </div>
+  <div class="eb">Sin inventos</div>
+  <div class="headline">Cada recomendación cita el <span class="accent">documento y la página</span>.</div>
+  <div class="card">
+    <div class="cardglow"></div>
+    <div class="src"><span class="s">§</span>guia-esc-fa-2024.pdf <span class="pg">· p. 47</span></div>
+    <div class="snippet">«En CHA₂DS₂-VASc ≥ 2 se recomienda <span class="hl">anticoagulación oral</span>, con preferencia por <span class="hl">DOAC</span> frente a AVK.»</div>
+    <div class="rel">relevancia <span class="bar"><i></i></span> 0.94 · recuperado de tu base de conocimiento</div>
+  </div>
+  <div class="sub">Si no está en tus protocolos, <span class="hi">no se lo inventa.</span></div>
+  <div style="position:absolute;bottom:48px;left:0;right:0;text-align:center;font-family:var(--mono);font-size:13px;letter-spacing:.06em;color:var(--dim-4)">Apoyo a la decisión · no sustituye el juicio clínico</div>
+</div>

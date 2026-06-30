@@ -1,0 +1,56 @@
+<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="style.css">
+<style>
+.frame{width:1600px;height:900px;display:flex;align-items:center;padding:0 84px;gap:74px}
+.left{width:600px;flex:none}
+.headline{font-size:52px;margin:26px 0 22px}
+.sub{font-size:20px;max-width:520px;margin-bottom:34px}
+.chips{display:flex;flex-direction:column;gap:14px;max-width:520px}
+.chip{display:flex;gap:14px;align-items:center;font-size:16.5px;color:var(--ink-3)}
+.chip .ic{width:34px;height:34px;border-radius:8px;background:var(--card);border:1px solid var(--hair);display:flex;align-items:center;justify-content:center;color:var(--cyan);flex:none;font-family:var(--mono);font-size:16px}
+.right{flex:1;display:flex;justify-content:center}
+.vcard{width:600px;background:var(--card);border:1px solid var(--hair);border-radius:14px;padding:34px 36px;
+  box-shadow:0 40px 100px -40px rgba(0,0,0,.85)}
+.vcard .k{font-family:var(--mono);font-size:11px;letter-spacing:2.6px;color:var(--dim-4)}
+.vcard .h{font-size:25px;font-weight:600;color:var(--ink-2);margin:16px 0 14px;letter-spacing:-.015em;line-height:1.2}
+.vcard .meta{font-size:15px;color:var(--dim)}
+.vcard .meta .hi{color:var(--cyan);font-weight:600}
+.vcard .conf{display:inline-flex;gap:5px;margin-left:12px;vertical-align:middle}
+.vcard .conf i{width:24px;height:7px;border-radius:2px;background:var(--cyan);display:inline-block}
+.vcard .conf i.off{background:var(--hair-2)}
+.vcard .cite{font-family:var(--mono);font-size:14.5px;color:#aeb4ba;margin-top:14px;display:flex;align-items:center;gap:10px}
+.vcard .cite .s{color:var(--cyan)}
+.vcard .div{height:1px;background:var(--hair);margin:24px 0}
+.vcard .rf{font-family:var(--mono);font-size:11px;letter-spacing:2.6px;color:var(--red)}
+.vcard .rfx{font-size:15px;color:var(--dim);margin-top:12px;line-height:1.6}
+.brand .wordmark{font-size:30px}
+</style>
+<div class="frame">
+  <div class="left">
+    <div class="brand">
+      <svg class="mark" width="46" height="46" viewBox="0 0 64 64"><path d="M43 20.5C39.9 17.4 35.8 15.5 31.4 15.5C22.5 15.5 15.5 22.8 15.5 32C15.5 41.2 22.5 48.5 31.4 48.5C35.8 48.5 39.9 46.6 43 43.5" fill="none" stroke="#f5f6f8" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="43.5" cy="20.5" r="4.75" fill="#7dd3fc"/><circle cx="43.5" cy="43.5" r="4.75" fill="#7dd3fc"/><circle cx="32" cy="32" r="4.25" fill="#f5f6f8"/></svg>
+      <div class="wordmark">Conclave<sup>MD</sup></div>
+    </div>
+    <div class="headline">Every verdict<br>cites its <span class="accent">source</span>.</div>
+    <div class="sub">No black box. Each recommendation points to the exact document and page in your own corpus — and surfaces the red flags a single-shot answer skips.</div>
+    <div class="chips">
+      <div class="chip"><span class="ic">§</span>Exact source &amp; page on every claim</div>
+      <div class="chip"><span class="ic">⚑</span>Contraindications and red flags, made explicit</div>
+      <div class="chip"><span class="ic">≡</span>Cases &amp; run history persisted locally in SQLite</div>
+    </div>
+  </div>
+  <div class="right">
+    <div class="vcard">
+      <div class="k">VEREDICTO · CERTEZA ALTA</div>
+      <div class="h">Anticoagulación con DOAC<br>(apixabán 5 mg / 12 h)</div>
+      <div class="meta">Recomendación principal
+        <span class="conf"><i></i><i></i><i></i><i></i><i class="off"></i></span>
+      </div>
+      <div class="cite"><span class="s">§</span>guia-esc-fa-2024.pdf · p. 47</div>
+      <div class="cite"><span class="s">§</span>protocolo-hospital-fa.docx · p. 3</div>
+      <div class="cite"><span class="s">§</span>aha-2023-update.pdf · p. 12</div>
+      <div class="div"></div>
+      <div class="rf">BANDERAS ROJAS</div>
+      <div class="rfx">· Ajustar dosis si ClCr &lt; 50 mL/min<br>· Revisar interacciones P-gp / CYP3A4</div>
+    </div>
+  </div>
+</div>

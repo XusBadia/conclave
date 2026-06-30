@@ -1,0 +1,48 @@
+<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="style.css">
+<style>
+.frame{width:1600px;height:900px;padding:80px 84px;display:flex;flex-direction:column}
+.brand{margin-bottom:34px}.brand .wordmark{font-size:26px}
+.headline{font-size:66px;font-weight:600;letter-spacing:-.035em;line-height:1}
+.headline .accent{color:var(--cyan)}
+.sub{font-size:19px;color:var(--dim);margin-top:20px;max-width:760px;line-height:1.45}
+.flowwrap{position:relative;margin-top:auto}
+.loop{position:absolute;left:0;right:0;top:-62px;height:62px}
+.revlbl{position:absolute;top:-58px;left:50%;transform:translateX(-50%);font-family:var(--mono);font-size:14px;
+  letter-spacing:1px;color:var(--cyan);background:var(--paper);padding:0 14px;display:flex;align-items:center;gap:7px}
+.flow{display:flex;align-items:stretch;gap:0}
+.ph{flex:1;background:var(--card);border:1px solid var(--hair);border-radius:14px;padding:28px 28px 30px}
+.ph .n{font-family:var(--mono);font-size:14px;color:var(--dim-3);letter-spacing:2px}
+.ph .t{font-size:29px;font-weight:600;color:var(--ink-2);margin:16px 0 12px;letter-spacing:-.02em}
+.ph .d{font-size:15.5px;color:var(--dim);line-height:1.45}
+.ph.crit{border-color:rgba(125,211,252,.45);background:linear-gradient(180deg,rgba(125,211,252,.06),var(--card));box-shadow:inset 0 1px 0 rgba(255,255,255,.05), 0 24px 60px -28px rgba(125,211,252,.3)}
+.ph.crit .t{color:var(--cyan)}
+.arw{width:54px}
+.arw svg{width:28px;height:28px}
+.closing{font-family:var(--mono);font-size:15px;letter-spacing:.05em;color:var(--dim-3);margin-top:26px;text-align:center}
+.closing .hi{color:#b3bac0}
+</style>
+<div class="frame">
+  <div class="brand">
+    <svg class="mark" width="38" height="38" viewBox="0 0 64 64"><path d="M43 20.5C39.9 17.4 35.8 15.5 31.4 15.5C22.5 15.5 15.5 22.8 15.5 32C15.5 41.2 22.5 48.5 31.4 48.5C35.8 48.5 39.9 46.6 43 43.5" fill="none" stroke="#f5f6f8" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="43.5" cy="20.5" r="4.75" fill="#7dd3fc"/><circle cx="43.5" cy="43.5" r="4.75" fill="#7dd3fc"/><circle cx="32" cy="32" r="4.25" fill="#f5f6f8"/></svg>
+    <div class="wordmark">Conclave<sup>MD</sup></div>
+  </div>
+  <div class="headline">No responde.<br>Lo pone <span class="accent">a prueba</span>.</div>
+  <div class="sub">El chat te da su primera idea. Conclave la redacta, la <span style="color:var(--ink-3)">ataca</span> y la revisa antes de comprometerse con una recomendación.</div>
+  <div class="flowwrap">
+    <svg class="loop" viewBox="0 0 1432 62" preserveAspectRatio="none">
+      <path d="M1018 62 C1018 14 1018 14 880 14 L552 14 C414 14 414 14 414 62" fill="none" stroke="#7dd3fc" stroke-opacity=".55" stroke-width="2" stroke-dasharray="2 7" stroke-linecap="round"/>
+      <path d="M414 62 l-7 -13 m7 13 l7 -13" fill="none" stroke="#7dd3fc" stroke-width="2.2" stroke-linecap="round"/>
+    </svg>
+    <div class="revlbl"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#7dd3fc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>vuelve y reta</div>
+    <div class="flow">
+      <div class="ph"><div class="n">01</div><div class="t">Briefing</div><div class="d">Anonimiza. Enmarca con tus protocolos.</div></div>
+      <div class="arw"><svg viewBox="0 0 24 24"><path d="M4 12h15M13 6l6 6-6 6"/></svg></div>
+      <div class="ph"><div class="n">02</div><div class="t">Borrador</div><div class="d">Una primera recomendación, citada.</div></div>
+      <div class="arw"><svg viewBox="0 0 24 24"><path d="M4 12h15M13 6l6 6-6 6"/></svg></div>
+      <div class="ph crit"><div class="n">03</div><div class="t">Crítica</div><div class="d">Ataca el borrador: huecos y banderas rojas.</div></div>
+      <div class="arw"><svg viewBox="0 0 24 24"><path d="M4 12h15M13 6l6 6-6 6"/></svg></div>
+      <div class="ph"><div class="n">04</div><div class="t">Veredicto</div><div class="d">Veredicto citado. Con certeza y alternativas.</div></div>
+    </div>
+    <div class="closing">Deliberación adversaria, anclada en <span class="hi">tus</span> protocolos. Citada. Auditable.</div>
+  </div>
+</div>

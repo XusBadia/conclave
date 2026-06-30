@@ -1,0 +1,32 @@
+<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="style.css">
+<style>
+.frame{width:1080px;height:1080px;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.brand{margin-bottom:20px}.brand .wordmark{font-size:30px}
+.tagline{font-size:48px;font-weight:600;letter-spacing:-.03em;text-align:center;line-height:1.05;margin-bottom:8px}
+.tagline .accent{color:var(--cyan)}
+.subline{font-family:var(--mono);font-size:14px;letter-spacing:.14em;color:var(--dim-3);text-transform:uppercase;margin-bottom:38px}
+.lid{width:892px}
+.screen{width:848px;height:530px}
+.screen .scr{transform:scale(.58888)}
+.device{transform:perspective(2400px) rotateX(3.5deg)}
+.pills{margin-top:40px}
+</style>
+<div class="frame">
+  <div class="brand">
+    <svg class="mark" width="40" height="40" viewBox="0 0 64 64"><path d="M43 20.5C39.9 17.4 35.8 15.5 31.4 15.5C22.5 15.5 15.5 22.8 15.5 32C15.5 41.2 22.5 48.5 31.4 48.5C35.8 48.5 39.9 46.6 43 43.5" fill="none" stroke="#f5f6f8" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="43.5" cy="20.5" r="4.75" fill="#7dd3fc"/><circle cx="43.5" cy="43.5" r="4.75" fill="#7dd3fc"/><circle cx="32" cy="32" r="4.25" fill="#f5f6f8"/></svg>
+    <div class="wordmark">Conclave<sup>MD</sup></div>
+  </div>
+  <div class="tagline">No responde.<br>Lo pone <span class="accent">a prueba</span>.</div>
+  <div class="subline">Un comité clínico, en tu máquina</div>
+  <div class="device">
+    <div class="scrglow"></div>
+    <div class="lid"><div class="bezel"><div class="screen">__SCREEN__<div class="gloss"></div></div></div></div>
+    <div class="deck"></div>
+    <div class="contact"></div>
+  </div>
+  <div class="pills">
+    <span class="pill"><span class="dot"></span>Cita la fuente</span>
+    <span class="pill"><span class="dot green"></span>Sin internet</span>
+    <span class="pill"><span class="dot amber"></span>Open source</span>
+  </div>
+</div>

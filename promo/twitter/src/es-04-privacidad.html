@@ -1,0 +1,49 @@
+<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="style.css">
+<style>
+.frame{width:1600px;height:900px;display:flex;align-items:center;justify-content:center;gap:70px;padding:0 100px}
+.left{flex:none;width:660px}
+.brand{margin-bottom:30px}.brand .wordmark{font-size:26px}
+.headline{font-size:58px;font-weight:600;letter-spacing:-.03em;line-height:1.04}
+.headline .accent{color:var(--cyan)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:38px}
+.t{display:flex;align-items:center;gap:13px;background:var(--card);border:1px solid var(--hair-2);border-radius:12px;padding:15px 18px;
+  font-size:16px;color:var(--ink-3)}
+.t svg{stroke:var(--cyan);fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.reassure{font-family:var(--mono);font-size:14px;letter-spacing:.04em;color:var(--dim-2);margin-top:24px}
+.reassure .hi{color:var(--cyan)}
+.right{flex:none;width:440px;display:flex;align-items:center;justify-content:center;position:relative}
+.shield{position:relative;width:440px;height:510px}
+.glow{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:340px;height:340px;
+  background:radial-gradient(closest-side,rgba(125,211,252,.22),rgba(14,116,144,.10) 55%,transparent 75%);filter:blur(8px)}
+</style>
+<div class="frame">
+  <div class="left">
+    <div class="brand">
+      <svg class="mark" width="40" height="40" viewBox="0 0 64 64"><path d="M43 20.5C39.9 17.4 35.8 15.5 31.4 15.5C22.5 15.5 15.5 22.8 15.5 32C15.5 41.2 22.5 48.5 31.4 48.5C35.8 48.5 39.9 46.6 43 43.5" fill="none" stroke="#f5f6f8" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="43.5" cy="20.5" r="4.75" fill="#7dd3fc"/><circle cx="43.5" cy="43.5" r="4.75" fill="#7dd3fc"/><circle cx="32" cy="32" r="4.25" fill="#f5f6f8"/></svg>
+      <div class="wordmark">Conclave<sup>MD</sup></div>
+    </div>
+    <div class="headline">Los datos del paciente <span class="accent">no salen</span> de tu equipo.</div>
+    <div class="grid">
+      <span class="t"><svg width="19" height="19" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/><line x1="4" y1="4" x2="20" y2="20"/></svg>Sin conexión a internet</span>
+      <span class="t"><svg width="19" height="19" viewBox="0 0 24 24"><path d="M3 3l18 18"/><path d="M10.6 10.7a2 2 0 0 0 2.8 2.8"/><path d="M9.4 5.3A9.7 9.7 0 0 1 12 5c5 0 9 4.5 10 7a13 13 0 0 1-2.2 3.1M6.2 6.2C3.9 7.6 2.3 9.8 2 12c1 2.5 5 7 10 7 1.4 0 2.7-.3 3.9-.9"/></svg>Anonimiza antes de procesar</span>
+      <span class="t"><svg width="19" height="19" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>Claves en el llavero del sistema</span>
+      <span class="t"><svg width="19" height="19" viewBox="0 0 24 24"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/><path d="M9 12l2 2 4-4"/></svg>Sin telemetría</span>
+    </div>
+    <div class="reassure">Tú eliges qué motor usar. <span class="hi">Tú tienes las claves.</span></div>
+  </div>
+  <div class="right">
+    <div class="glow"></div>
+    <div class="shield">
+      <svg viewBox="0 0 440 510" fill="none">
+        <path d="M220 18 L402 86 V250 C402 372 318 452 220 484 C122 452 38 372 38 250 V86 Z" fill="#0d1318" stroke="#1c2329" stroke-width="2"/>
+        <path d="M220 18 L402 86 V250 C402 372 318 452 220 484 C122 452 38 372 38 250 V86 Z" fill="none" stroke="rgba(125,211,252,.28)" stroke-width="1"/>
+        <!-- shackle drawn BEHIND body (closed padlock) -->
+        <path d="M188 240 v-26 a32 32 0 0 1 64 0 v26" fill="none" stroke="#7dd3fc" stroke-width="11" stroke-linecap="round"/>
+        <rect x="170" y="234" width="100" height="82" rx="11" fill="#0f161c" stroke="#2a3641" stroke-width="2"/>
+        <rect x="171" y="235" width="98" height="20" rx="10" fill="rgba(125,211,252,.08)"/>
+        <circle cx="220" cy="266" r="10" fill="#7dd3fc"/>
+        <rect x="215" y="271" width="10" height="24" rx="5" fill="#7dd3fc"/>
+      </svg>
+    </div>
+  </div>
+</div>

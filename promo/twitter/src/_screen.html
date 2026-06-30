@@ -1,0 +1,192 @@
+<!-- Detailed, realistic Conclave MD app screen — 1440x900, scope .scr -->
+<style>
+.scr{width:1440px;height:900px;background:var(--paper-2);font-family:var(--sans);color:var(--ink-3);
+  display:flex;flex-direction:column;overflow:hidden}
+.scr .tbar{height:40px;background:#0e1217;border-bottom:1px solid var(--hair);display:flex;align-items:center;padding:0 16px;gap:9px;position:relative;flex:none}
+.scr .tl{width:11px;height:11px;border-radius:99px}
+.scr .tl.r{background:#ff5f57}.scr .tl.y{background:#febc2e}.scr .tl.g{background:#28c840}
+.scr .tbar .ttl{position:absolute;left:0;right:0;text-align:center;font-family:var(--mono);font-size:12px;color:var(--dim-3)}
+.scr .tbar .ttl sup{color:var(--cyan);font-size:8px}
+/* toolbar */
+.scr .tool{height:54px;background:var(--paper-3);border-bottom:1px solid var(--hair);display:flex;align-items:center;gap:14px;padding:0 18px;flex:none}
+.scr .ws{display:flex;align-items:center;gap:9px;background:var(--card);border:1px solid var(--hair-2);border-radius:8px;padding:7px 12px;font-size:13.5px;color:var(--ink-3)}
+.scr .ic{stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.scr .search{flex:1;display:flex;align-items:center;gap:9px;background:var(--card);border:1px solid var(--hair);border-radius:8px;padding:8px 13px;color:var(--dim-3);font-size:13.5px;max-width:520px}
+.scr .spacer{flex:1}
+.scr .btn{display:flex;align-items:center;gap:8px;border-radius:8px;padding:8px 15px;font-size:13.5px;font-weight:500}
+.scr .btn.ghost{color:var(--dim);border:1px solid var(--hair-2)}
+.scr .btn.cy{background:var(--cyan);color:#06222e;font-weight:600}
+.scr .body{flex:1;display:flex;min-height:0}
+/* sidebar */
+.scr .side{width:262px;flex:none;background:var(--paper-3);border-right:1px solid var(--hair);padding:18px 0;overflow:hidden}
+.scr .lbl{font-family:var(--mono);font-size:10px;letter-spacing:2.2px;color:var(--dim-4);padding:0 20px;margin:6px 0 12px;display:flex;justify-content:space-between}
+.scr .ci{padding:11px 20px;border-left:2px solid transparent;display:flex;flex-direction:column;gap:4px}
+.scr .ci.on{background:var(--card);border-left-color:var(--cyan)}
+.scr .ci .t{font-size:14px;color:var(--dim-2)}
+.scr .ci.on .t{color:var(--ink-2);font-weight:500}
+.scr .ci .m{font-size:11.5px;color:var(--dim-4);font-family:var(--mono);display:flex;align-items:center;gap:7px}
+.scr .badge{font-family:var(--mono);font-size:9.5px;letter-spacing:.5px;padding:2px 7px;border-radius:99px}
+.scr .badge.done{background:rgba(40,200,64,.12);color:#5fd17a}
+.scr .badge.live{background:rgba(125,211,252,.14);color:var(--cyan)}
+.scr .badge.wait{background:var(--card-3);color:var(--dim-4)}
+/* main */
+.scr .main{flex:1;min-width:0;padding:28px 30px;display:flex;flex-direction:column;gap:20px;overflow:hidden}
+.scr .k{font-family:var(--mono);font-size:10px;letter-spacing:2.4px;color:var(--dim-4)}
+.scr .h1{font-size:24px;font-weight:600;color:var(--ink);letter-spacing:-.02em;margin-top:10px}
+.scr .meta{font-size:13.5px;color:var(--dim);margin-top:8px}
+.scr .steps{display:flex;gap:10px;margin-top:6px}
+.scr .step{flex:1;border-radius:8px;padding:11px 13px;background:var(--card);border:1px solid var(--hair);display:flex;flex-direction:column;gap:6px}
+.scr .step .sn{font-family:var(--mono);font-size:10px;color:var(--dim-4);letter-spacing:1px;display:flex;justify-content:space-between;align-items:center}
+.scr .step .st{font-size:14px;font-weight:500;color:var(--dim-2)}
+.scr .step.now{border-color:rgba(125,211,252,.4);background:linear-gradient(180deg,rgba(125,211,252,.06),var(--card))}
+.scr .step.now .st{color:var(--cyan)}
+.scr .step.done .st{color:var(--ink-3)}
+.scr .dot{width:6px;height:6px;border-radius:99px;background:var(--cyan)}
+.scr .live{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--dim)}
+.scr .live .b{width:5px;height:5px;border-radius:99px;background:var(--cyan)}
+.scr .live .b:nth-child(2){opacity:.55}.scr .live .b:nth-child(3){opacity:.28}
+.scr .card{background:var(--card);border:1px solid var(--hair);border-radius:12px;padding:22px 24px}
+.scr .rec{font-size:18px;font-weight:600;color:var(--ink-2);margin:14px 0 6px;letter-spacing:-.01em}
+.scr .conf{display:flex;align-items:center;gap:12px;font-size:12.5px;color:var(--dim);margin-bottom:14px}
+.scr .meter{display:flex;gap:4px}
+.scr .meter i{width:26px;height:7px;border-radius:2px;background:var(--cyan)}
+.scr .meter i.off{background:var(--hair-2)}
+.scr .alt{font-size:13px;color:var(--dim);padding-top:14px;border-top:1px solid var(--hair);margin-top:4px}
+.scr .alt b{color:var(--dim-2);font-weight:600}
+.scr .rfrow{display:flex;align-items:center;gap:9px;font-size:13px;color:var(--dim);margin-top:11px}
+.scr .rfrow .fl{color:var(--red);flex:none}
+/* right rail */
+.scr .turn{display:flex;gap:12px;align-items:flex-start;margin-top:13px;font-size:13px;color:var(--dim)}
+.scr .role{font-family:var(--mono);font-size:9.5px;letter-spacing:.6px;padding:3px 8px;border-radius:99px;flex:none;margin-top:1px}
+.scr .role.crit{background:rgba(226,113,90,.13);color:#e2715a}
+.scr .role.pon{background:rgba(125,211,252,.13);color:var(--cyan)}
+.scr .say{line-height:1.45}
+.scr .say .ts{font-family:var(--mono);font-size:11px;color:var(--dim-4);margin-right:8px}
+.scr .typing{display:inline-flex;gap:4px;align-items:center;margin-left:2px}
+.scr .typing i{width:4px;height:4px;border-radius:99px;background:var(--cyan)}
+.scr .typing i:nth-child(2){opacity:.55}.scr .typing i:nth-child(3){opacity:.28}
+/* status footer */
+.scr .foot{height:34px;flex:none;background:#0c1116;border-top:1px solid var(--hair);
+  display:flex;align-items:center;gap:18px;padding:0 18px;font-family:var(--mono);font-size:11px;color:var(--dim-3)}
+.scr .foot .lv{display:inline-flex;align-items:center;gap:7px;color:var(--cyan)}
+.scr .foot .lv .d{width:6px;height:6px;border-radius:99px;background:var(--cyan);box-shadow:0 0 8px var(--cyan)}
+.scr .foot .sp{flex:1}
+.scr .foot .ok{color:var(--local)}
+/* live badge in toolbar */
+.scr .livebadge{display:inline-flex;align-items:center;gap:7px;background:rgba(125,211,252,.1);
+  border:1px solid rgba(125,211,252,.28);border-radius:99px;padding:6px 13px;font-family:var(--mono);
+  font-size:11px;letter-spacing:.6px;color:var(--cyan)}
+.scr .livebadge .d{width:6px;height:6px;border-radius:99px;background:var(--cyan);box-shadow:0 0 8px var(--cyan)}
+/* subtle scrollbar hint on main */
+.scr .main{position:relative}
+.scr .main::after{content:"";position:absolute;top:30px;bottom:30px;right:6px;width:4px;border-radius:99px;
+  background:linear-gradient(var(--hair-2),transparent);opacity:.6}
+.scr .ci.hover{background:var(--card-2)}
+.scr .rail{width:312px;flex:none;background:var(--paper-3);border-left:1px solid var(--hair);padding:22px 20px;display:flex;flex-direction:column;gap:14px;overflow:hidden}
+.scr .src{background:var(--card);border:1px solid var(--hair);border-radius:10px;padding:14px 15px}
+.scr .src .fn{font-family:var(--mono);font-size:12.5px;color:#aeb4ba;display:flex;align-items:center;gap:8px}
+.scr .src .fn .pg{color:var(--dim-4)}
+.scr .src .sn{font-size:12px;color:var(--dim-3);margin-top:8px;line-height:1.45}
+.scr .src .rel{display:flex;align-items:center;gap:8px;margin-top:10px;font-family:var(--mono);font-size:10px;color:var(--dim-4)}
+.scr .src .bar{flex:1;height:4px;border-radius:99px;background:var(--hair-2);overflow:hidden}
+.scr .src .bar>i{display:block;height:100%;background:var(--cyan)}
+</style>
+<div class="scr">
+  <div class="tbar"><span class="tl r"></span><span class="tl y"></span><span class="tl g"></span>
+    <span class="ttl">Conclave<sup>MD</sup> &nbsp;—&nbsp; Cardiología</span></div>
+  <div class="tool">
+    <div class="ws">
+      <svg class="ic" width="16" height="16" viewBox="0 0 24 24"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg>
+      Cardiología
+      <svg class="ic" width="14" height="14" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+    </div>
+    <div class="search">
+      <svg class="ic" width="16" height="16" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      Buscar casos, guías o protocolos…
+    </div>
+    <div class="spacer"></div>
+    <div class="livebadge"><span class="d"></span>DELIBERANDO</div>
+    <div class="btn ghost">
+      <svg class="ic" width="15" height="15" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Caso</div>
+    <div class="btn cy">
+      <svg class="ic" width="15" height="15" viewBox="0 0 24 24" stroke="#06222e"><path d="M13 3L4 14h7l-1 7 9-11h-7z"/></svg>Deliberar</div>
+  </div>
+  <div class="body">
+    <div class="side">
+      <div class="lbl">CASOS <span>6</span></div>
+      <div class="ci on"><div class="t">FA paroxística — 68 a.</div><div class="m"><span class="badge live">DELIBERANDO</span></div></div>
+      <div class="ci"><div class="t">IAMCEST inferior — 54 a.</div><div class="m"><span class="badge done">VEREDICTO</span></div></div>
+      <div class="ci"><div class="t">ICC NYHA III — 71 a.</div><div class="m"><span class="badge done">VEREDICTO</span></div></div>
+      <div class="ci"><div class="t">TEP de riesgo intermedio — 60 a.</div><div class="m"><span class="badge wait">BORRADOR</span></div></div>
+      <div class="ci"><div class="t">Síncope de esfuerzo — 47 a.</div><div class="m"><span class="badge wait">EN COLA</span></div></div>
+      <div class="lbl" style="margin-top:22px">BASE DE CONOCIMIENTO</div>
+      <div class="ci"><div class="t" style="display:flex;align-items:center;gap:9px;color:var(--dim-2)">
+        <svg class="ic" width="15" height="15" viewBox="0 0 24 24"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 3h9l5 5v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/></svg>
+        guia-esc-fa-2024.pdf</div></div>
+      <div class="ci"><div class="t" style="display:flex;align-items:center;gap:9px;color:var(--dim-2)">
+        <svg class="ic" width="15" height="15" viewBox="0 0 24 24"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 3h9l5 5v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/></svg>
+        protocolo-hospital-fa.docx</div></div>
+    </div>
+    <div class="main">
+      <div>
+        <div class="k">CASO · DELIBERACIÓN EN CURSO</div>
+        <div class="h1">Fibrilación auricular paroxística, paciente de 68 años</div>
+        <div class="meta">Anticoagulación en CHA₂DS₂-VASc ≥ 2 · sin antecedente hemorrágico · ClCr 62 mL/min</div>
+      </div>
+      <div class="steps">
+        <div class="step done"><div class="sn">01<svg class="ic" width="13" height="13" viewBox="0 0 24 24" stroke="#5fd17a"><path d="M5 12l5 5L20 6"/></svg></div><div class="st">Briefing</div></div>
+        <div class="step done"><div class="sn">02<svg class="ic" width="13" height="13" viewBox="0 0 24 24" stroke="#5fd17a"><path d="M5 12l5 5L20 6"/></svg></div><div class="st">Borrador</div></div>
+        <div class="step now"><div class="sn">03<span class="dot"></span></div><div class="st">Crítica</div></div>
+        <div class="step"><div class="sn">04</div><div class="st">Veredicto</div></div>
+      </div>
+      <div class="live"><span class="b"></span><span class="b"></span><span class="b"></span>
+        Contrastando el borrador con las guías ESC 2024 y el protocolo del centro…</div>
+      <div class="card">
+        <div class="k">BORRADOR DE VEREDICTO</div>
+        <div class="rec">Anticoagulación con DOAC — apixabán 5 mg / 12 h</div>
+        <div class="conf">Certeza
+          <span class="meter"><i></i><i></i><i></i><i></i><i class="off"></i></span> alta
+          <span style="color:var(--dim-4)">·</span> recomendación principal</div>
+        <div class="rfrow"><svg class="ic fl" width="15" height="15" viewBox="0 0 24 24" stroke="#e2715a"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg>Ajustar dosis si ClCr &lt; 50 mL/min</div>
+        <div class="rfrow"><svg class="ic fl" width="15" height="15" viewBox="0 0 24 24" stroke="#e2715a"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg>Revisar interacciones P-gp / CYP3A4</div>
+        <div class="alt"><b>Alternativa</b> · warfarina con INR objetivo 2–3 si DOAC contraindicado o no disponible.</div>
+      </div>
+      <div class="card" style="padding:18px 24px">
+        <div class="k">TRANSCRIPCIÓN DE LA DELIBERACIÓN</div>
+        <div class="turn"><span class="role crit">CRÍTICO</span><span class="say"><span class="ts">14:31</span>¿Se ha descartado deterioro renal que obligue a reducir dosis? La ClCr está al límite.</span></div>
+        <div class="turn"><span class="role pon">PONENTE</span><span class="say"><span class="ts">14:31</span>ClCr 62 mL/min; 5 mg/12 h es correcto. Añado bandera roja para reevaluar si baja de 50.</span></div>
+        <div class="turn"><span class="role crit">CRÍTICO</span><span class="say"><span class="ts">14:32</span>Falta valorar interacción con el antifúngico previo del paciente (CYP3A4 / P-gp)<span class="typing"><i></i><i></i><i></i></span></span></div>
+      </div>
+    </div>
+    <div class="rail">
+      <div class="lbl" style="padding:0">FUENTES CITADAS</div>
+      <div class="src">
+        <div class="fn"><svg class="ic" width="14" height="14" viewBox="0 0 24 24"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 3h9l5 5v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/></svg>guia-esc-fa-2024.pdf <span class="pg">· p. 47</span></div>
+        <div class="sn">«En CHA₂DS₂-VASc ≥ 2 se recomienda anticoagulación oral, con preferencia por DOAC frente a AVK.»</div>
+        <div class="rel">relevancia <span class="bar"><i style="width:94%"></i></span> 0.94</div>
+      </div>
+      <div class="src">
+        <div class="fn"><svg class="ic" width="14" height="14" viewBox="0 0 24 24"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 3h9l5 5v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/></svg>protocolo-hospital-fa.docx <span class="pg">· p. 3</span></div>
+        <div class="sn">«Apixabán 5 mg/12 h como primera línea; reducir a 2,5 mg si ≥ 2 criterios.»</div>
+        <div class="rel">relevancia <span class="bar"><i style="width:88%"></i></span> 0.88</div>
+      </div>
+      <div class="lbl" style="padding:0;margin-top:8px">EVIDENCIA EN LÍNEA</div>
+      <div class="src">
+        <div class="fn"><svg class="ic" width="14" height="14" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg>PubMed · 2023</div>
+        <div class="sn">Apixaban vs warfarin in AF: reduced major bleeding (ARISTOTLE, NEJM).</div>
+        <div class="rel">PMID 21870978</div>
+      </div>
+      <div class="src">
+        <div class="fn"><svg class="ic" width="14" height="14" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg>Europe PMC · 2024</div>
+        <div class="sn">DOAC dose reduction by renal function: appropriateness review.</div>
+        <div class="rel">PMID 38442107</div>
+      </div>
+    </div>
+  </div>
+  <div class="foot">
+    <span class="lv"><span class="d"></span>Deliberando · fase 3/4</span>
+    <span class="sp"></span>
+    <span>motor: Claude · local</span>
+    <span class="ok">Guardado local · 14:32</span>
+  </div>
+</div>
