@@ -34,3 +34,5 @@ conclave.toml.local
 # Mobile icon byproducts of `pnpm tauri icon` — Conclave is desktop-only.
 apps/desktop/src-tauri/icons/android/
 apps/desktop/src-tauri/icons/ios/
+.env.local
+!.env.enc

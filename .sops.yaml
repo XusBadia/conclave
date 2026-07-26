@@ -1,0 +1,9 @@
+# Se cifran .env, .env.local y el propio .env.enc (esta última regla es la que
+# permite editarlo in situ con 'envctl edit' sin descifrarlo a disco).
+# Deliberadamente NO se incluye .env.example: se commitea en claro, solo con
+# los nombres de las variables y sin valores.
+creation_rules:
+  - path_regex: (^|/)\.env\.enc$
+    age: age1mgfxth3cm5ac8zc7qffg0nvrpw8upzna3zplrg3zkv4ff8wu3ucqpm3pzw
+  - path_regex: (^|/)\.env(\.local)?$
+    age: age1mgfxth3cm5ac8zc7qffg0nvrpw8upzna3zplrg3zkv4ff8wu3ucqpm3pzw
