@@ -36,3 +36,7 @@ apps/desktop/src-tauri/icons/android/
 apps/desktop/src-tauri/icons/ios/
 .env.local
 !.env.enc
+
+# Indice de codegraph: base de datos generada, ~23 MB, especifica de cada
+# maquina. Se regenera; no debe viajar en el repo.
+.codegraph/
