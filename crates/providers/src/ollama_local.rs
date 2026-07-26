@@ -91,6 +91,10 @@ impl LlmProvider for OllamaProvider {
         false
     }
 
+    async fn health_check(&self) -> bool {
+        self.ping().await
+    }
+
     async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse, ProviderError> {
         let messages: Vec<OllamaMessage> = req
             .messages

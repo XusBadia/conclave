@@ -1387,8 +1387,11 @@ fn is_transport_failure(msg: &str) -> bool {
 /// identical connection-timeout failures across N cases.
 async fn ensure_provider_ready(provider: &Arc<dyn LlmProvider>) -> CommandResult<()> {
     if provider.id() == "ollama" {
-        let probe = OllamaProvider::new();
-        let ok = tokio::time::timeout(std::time::Duration::from_secs(3), probe.ping())
+        // Probe the provider we were handed. Building a fresh OllamaProvider
+        // here ignored a custom base URL and pinged the default port instead,
+        // so an unreachable endpoint read as healthy whenever anything
+        // happened to listen on 11434.
+        let ok = tokio::time::timeout(std::time::Duration::from_secs(3), provider.health_check())
             .await
             .unwrap_or(false);
         if !ok {

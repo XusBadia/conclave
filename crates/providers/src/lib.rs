@@ -119,6 +119,17 @@ pub trait LlmProvider: Send + Sync + std::fmt::Debug {
 
     /// Run a one-shot completion.
     async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse, ProviderError>;
+
+    /// Cheap liveness probe for providers backed by a server that may be
+    /// down. Defaults to `true`: a provider with nothing to pre-flight is
+    /// always ready.
+    ///
+    /// Implementors MUST probe their own configured endpoint. Probing a
+    /// freshly built provider instead would ignore a custom base URL and
+    /// report an unreachable endpoint as healthy.
+    async fn health_check(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
