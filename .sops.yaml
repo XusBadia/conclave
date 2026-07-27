@@ -1,9 +1,10 @@
-# Se cifran .env, .env.local y el propio .env.enc (esta última regla es la que
-# permite editarlo in situ con 'envctl edit' sin descifrarlo a disco).
+# Se cifran los .env en claro (incluidas variantes por entorno: .env.prod,
+# .env.dev.local, .env.test.local...) y el propio .env*.enc, que es lo que
+# permite editarlo in situ con 'envctl edit' sin descifrarlo a disco.
 # Deliberadamente NO se incluye .env.example: se commitea en claro, solo con
-# los nombres de las variables y sin valores.
+# los nombres de las variables y sin valores. Tampoco .envrc, que es de direnv.
 creation_rules:
-  - path_regex: (^|/)\.env\.enc$
+  - path_regex: (^|/)\.env[^/]*\.enc$
     age: age1mgfxth3cm5ac8zc7qffg0nvrpw8upzna3zplrg3zkv4ff8wu3ucqpm3pzw
-  - path_regex: (^|/)\.env(\.local)?$
+  - path_regex: (^|/)\.env(\.(local|development|dev|test|staging|preview|prod|production|ci))?(\.local)?$
     age: age1mgfxth3cm5ac8zc7qffg0nvrpw8upzna3zplrg3zkv4ff8wu3ucqpm3pzw
