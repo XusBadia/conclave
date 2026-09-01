@@ -130,6 +130,15 @@ pub struct ProvidersConfig {
     /// same panel.
     #[serde(default)]
     pub cli_local_overrides: HashMap<String, bool>,
+    /// Explicit model selected for each local CLI provider. Keeping this
+    /// alongside the provider id makes the choice apply consistently to
+    /// cases, batches, document Q&A, and connection tests.
+    #[serde(default)]
+    pub cli_models: HashMap<String, String>,
+    /// Reasoning effort selected for each local CLI provider (`low` through
+    /// `max`). The CLI adapters translate this to each vendor's flag.
+    #[serde(default)]
+    pub cli_reasoning_efforts: HashMap<String, String>,
 }
 
 impl Config {
@@ -310,6 +319,31 @@ mod tests {
         "#;
         let cfg: Config = toml::from_str(raw).unwrap();
         assert!(cfg.providers.cli_local_overrides.is_empty());
+    }
+
+    #[test]
+    fn cli_inference_settings_round_trip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("conclave.toml");
+
+        let mut cfg = Config::default();
+        cfg.providers
+            .cli_models
+            .insert("codex-cli".to_owned(), "gpt-5.6-luna".to_owned());
+        cfg.providers
+            .cli_reasoning_efforts
+            .insert("codex-cli".to_owned(), "xhigh".to_owned());
+
+        cfg.save(&path).unwrap();
+        let loaded = Config::load(&path).unwrap();
+        assert_eq!(
+            loaded.providers.cli_models.get("codex-cli"),
+            Some(&"gpt-5.6-luna".to_owned())
+        );
+        assert_eq!(
+            loaded.providers.cli_reasoning_efforts.get("codex-cli"),
+            Some(&"xhigh".to_owned())
+        );
     }
 
     #[test]

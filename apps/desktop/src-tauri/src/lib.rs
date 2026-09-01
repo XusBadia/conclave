@@ -101,6 +101,7 @@ pub fn run() {
             commands::cli_diagnostics,
             commands::redetect_cli_binaries,
             commands::set_cli_login_override,
+            commands::set_cli_inference_settings,
             commands::privacy_settings,
             commands::set_privacy_settings,
             commands::oauth_anthropic_start,

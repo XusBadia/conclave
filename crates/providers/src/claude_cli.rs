@@ -105,6 +105,7 @@ use crate::LlmProvider;
 /// `--model sonnet` shortcut without locking us to "whatever Anthropic
 /// decides Sonnet is right now".
 pub const DEFAULT_MODEL: &str = "claude-sonnet-4-6";
+pub const DEFAULT_REASONING_EFFORT: &str = "high";
 
 /// Hard ceiling on a single completion. The CLI itself has no built-in
 /// timeout for `-p`, so we enforce one here to avoid wedged batches.
@@ -132,6 +133,8 @@ pub struct ClaudeCliProvider {
     binary: Option<PathBuf>,
     /// Model id passed via `--model`.
     model: String,
+    /// Thinking budget passed via `--effort`.
+    reasoning_effort: String,
 }
 
 impl std::fmt::Debug for ClaudeCliProvider {
@@ -139,6 +142,7 @@ impl std::fmt::Debug for ClaudeCliProvider {
         f.debug_struct("ClaudeCliProvider")
             .field("binary", &self.binary)
             .field("model", &self.model)
+            .field("reasoning_effort", &self.reasoning_effort)
             .finish()
     }
 }
@@ -156,6 +160,7 @@ impl ClaudeCliProvider {
         Self {
             binary: detect_cached(),
             model: DEFAULT_MODEL.to_owned(),
+            reasoning_effort: DEFAULT_REASONING_EFFORT.to_owned(),
         }
     }
 
@@ -163,6 +168,13 @@ impl ClaudeCliProvider {
     #[must_use]
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
         self.model = model.into();
+        self
+    }
+
+    /// Override the effort level passed via `--effort`.
+    #[must_use]
+    pub fn with_reasoning_effort(mut self, effort: impl Into<String>) -> Self {
+        self.reasoning_effort = effort.into();
         self
     }
 
@@ -462,6 +474,8 @@ impl LlmProvider for ClaudeCliProvider {
             "project,local",
             "--model",
             model.as_str(),
+            "--effort",
+            self.reasoning_effort.as_str(),
         ]);
         if !system_text.is_empty() {
             cmd.arg("--append-system-prompt-file").arg(&system_path);

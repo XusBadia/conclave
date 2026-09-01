@@ -57,13 +57,10 @@
 //!   itself adds OpenAI's standard Codex prompting on top of that.
 //! - Vision: not supported in `exec` mode per the docs.
 //! - Web citations: not surfaced.
-//! - Model selection: we pass neither `--model` nor the user's
-//!   `~/.codex/config.toml` (we run with `--ignore-user-config`), so
-//!   the model is whatever the installed `codex` binary picks as its
-//!   built-in default. The id reported to the UI ([`DEFAULT_MODEL`],
-//!   `gpt-5.5`) is therefore a nominal label, not a binding request —
-//!   it tracks Codex's default at the time of writing but can drift
-//!   from the real model if a future CLI release changes that default.
+//! - Model and reasoning selection are explicit: current Codex CLI releases
+//!   expose `--model` and the `model_reasoning_effort` config override. This
+//!   matters because `--ignore-user-config` deliberately ignores the user's
+//!   global defaults.
 
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
@@ -83,13 +80,11 @@ use crate::types::{
 };
 use crate::LlmProvider;
 
-/// Nominal model id reported to the UI.
-///
-/// The actual model used at runtime is whatever Codex's built-in
-/// default selects — we pass `--ignore-user-config` to keep the choice
-/// deterministic, and at the time of writing Codex 0.128 ships
-/// `gpt-5.5` as that default.
-pub const DEFAULT_MODEL: &str = "gpt-5.5";
+/// Model used when the user has not saved an explicit CLI preference.
+/// It is passed to `codex exec --model`, so the UI label and the model
+/// serving the request cannot drift apart.
+pub const DEFAULT_MODEL: &str = "gpt-5.6-luna";
+pub const DEFAULT_REASONING_EFFORT: &str = "xhigh";
 
 /// Hard ceiling on a single completion. `codex exec` does not enforce
 /// a built-in timeout; this prevents wedged batches.
@@ -110,12 +105,16 @@ pub struct CodexCliProvider {
     /// Pre-resolved path to the `codex` binary, when present on
     /// `$PATH`. `None` means not found at construction time.
     binary: Option<PathBuf>,
+    model: String,
+    reasoning_effort: String,
 }
 
 impl std::fmt::Debug for CodexCliProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CodexCliProvider")
             .field("binary", &self.binary)
+            .field("model", &self.model)
+            .field("reasoning_effort", &self.reasoning_effort)
             .finish()
     }
 }
@@ -131,7 +130,21 @@ impl CodexCliProvider {
     pub fn new() -> Self {
         Self {
             binary: detect_cached(),
+            model: DEFAULT_MODEL.to_owned(),
+            reasoning_effort: DEFAULT_REASONING_EFFORT.to_owned(),
         }
+    }
+
+    #[must_use]
+    pub fn with_model(mut self, model: impl Into<String>) -> Self {
+        self.model = model.into();
+        self
+    }
+
+    #[must_use]
+    pub fn with_reasoning_effort(mut self, effort: impl Into<String>) -> Self {
+        self.reasoning_effort = effort.into();
+        self
     }
 
     /// Process-wide cached resolution of the `codex` binary path.
@@ -316,12 +329,24 @@ impl LlmProvider for CodexCliProvider {
         };
 
         let prompt = flatten_messages_for_codex(&req);
+        let model = if req.model.is_empty() {
+            self.model.as_str()
+        } else {
+            req.model.as_str()
+        };
 
         let cwd = TempDir::new().map_err(|e| ProviderError::Other(format!("tempdir: {e}")))?;
         let last_msg_path = cwd.path().join("last-message.txt");
 
         let mut cmd = Command::new(bin);
         cmd.arg("exec")
+            .arg("--model")
+            .arg(model)
+            .arg("--config")
+            .arg(format!(
+                "model_reasoning_effort=\"{}\"",
+                self.reasoning_effort
+            ))
             .arg("--sandbox")
             .arg("read-only")
             .arg("--skip-git-repo-check")
@@ -426,7 +451,7 @@ impl LlmProvider for CodexCliProvider {
         Ok(CompletionResponse {
             text,
             usage: Usage::default(),
-            model: DEFAULT_MODEL.to_owned(),
+            model: model.to_owned(),
             web_citations: Vec::new(),
         })
     }
@@ -642,6 +667,13 @@ mod tests {
         let p = CodexCliProvider::new();
         assert_eq!(p.capabilities().scope, ProviderScope::General);
         assert!(!p.capabilities().vision);
+    }
+
+    #[test]
+    fn defaults_pin_luna_with_xhigh_reasoning() {
+        let p = CodexCliProvider::new();
+        assert_eq!(p.model, "gpt-5.6-luna");
+        assert_eq!(p.reasoning_effort, "xhigh");
     }
 
     /// `cargo test` runs tests in parallel by default; `HOME` is

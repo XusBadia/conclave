@@ -11,7 +11,10 @@ export type ProviderId =
   | "openai-oauth"
   | "apple-intelligence"
   | "claude-cli"
-  | "codex-cli";
+  | "codex-cli"
+  | "grok-cli";
+
+export type LocalCliProviderId = "claude-cli" | "codex-cli" | "grok-cli";
 
 // Where a provider can be plugged in. Mirrors the Rust-side
 // `ProviderScope` enum in `crates/providers/src/types.rs`.
@@ -51,11 +54,19 @@ export const PROVIDER_META: Record<string, ProviderMeta> = {
   },
   "codex-cli": {
     id: "codex-cli",
-    name: "Codex (local)",
+    name: "GPT (local)",
     tagline: "Tu CLI oficial · tu suscripción",
     authLabel: "Local CLI",
     monogram: "G",
     brand: "emerald",
+  },
+  "grok-cli": {
+    id: "grok-cli",
+    name: "Grok (local)",
+    tagline: "Tu CLI oficial · tu suscripción",
+    authLabel: "Local CLI",
+    monogram: "X",
+    brand: "slate",
   },
   "anthropic-oauth": {
     id: "anthropic-oauth",
@@ -182,7 +193,7 @@ export const BRAND_HOVER: Record<ProviderMeta["brand"], string> = {
 // Provider groups for the Settings picker, ordered by **compliance and
 // stability**:
 //
-//   1. **Local CLI** (`claude-cli`, `codex-cli`) when at least one of
+//   1. **Local CLI** (`claude-cli`, `codex-cli`, `grok-cli`) when at least one of
 //      the binaries is detected on `$PATH` AND the user is signed in
 //      via the CLI's own login flow. This is the only vendor-sanctioned
 //      way to use a Pro/Max/Plus subscription with Conclave: the
@@ -230,7 +241,7 @@ export function buildPickerGroups(providers: GroupInputProvider[]): PickerGroup[
     captionKey: cliAvailable
       ? "settings.picker_group_cli_caption"
       : "settings.picker_group_cli_caption_not_installed",
-    ids: ["claude-cli", "codex-cli"],
+    ids: ["claude-cli", "codex-cli", "grok-cli"],
   };
   const apiGroup: PickerGroup = {
     titleKey: "settings.picker_group_api",
@@ -270,7 +281,7 @@ export function isSubscriptionOAuth(id: string): boolean {
  * with their own credentials).
  */
 export function isLocalCli(id: string): boolean {
-  return id === "claude-cli" || id === "codex-cli";
+  return id === "claude-cli" || id === "codex-cli" || id === "grok-cli";
 }
 
 /**
@@ -279,13 +290,15 @@ export function isLocalCli(id: string): boolean {
  * "Open install page" button. Kept here (instead of i18n) because the
  * URL is the same across locales and we want a single source of truth.
  */
-export const CLI_INSTALL_URL: Record<"claude-cli" | "codex-cli", string> = {
+export const CLI_INSTALL_URL: Record<LocalCliProviderId, string> = {
   "claude-cli": "https://docs.claude.com/en/docs/agents/claude-code/overview",
   "codex-cli": "https://github.com/openai/codex",
+  "grok-cli": "https://grok.com",
 };
 
 /** The exact terminal command to log into each CLI. */
-export const CLI_LOGIN_COMMAND: Record<"claude-cli" | "codex-cli", string> = {
+export const CLI_LOGIN_COMMAND: Record<LocalCliProviderId, string> = {
   "claude-cli": "claude auth login",
   "codex-cli": "codex login",
+  "grok-cli": "grok login",
 };

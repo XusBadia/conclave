@@ -61,6 +61,7 @@ mod claude_cli;
 mod cli_local;
 mod codex_cli;
 mod error;
+mod grok_cli;
 mod mock;
 mod oauth_flow;
 mod ollama_local;
@@ -79,14 +80,21 @@ pub use apple_intelligence::{
 };
 pub use claude_cli::{
     ClaudeCliProvider, DEFAULT_MODEL as CLAUDE_CLI_DEFAULT_MODEL,
+    DEFAULT_REASONING_EFFORT as CLAUDE_CLI_DEFAULT_REASONING_EFFORT,
     PROVIDER_ID as CLAUDE_CLI_PROVIDER_ID,
 };
 pub use cli_local::ProbeDetails;
 pub use codex_cli::{
     CodexCliProvider, DEFAULT_MODEL as CODEX_CLI_DEFAULT_MODEL,
+    DEFAULT_REASONING_EFFORT as CODEX_CLI_DEFAULT_REASONING_EFFORT,
     PROVIDER_ID as CODEX_CLI_PROVIDER_ID,
 };
 pub use error::ProviderError;
+pub use grok_cli::{
+    GrokCliProvider, DEFAULT_MODEL as GROK_CLI_DEFAULT_MODEL,
+    DEFAULT_REASONING_EFFORT as GROK_CLI_DEFAULT_REASONING_EFFORT,
+    PROVIDER_ID as GROK_CLI_PROVIDER_ID,
+};
 pub use mock::MockProvider;
 pub use oauth_flow::{
     conclave_oauth_path, open_in_browser, persist_tokens, AnthropicLoginFlow, OAuthTokens,

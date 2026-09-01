@@ -9,8 +9,8 @@ use std::sync::Arc;
 use crate::error::ProviderError;
 use crate::{
     secrets, AnthropicOAuthProvider, AnthropicProvider, AppleIntelligenceProvider,
-    ClaudeCliProvider, CodexCliProvider, LlmProvider, OllamaProvider, OpenAIOAuthProvider,
-    OpenAiProvider, OpenRouterProvider,
+    ClaudeCliProvider, CodexCliProvider, GrokCliProvider, LlmProvider, OllamaProvider,
+    OpenAIOAuthProvider, OpenAiProvider, OpenRouterProvider,
 };
 
 /// API-key + local providers. Listed in the order the UI groups them:
@@ -30,7 +30,7 @@ pub const KNOWN_PROVIDERS: &[&str] = &[
 /// them with their own detection logic ("is the binary on `$PATH`?" /
 /// "is the user logged in?") and the build-provider switch can branch
 /// on them without an api-key lookup.
-pub const CLI_PROVIDERS: &[&str] = &["claude-cli", "codex-cli"];
+pub const CLI_PROVIDERS: &[&str] = &["claude-cli", "codex-cli", "grok-cli"];
 
 /// OAuth (subscription-based) providers. Experimental.
 pub const OAUTH_PROVIDERS: &[&str] = &["anthropic-oauth", "openai-oauth"];
@@ -99,6 +99,8 @@ impl ProviderRegistry {
             .insert("claude-cli", Arc::new(ClaudeCliProvider::new()));
         me.inner
             .insert("codex-cli", Arc::new(CodexCliProvider::new()));
+        me.inner
+            .insert("grok-cli", Arc::new(GrokCliProvider::new()));
         Ok(me)
     }
 

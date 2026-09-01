@@ -16,10 +16,12 @@ use conclave_evidence::{
 use conclave_providers::{
     open_in_browser, persist_tokens, secrets, AnthropicLoginFlow, AnthropicOAuthProvider,
     AnthropicProvider, AppleIntelligenceAvailability, AppleIntelligenceProvider, ClaudeCliProvider,
-    CodexCliProvider, CompletionRequest, ImageInput, LlmProvider, Message, OllamaProvider,
-    OpenAILoginFlow, OpenAIOAuthProvider, OpenAiProvider, OpenRouterProvider, ProbeDetails,
-    ProviderScope, APPLE_INTELLIGENCE_MODEL_LABEL, CLAUDE_CLI_DEFAULT_MODEL, CLI_PROVIDERS,
-    CODEX_CLI_DEFAULT_MODEL, KNOWN_PROVIDERS, OAUTH_PROVIDERS,
+    CodexCliProvider, CompletionRequest, GrokCliProvider, ImageInput, LlmProvider, Message,
+    OllamaProvider, OpenAILoginFlow, OpenAIOAuthProvider, OpenAiProvider, OpenRouterProvider,
+    ProbeDetails, ProviderScope, APPLE_INTELLIGENCE_MODEL_LABEL, CLAUDE_CLI_DEFAULT_MODEL,
+    CLAUDE_CLI_DEFAULT_REASONING_EFFORT, CLI_PROVIDERS, CODEX_CLI_DEFAULT_MODEL,
+    CODEX_CLI_DEFAULT_REASONING_EFFORT, GROK_CLI_DEFAULT_MODEL, GROK_CLI_DEFAULT_REASONING_EFFORT,
+    KNOWN_PROVIDERS, OAUTH_PROVIDERS,
 };
 use conclave_rag::{
     ChunkParams, DocumentRecord, DocumentRepository, IngestionEvent, IngestionPipeline,
@@ -46,7 +48,7 @@ type CommandResult<T> = Result<T, String>;
 /// Providers that authenticate outside Conclave's keychain: local
 /// daemons (`ollama`), the on-device Apple bridge, OAuth providers
 /// (tokens live in `<config>/oauth/*.json`), and the CLI proxies
-/// (`claude-cli`, `codex-cli` — auth is the user's own CLI session).
+/// (`claude-cli`, `codex-cli`, `grok-cli` — auth is the user's own CLI session).
 ///
 /// Every run/test/Q&A path MUST resolve keys through
 /// [`resolve_provider_api_key`] instead of matching inline. History:
@@ -63,6 +65,7 @@ const KEYCHAIN_LESS_PROVIDERS: &[&str] = &[
     "openai-oauth",
     "claude-cli",
     "codex-cli",
+    "grok-cli",
 ];
 
 /// Resolve the API key for `provider_id`: empty string for
@@ -535,10 +538,10 @@ async fn ask_documents_impl(
         .map_err(|e| e.to_string())?;
     let api_key = resolve_provider_api_key(&request.provider_id)?;
     let provider = build_provider(
+        state.inner(),
         &request.provider_id,
         &api_key,
         request.model.clone(),
-        state.paths.config_dir(),
     )?;
     ensure_general_scope(&provider)?;
     ensure_provider_ready(&provider).await?;
@@ -671,6 +674,7 @@ pub struct ProviderInfo {
     pub id: String,
     pub status: ProviderStatus,
     pub default_model: String,
+    pub reasoning_effort: Option<String>,
     pub requires_network: bool,
     pub auth: String,
     pub kind: String,
@@ -706,6 +710,7 @@ async fn apple_intelligence_info() -> Option<ProviderInfo> {
             ProviderStatus::Unreachable
         },
         default_model: APPLE_INTELLIGENCE_MODEL_LABEL.to_owned(),
+        reasoning_effort: None,
         requires_network: false,
         auth: "local".into(),
         kind: "subtask".into(),
@@ -816,6 +821,7 @@ pub async fn list_providers(
             id: (*id).to_owned(),
             status,
             default_model,
+            reasoning_effort: None,
             requires_network: requires_net,
             auth: if *id == "ollama" {
                 "local".into()
@@ -886,13 +892,14 @@ pub async fn list_providers(
             id: (*id).to_owned(),
             status,
             default_model,
+            reasoning_effort: None,
             requires_network: true,
             auth: "oauth".into(),
             kind: "oauth".into(),
             hint,
         });
     }
-    // Local CLI providers. Maps the two underlying flags
+    // Local CLI providers. Maps the underlying flags
     // (`is_installed` / `is_logged_in`) onto the three statuses the UI
     // cares about — `NotInstalled` (binary missing), `LoginRequired`
     // (binary present but no session), `Ready`. The `hint` carries a
@@ -905,11 +912,13 @@ pub async fn list_providers(
     // is still installed + logged in via its own credentials — that's
     // what "Disconnect" must mean for a provider Conclave does not
     // own credentials for. Re-picking the tile clears the flag.
-    let (disabled_ids, cli_overrides): (Vec<String>, std::collections::HashMap<String, bool>) = {
+    let (disabled_ids, cli_overrides, cli_models, cli_efforts) = {
         let guard = state.config.lock().map_err(|_| "config poisoned")?;
         (
             guard.providers.disabled_provider_ids.clone(),
             guard.providers.cli_local_overrides.clone(),
+            guard.providers.cli_models.clone(),
+            guard.providers.cli_reasoning_efforts.clone(),
         )
     };
     // Force-refresh on Reload (or after the frontend's redetect button)
@@ -919,9 +928,10 @@ pub async fn list_providers(
     if force {
         ClaudeCliProvider::refresh_binary_cache();
         CodexCliProvider::refresh_binary_cache();
+        GrokCliProvider::refresh_binary_cache();
     }
     for id in CLI_PROVIDERS {
-        let (status, default_model) = match *id {
+        let (status, built_in_model, built_in_effort) = match *id {
             "claude-cli" => {
                 let installed = ClaudeCliProvider::is_installed();
                 let logged_in = if installed {
@@ -936,7 +946,11 @@ pub async fn list_providers(
                 } else {
                     ProviderStatus::Ready
                 };
-                (status, CLAUDE_CLI_DEFAULT_MODEL.to_owned())
+                (
+                    status,
+                    CLAUDE_CLI_DEFAULT_MODEL.to_owned(),
+                    CLAUDE_CLI_DEFAULT_REASONING_EFFORT.to_owned(),
+                )
             }
             "codex-cli" => {
                 let installed = CodexCliProvider::is_installed();
@@ -952,7 +966,31 @@ pub async fn list_providers(
                 } else {
                     ProviderStatus::Ready
                 };
-                (status, CODEX_CLI_DEFAULT_MODEL.to_owned())
+                (
+                    status,
+                    CODEX_CLI_DEFAULT_MODEL.to_owned(),
+                    CODEX_CLI_DEFAULT_REASONING_EFFORT.to_owned(),
+                )
+            }
+            "grok-cli" => {
+                let installed = GrokCliProvider::is_installed();
+                let logged_in = if installed {
+                    GrokCliProvider::is_logged_in().await
+                } else {
+                    false
+                };
+                let status = if !installed {
+                    ProviderStatus::NotInstalled
+                } else if !logged_in {
+                    ProviderStatus::LoginRequired
+                } else {
+                    ProviderStatus::Ready
+                };
+                (
+                    status,
+                    GROK_CLI_DEFAULT_MODEL.to_owned(),
+                    GROK_CLI_DEFAULT_REASONING_EFFORT.to_owned(),
+                )
             }
             _ => continue,
         };
@@ -985,7 +1023,8 @@ pub async fn list_providers(
         out.push(ProviderInfo {
             id: (*id).to_owned(),
             status: final_status,
-            default_model,
+            default_model: cli_models.get(*id).cloned().unwrap_or(built_in_model),
+            reasoning_effort: Some(cli_efforts.get(*id).cloned().unwrap_or(built_in_effort)),
             requires_network: true,
             auth: "cli".into(),
             kind: "cli".into(),
@@ -1022,7 +1061,7 @@ pub async fn set_provider_key(
     id: String,
     api_key: String,
 ) -> CommandResult<()> {
-    if matches!(id.as_str(), "claude-cli" | "codex-cli") {
+    if matches!(id.as_str(), "claude-cli" | "codex-cli" | "grok-cli") {
         // CLI providers have no Conclave-side credential to store
         // (auth is handled by the user's installed CLI), so the
         // picker tile click reuses this command to clear the
@@ -1051,7 +1090,7 @@ pub async fn test_provider(
         Ok(k) => k,
         Err(e) => return err(e),
     };
-    let provider = build_provider(&id, &api_key, None, state.paths.config_dir())?;
+    let provider = build_provider(state.inner(), &id, &api_key, None)?;
     let prompt = prompt.unwrap_or_else(|| "Reply with one word: hello.".into());
     let result = provider
         .complete(CompletionRequest {
@@ -1097,7 +1136,7 @@ pub async fn test_provider(
 
 #[tauri::command]
 pub fn remove_provider_key(state: State<'_, AppState>, id: String) -> CommandResult<()> {
-    if matches!(id.as_str(), "claude-cli" | "codex-cli") {
+    if matches!(id.as_str(), "claude-cli" | "codex-cli" | "grok-cli") {
         // No Conclave-managed credential to delete (auth lives in
         // the user's installed CLI). Persist a "user disconnected
         // this CLI inside Conclave" flag instead so the next
@@ -1256,11 +1295,19 @@ pub async fn oauth_logout(state: State<'_, AppState>, id: String) -> CommandResu
 }
 
 fn build_provider(
+    state: &AppState,
     id: &str,
     api_key: &str,
     model: Option<String>,
-    config_dir: &std::path::Path,
 ) -> Result<Arc<dyn LlmProvider>, String> {
+    let (model, reasoning_effort) = {
+        let guard = state.config.lock().map_err(|_| "config poisoned")?;
+        (
+            model.or_else(|| guard.providers.cli_models.get(id).cloned()),
+            guard.providers.cli_reasoning_efforts.get(id).cloned(),
+        )
+    };
+    let config_dir = state.paths.config_dir();
     Ok(match id {
         "anthropic" => {
             let mut p = AnthropicProvider::new(api_key.to_owned());
@@ -1303,15 +1350,30 @@ fn build_provider(
             if let Some(m) = model {
                 p = p.with_model(m);
             }
+            if let Some(effort) = reasoning_effort {
+                p = p.with_reasoning_effort(effort);
+            }
             Arc::new(p)
         }
         "codex-cli" => {
-            // Codex `exec` does not document a `--model` flag, so the
-            // CLI's own `~/.codex/config.toml` selection wins. The
-            // `model` argument here is accepted for API symmetry but
-            // not threaded through.
-            let _ = model;
-            Arc::new(CodexCliProvider::new())
+            let mut p = CodexCliProvider::new();
+            if let Some(m) = model {
+                p = p.with_model(m);
+            }
+            if let Some(effort) = reasoning_effort {
+                p = p.with_reasoning_effort(effort);
+            }
+            Arc::new(p)
+        }
+        "grok-cli" => {
+            let mut p = GrokCliProvider::new();
+            if let Some(m) = model {
+                p = p.with_model(m);
+            }
+            if let Some(effort) = reasoning_effort {
+                p = p.with_reasoning_effort(effort);
+            }
+            Arc::new(p)
         }
         // OAuth providers read only Conclave's own token file. We do NOT
         // fall back to `~/.codex/auth.json` / `~/.claude/.credentials.json`
@@ -1748,10 +1810,10 @@ pub async fn preview_data_boundary(
     // empty string and the preview still renders.
     let api_key = resolve_provider_api_key(&request.provider_id).unwrap_or_default();
     let provider = build_provider(
+        state.inner(),
         &request.provider_id,
         &api_key,
         request.model.clone(),
-        state.paths.config_dir(),
     )?;
     let mode = parse_data_boundary_mode(request.data_boundary_mode.as_deref());
     let skill_blocked_reason = skill_boundary_block_reason(
@@ -2225,15 +2287,10 @@ pub(crate) async fn run_case_impl(
     // from N concurrent tokio tasks (the per-case workers in the batch
     // runner). Skip the keychain for every provider that doesn't use
     // it — mirrors the pattern at the Knowledge Q&A path above. CLI
-    // providers (`claude-cli`, `codex-cli`) also live outside the
+    // providers (`claude-cli`, `codex-cli`, `grok-cli`) also live outside the
     // Conclave keychain — auth is the user's own CLI session.
     let api_key = resolve_provider_api_key(&request.provider_id)?;
-    let provider = build_provider(
-        &request.provider_id,
-        &api_key,
-        request.model.clone(),
-        state.paths.config_dir(),
-    )?;
+    let provider = build_provider(state, &request.provider_id, &api_key, request.model.clone())?;
     ensure_general_scope(&provider)?;
     ensure_provider_ready(&provider).await?;
     let mode = parse_data_boundary_mode(request.data_boundary_mode.as_deref());
@@ -2605,13 +2662,13 @@ async fn run_draft_case_impl(
     // Provider + pipeline setup mirrors run_case_impl. OAuth providers
     // use disk-stored tokens, not the macOS keychain — skip secrets::load
     // for them. Same applies to the local CLI providers (`claude-cli`,
-    // `codex-cli`): auth lives in the user's own CLI session.
+    // `codex-cli`, `grok-cli`): auth lives in the user's own CLI session.
     let api_key = resolve_provider_api_key(&request.provider_id)?;
     let provider = build_provider(
+        state.inner(),
         &request.provider_id,
         &api_key,
         request.model.clone(),
-        state.paths.config_dir(),
     )?;
     ensure_general_scope(&provider)?;
     ensure_provider_ready(&provider).await?;
@@ -2792,15 +2849,10 @@ pub(crate) async fn run_case_deliberated_impl(
         .map_err(|e| e.to_string())?;
     // OAuth providers use disk-stored tokens, not the macOS keychain.
     // See run_case_impl for the concurrent-deadlock rationale. CLI
-    // providers (`claude-cli`, `codex-cli`) similarly have no Conclave
+    // providers (`claude-cli`, `codex-cli`, `grok-cli`) similarly have no Conclave
     // keychain entry — their auth lives in the user's own CLI session.
     let api_key = resolve_provider_api_key(&request.provider_id)?;
-    let provider = build_provider(
-        &request.provider_id,
-        &api_key,
-        request.model.clone(),
-        state.paths.config_dir(),
-    )?;
+    let provider = build_provider(state, &request.provider_id, &api_key, request.model.clone())?;
     ensure_general_scope(&provider)?;
     ensure_provider_ready(&provider).await?;
     let mode = parse_data_boundary_mode(request.data_boundary_mode.as_deref());
@@ -3273,10 +3325,10 @@ pub async fn run_batch_cases(
     // concurrent-deadlock rationale.
     let probe_key = resolve_provider_api_key(&request.provider_id).unwrap_or_default();
     let probe_provider = build_provider(
+        state.inner(),
         &request.provider_id,
         &probe_key,
         request.model.clone(),
-        state.paths.config_dir(),
     )?;
     ensure_general_scope(&probe_provider)?;
     ensure_provider_ready(&probe_provider).await?;
@@ -3836,7 +3888,7 @@ pub fn delete_cases(
 // CLI provider diagnostics
 //
 // These commands back the in-Settings "CLI setup" panel. The panel
-// renders when the user clicks a `claude-cli` or `codex-cli` tile whose
+// renders when the user clicks a local CLI tile whose
 // status is anything other than `Ready` — i.e. either the binary is
 // missing from `$PATH` (`NotInstalled`) or the user hasn't run
 // `claude auth login` / `codex login` yet (`LoginRequired`).
@@ -3930,6 +3982,20 @@ pub async fn cli_diagnostics(
                 "codex login".to_owned(),
             )
         }
+        "grok-cli" => {
+            let installed = GrokCliProvider::is_installed();
+            let probe = if installed {
+                GrokCliProvider::probe_login_detailed().await
+            } else {
+                ProbeDetails::unresolved_binary()
+            };
+            (
+                GrokCliProvider::binary_path().map(|p| p.display().to_string()),
+                probe,
+                "https://grok.com".to_owned(),
+                "grok login".to_owned(),
+            )
+        }
         _ => return Err(format!("cli_diagnostics: unsupported provider id `{id}`")),
     };
 
@@ -3961,6 +4027,7 @@ pub async fn cli_diagnostics(
 pub async fn redetect_cli_binaries() -> CommandResult<()> {
     ClaudeCliProvider::refresh_binary_cache();
     CodexCliProvider::refresh_binary_cache();
+    GrokCliProvider::refresh_binary_cache();
     Ok(())
 }
 
@@ -3976,7 +4043,7 @@ pub async fn redetect_cli_binaries() -> CommandResult<()> {
 /// back to `NotConfigured`). Disabling the override is left alone so
 /// the user can still "Disconnect" + un-override + reconnect later.
 ///
-/// Only accepts the two CLI provider ids; everything else 400s so the
+/// Only accepts local CLI provider ids; everything else 400s so the
 /// frontend can't accidentally write garbage keys.
 #[tauri::command]
 pub async fn set_cli_login_override(
@@ -3984,7 +4051,7 @@ pub async fn set_cli_login_override(
     id: String,
     value: bool,
 ) -> CommandResult<()> {
-    if !matches!(id.as_str(), "claude-cli" | "codex-cli") {
+    if !matches!(id.as_str(), "claude-cli" | "codex-cli" | "grok-cli") {
         return Err(format!(
             "set_cli_login_override: unsupported provider id `{id}`"
         ));
@@ -3999,6 +4066,40 @@ pub async fn set_cli_login_override(
     } else {
         cfg.providers.cli_local_overrides.remove(&id);
     }
+    cfg.save(state.paths.config_file())
+        .map_err(|e| e.to_string())?;
+    *state.config.lock().map_err(|_| "config poisoned")? = cfg;
+    Ok(())
+}
+
+/// Persist the model and reasoning effort used by a local CLI provider.
+/// These defaults are resolved inside `build_provider`, so they apply to
+/// every inference surface rather than only the Settings connection test.
+#[tauri::command]
+pub async fn set_cli_inference_settings(
+    state: State<'_, AppState>,
+    id: String,
+    model: String,
+    reasoning_effort: String,
+) -> CommandResult<()> {
+    if !CLI_PROVIDERS.contains(&id.as_str()) {
+        return Err(format!(
+            "set_cli_inference_settings: unsupported provider id `{id}`"
+        ));
+    }
+    let model = model.trim();
+    if model.is_empty() || model.len() > 120 || model.chars().any(char::is_control) {
+        return Err("model must be between 1 and 120 printable characters".into());
+    }
+    let effort = reasoning_effort.trim().to_lowercase();
+    if !matches!(effort.as_str(), "low" | "medium" | "high" | "xhigh" | "max") {
+        return Err("reasoning effort must be low, medium, high, xhigh, or max".into());
+    }
+    let mut cfg = state.config.lock().map_err(|_| "config poisoned")?.clone();
+    cfg.providers
+        .cli_models
+        .insert(id.clone(), model.to_owned());
+    cfg.providers.cli_reasoning_efforts.insert(id, effort);
     cfg.save(state.paths.config_file())
         .map_err(|e| e.to_string())?;
     *state.config.lock().map_err(|_| "config poisoned")? = cfg;

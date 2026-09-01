@@ -41,6 +41,7 @@ import {
   isSubscriptionOAuth,
   metaFor,
   shouldRecommendCli,
+  type LocalCliProviderId,
   type ProviderId,
   type ProviderMeta,
 } from "../lib/providers";
@@ -54,7 +55,7 @@ type ConnectFlow =
   | { kind: "api-key"; id: string; draft: string }
   | { kind: "oauth-anthropic"; pasteInstructions: string | null; code: string }
   | { kind: "oauth-openai"; url: string }
-  | { kind: "cli-setup"; id: "claude-cli" | "codex-cli" };
+  | { kind: "cli-setup"; id: LocalCliProviderId };
 
 export function SettingsPage() {
   const { t } = useTranslation();
@@ -264,7 +265,7 @@ export function SettingsPage() {
         // best-effort; the setup panel still renders correctly
       }
       if (!info || !isReady(info)) {
-        setFlow({ kind: "cli-setup", id: id as "claude-cli" | "codex-cli" });
+        setFlow({ kind: "cli-setup", id: id as LocalCliProviderId });
         // Refresh providers in the background so the panel sees the
         // freshly-cleared flag on its next listProviders pull.
         void refresh();
@@ -1011,6 +1012,10 @@ function ActiveProviderView({
           </div>
         </div>
 
+        {officialCli && (
+          <CliInferenceSettings provider={provider} disabled={busy} />
+        )}
+
         <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border-subtle pt-4">
           <Button size="sm" onClick={onTest} loading={busy}>
             {t("settings.action_test")}
@@ -1045,6 +1050,91 @@ function ActiveProviderView({
   );
 }
 
+function CliInferenceSettings({
+  provider,
+  disabled,
+}: {
+  provider: ProviderInfo;
+  disabled: boolean;
+}) {
+  const { t } = useTranslation();
+  const id = provider.id as LocalCliProviderId;
+  const [model, setModel] = useState(provider.default_model);
+  const [effort, setEffort] = useState(provider.reasoning_effort ?? "high");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setModel(provider.default_model);
+    setEffort(provider.reasoning_effort ?? "high");
+  }, [provider.default_model, provider.reasoning_effort]);
+
+  const save = async () => {
+    setSaving(true);
+    setSaved(false);
+    setSaveError(null);
+    try {
+      await ipc.setCliInferenceSettings(id, model, effort);
+      setSaved(true);
+    } catch (error) {
+      setSaveError(String(error));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="mt-4 rounded-lg border border-border-subtle bg-bg-subtle p-3">
+      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_10rem_auto] sm:items-end">
+        <Field label={t("settings.cli_model_label")}>
+          <Input
+            value={model}
+            onChange={(event) => {
+              setModel(event.target.value);
+              setSaved(false);
+            }}
+            placeholder={id === "codex-cli" ? "gpt-5.6-luna" : undefined}
+          />
+        </Field>
+        <Field label={t("settings.cli_effort_label")}>
+          <select
+            value={effort}
+            onChange={(event) => {
+              setEffort(event.target.value);
+              setSaved(false);
+            }}
+            className="block w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none focus:ring-conclave"
+          >
+            {(["low", "medium", "high", "xhigh", "max"] as const).map(
+              (level) => (
+                <option key={level} value={level}>
+                  {level}
+                </option>
+              ),
+            )}
+          </select>
+        </Field>
+        <Button
+          size="sm"
+          onClick={save}
+          loading={saving}
+          disabled={disabled || model.trim().length === 0}
+        >
+          {t("settings.cli_settings_save")}
+        </Button>
+      </div>
+      <p className="mt-2 text-[11.5px] text-ink-faint">
+        {saveError
+          ? saveError
+          : saved
+            ? t("settings.cli_settings_saved")
+            : t("settings.cli_settings_hint")}
+      </p>
+    </div>
+  );
+}
+
 // ===========================================================================
 // Connect flow (in-card overlay)
 // ===========================================================================
@@ -1068,7 +1158,7 @@ function ConnectFlowView({
   onSubmitAnthropicCode: (code: string) => void;
   onUpdateAnthropicCode: (code: string) => void;
   onUpdateApiDraft: (draft: string) => void;
-  onCliReady: (id: "claude-cli" | "codex-cli") => void;
+  onCliReady: (id: LocalCliProviderId) => void;
   onRefreshProviders: () => Promise<void> | void;
 }) {
   const { t } = useTranslation();
@@ -1340,8 +1430,8 @@ function OpenAIOAuthFlow({ url }: { url: string }) {
 }
 
 // ===========================================================================
-// CLI setup panel — drives the in-Settings recovery flow for the two
-// local-CLI providers (`claude-cli`, `codex-cli`).
+// CLI setup panel — drives the in-Settings recovery flow for the local
+// Claude, GPT/Codex, and Grok providers.
 //
 // Surfaces three variants driven by the live `ProviderInfo.status`:
 //
@@ -1364,7 +1454,7 @@ function CliSetupPanel({
   onReady,
   onRefreshProviders,
 }: {
-  id: "claude-cli" | "codex-cli";
+  id: LocalCliProviderId;
   provider: ProviderInfo | null;
   onReady: () => void;
   onRefreshProviders: () => Promise<void> | void;
@@ -1382,7 +1472,8 @@ function CliSetupPanel({
   const readyFiredRef = useRef(false);
 
   const meta = metaFor(id);
-  const binary = id === "claude-cli" ? "claude" : "codex";
+  const binary =
+    id === "claude-cli" ? "claude" : id === "codex-cli" ? "codex" : "grok";
   const loginCommand = CLI_LOGIN_COMMAND[id];
   const installUrl = CLI_INSTALL_URL[id];
 
@@ -2021,7 +2112,7 @@ function ProviderErrorBanner({
     );
   }
   if (status === "expired" && isCli) {
-    const cliId = activeProvider.id as "claude-cli" | "codex-cli";
+    const cliId = activeProvider.id as LocalCliProviderId;
     const cliCommand = CLI_LOGIN_COMMAND[cliId] ?? "";
     return (
       <CliExpiredBanner
@@ -2078,18 +2169,22 @@ function hintLabel(
 ): string {
   if (!isLocalCli(providerId)) return hint;
   if (hint === "not_installed") {
-    return t(
+    const suffix =
       providerId === "claude-cli"
-        ? "settings.cli_hint_not_installed_claude"
-        : "settings.cli_hint_not_installed_codex",
-    );
+        ? "claude"
+        : providerId === "codex-cli"
+          ? "codex"
+          : "grok";
+    return t(`settings.cli_hint_not_installed_${suffix}`);
   }
   if (hint === "login_required") {
-    return t(
+    const suffix =
       providerId === "claude-cli"
-        ? "settings.cli_hint_login_required_claude"
-        : "settings.cli_hint_login_required_codex",
-    );
+        ? "claude"
+        : providerId === "codex-cli"
+          ? "codex"
+          : "grok";
+    return t(`settings.cli_hint_login_required_${suffix}`);
   }
   return hint;
 }

@@ -19,7 +19,7 @@
 //!    answer we replace the process PATH with it.
 //! 2. **Curated prepend** — fall back to a list of well-known macOS
 //!    install locations (`~/.local/bin`, `/opt/homebrew/bin`,
-//!    `/usr/local/bin`, `~/.cargo/bin`, `~/.bun/bin`) plus *every* nvm
+//!    `/usr/local/bin`, `~/.cargo/bin`, `~/.bun/bin`, `~/.grok/bin`) plus *every* nvm
 //!    node version's `bin`, prepended to whatever PATH is already set.
 //!    Best-effort safety net for when the shell snoop fails.
 //!
@@ -129,6 +129,7 @@ fn prepend_well_known(current: &str) -> String {
     if let Some(h) = &home {
         additions.push(h.join(".cargo/bin"));
         additions.push(h.join(".bun/bin"));
+        additions.push(h.join(".grok/bin"));
         // A globally-installed CLI (`npm i -g codex`) lives under exactly
         // one nvm node version, and which one is invisible from out here.
         // Add every version's `bin` so `which` can find the tool wherever

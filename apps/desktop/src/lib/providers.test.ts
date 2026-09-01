@@ -43,6 +43,8 @@ describe("slot and eligibility rules", () => {
 
   it("classifies the CLI and OAuth pairs", () => {
     expect(isLocalCli("claude-cli")).toBe(true);
+    expect(isLocalCli("codex-cli")).toBe(true);
+    expect(isLocalCli("grok-cli")).toBe(true);
     expect(isLocalCli("anthropic")).toBe(false);
     expect(isSubscriptionOAuth("openai-oauth")).toBe(true);
     expect(isSubscriptionOAuth("openai")).toBe(false);
@@ -77,6 +79,7 @@ describe("buildPickerGroups / shouldRecommendCli", () => {
       "settings.picker_group_oauth",
     ]);
     expect(groups[0].captionKey).toBe("settings.picker_group_cli_caption");
+    expect(groups[0].ids).toEqual(["claude-cli", "codex-cli", "grok-cli"]);
     expect(shouldRecommendCli(cliReady)).toBe(true);
   });
 

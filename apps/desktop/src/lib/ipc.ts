@@ -101,6 +101,7 @@ export interface ProviderInfo {
   id: string;
   status: ProviderStatus;
   default_model: string;
+  reasoning_effort: string | null;
   requires_network: boolean;
   auth: "api-key" | "local" | "oauth" | "cli";
   // `subtask` flags providers that are restricted to non-clinical
@@ -478,7 +479,7 @@ export const ipc = {
     invoke<string>("test_provider", { id, prompt }),
   removeProviderKey: (id: string) =>
     invoke<void>("remove_provider_key", { id }),
-  cliDiagnostics: (id: "claude-cli" | "codex-cli") =>
+  cliDiagnostics: (id: "claude-cli" | "codex-cli" | "grok-cli") =>
     invoke<CliDiagnostics>("cli_diagnostics", { id }),
   /** Invalidate the process-wide which() cache for both CLI providers
    *  so the next listProviders/cliDiagnostics call re-walks $PATH. Use
@@ -491,9 +492,19 @@ export const ipc = {
    *  persists in `conclave.toml` so the user only needs to declare it
    *  once; passing `value: false` removes the override. */
   setCliLoginOverride: (
-    id: "claude-cli" | "codex-cli",
+    id: "claude-cli" | "codex-cli" | "grok-cli",
     value: boolean,
   ) => invoke<void>("set_cli_login_override", { id, value }),
+  setCliInferenceSettings: (
+    id: "claude-cli" | "codex-cli" | "grok-cli",
+    model: string,
+    reasoningEffort: string,
+  ) =>
+    invoke<void>("set_cli_inference_settings", {
+      id,
+      model,
+      reasoningEffort,
+    }),
   privacySettings: () => invoke<PrivacySettings>("privacy_settings"),
   setPrivacySettings: (settings: PrivacySettings) =>
     invoke<PrivacySettings>("set_privacy_settings", { settings }),
