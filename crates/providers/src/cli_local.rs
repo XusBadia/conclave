@@ -228,11 +228,13 @@ mod tests {
 
     #[test]
     fn tracked_env_keys_lists_only_present_keys() {
-        // HOME is essentially guaranteed in every test environment.
+        // Other provider tests temporarily replace HOME process-wide. PATH is
+        // not mutated by the suite, so it is a stable presence check even when
+        // tests run in parallel.
         let keys = tracked_env_keys_present();
         assert!(
-            keys.contains(&"HOME".to_owned()),
-            "expected HOME in {keys:?}"
+            keys.contains(&"PATH".to_owned()),
+            "expected PATH in {keys:?}"
         );
     }
 }
