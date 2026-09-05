@@ -7,7 +7,7 @@ export const RELEASES_AVAILABLE = true;
 // Windows ships an .msi, Linux an .AppImage.
 //
 // productName is "Conclave MD" (with a space), so the bundler emits filenames
-// like `Conclave MD_0.1.0_aarch64.dmg`. GitHub replaces spaces in release
+// like `Conclave MD_0.1.2_aarch64.dmg`. GitHub replaces spaces in release
 // asset names with dots on upload, so the public download URL is
 // `Conclave.MD_…` — NOT a space and NOT %20. Verify against a real draft
 // release before publishing; a mismatch 404s silently.

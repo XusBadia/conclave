@@ -108,8 +108,8 @@
   },
   "providers": {
     "title": "Tu motor. Tus reglas.",
-    "subtitle": "Conclave MD es agnóstico al proveedor. Trae las claves que ya pagas o usa modelos locales completamente offline.",
-    "caption": "Conclave MD nunca proxea tu tráfico. Hablas directamente con el proveedor que elijas.",
+    "subtitle": "Conclave MD es agnóstico al proveedor. Usa tus claves, modelos locales o las CLI de Claude, GPT/Codex y Grok. En cada CLI puedes escoger el modelo disponible y su nivel de razonamiento.",
+    "caption": "Conclave MD nunca proxea tu tráfico. Hablas directamente con el proveedor que elijas, con el modelo y razonamiento que configures.",
     "list": [
       "Anthropic Claude",
       "OpenAI",
@@ -117,7 +117,8 @@
       "Ollama",
       "Apple Intelligence",
       "Claude Code CLI",
-      "Codex CLI"
+      "Codex CLI",
+      "Grok CLI"
     ]
   },
   "download": {
