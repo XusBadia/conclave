@@ -95,6 +95,7 @@ pub fn run() {
             commands::ask_documents,
             commands::deident_text,
             commands::list_providers,
+            commands::list_cli_models,
             commands::set_provider_key,
             commands::test_provider,
             commands::remove_provider_key,

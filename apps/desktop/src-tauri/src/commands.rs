@@ -681,6 +681,229 @@ pub struct ProviderInfo {
     pub hint: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CliModelOption {
+    pub id: String,
+    pub label: String,
+    pub reasoning_efforts: Vec<String>,
+    pub default_reasoning_effort: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexModelCatalog {
+    models: Vec<CodexModelEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexModelEntry {
+    slug: String,
+    display_name: String,
+    default_reasoning_level: String,
+    supported_reasoning_levels: Vec<CodexReasoningLevel>,
+    visibility: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexReasoningLevel {
+    effort: String,
+}
+
+fn model_option(
+    id: impl Into<String>,
+    label: impl Into<String>,
+    efforts: &[&str],
+    default_effort: &str,
+) -> CliModelOption {
+    CliModelOption {
+        id: id.into(),
+        label: label.into(),
+        reasoning_efforts: efforts.iter().map(|effort| (*effort).to_owned()).collect(),
+        default_reasoning_effort: default_effort.to_owned(),
+    }
+}
+
+fn codex_model_fallback() -> Vec<CliModelOption> {
+    vec![
+        model_option(
+            "gpt-5.6-luna",
+            "GPT-5.6-Luna",
+            &["low", "medium", "high", "xhigh", "max"],
+            "medium",
+        ),
+        model_option(
+            "gpt-5.6-sol",
+            "GPT-5.6-Sol",
+            &["low", "medium", "high", "xhigh", "max", "ultra"],
+            "low",
+        ),
+        model_option(
+            "gpt-5.6-terra",
+            "GPT-5.6-Terra",
+            &["low", "medium", "high", "xhigh", "max", "ultra"],
+            "medium",
+        ),
+        model_option(
+            "gpt-5.5",
+            "GPT-5.5",
+            &["low", "medium", "high", "xhigh"],
+            "medium",
+        ),
+    ]
+}
+
+fn parse_codex_model_catalog(stdout: &str) -> Option<Vec<CliModelOption>> {
+    let catalog: CodexModelCatalog = serde_json::from_str(stdout).ok()?;
+    let models = catalog
+        .models
+        .into_iter()
+        .filter(|model| model.visibility.as_deref() != Some("hide"))
+        .filter_map(|model| {
+            let efforts = model
+                .supported_reasoning_levels
+                .into_iter()
+                .map(|level| level.effort)
+                .collect::<Vec<_>>();
+            if model.slug.is_empty() || efforts.is_empty() {
+                return None;
+            }
+            Some(CliModelOption {
+                id: model.slug,
+                label: model.display_name,
+                reasoning_efforts: efforts,
+                default_reasoning_effort: model.default_reasoning_level,
+            })
+        })
+        .collect::<Vec<_>>();
+    (!models.is_empty()).then_some(models)
+}
+
+fn parse_grok_models(stdout: &str) -> Option<Vec<CliModelOption>> {
+    let models = stdout
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            let value = trimmed
+                .strip_prefix("* ")
+                .or_else(|| trimmed.strip_prefix("- "))?
+                .trim_end_matches(" (default)")
+                .trim();
+            (!value.is_empty())
+                .then(|| model_option(value, value, &["low", "medium", "high", "xhigh"], "high"))
+        })
+        .collect::<Vec<_>>();
+    (!models.is_empty()).then_some(models)
+}
+
+fn parse_claude_models(stdout: &str) -> Option<Vec<CliModelOption>> {
+    let model_help = stdout
+        .split("--model <model>")
+        .nth(1)?
+        .split("--name <name>")
+        .next()?;
+    let candidates = [
+        ("sonnet", "Claude Sonnet (latest)"),
+        ("opus", "Claude Opus (latest)"),
+        ("haiku", "Claude Haiku (latest)"),
+        ("fable", "Claude Fable (latest)"),
+    ];
+    let models = candidates
+        .into_iter()
+        .filter(|(id, _)| model_help.contains(&format!("'{id}'")))
+        .map(|(id, label)| {
+            model_option(
+                id,
+                label,
+                &["low", "medium", "high", "xhigh", "max"],
+                "high",
+            )
+        })
+        .collect::<Vec<_>>();
+    (!models.is_empty()).then_some(models)
+}
+
+async fn cli_catalog_output(binary: &std::path::Path, args: &[&str]) -> Option<String> {
+    let child = tokio::process::Command::new(binary)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let output = tokio::time::timeout(Duration::from_secs(15), child)
+        .await
+        .ok()?
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Return the model catalog advertised by the installed local CLI.
+///
+/// Codex and Grok expose machine-readable/list output. Claude currently
+/// advertises stable model-family aliases in `--help`, which is the same
+/// contract accepted by its `--model` flag. Every provider has a conservative
+/// fallback so Settings remains usable while offline or during a CLI update.
+#[tauri::command]
+pub async fn list_cli_models(id: String) -> CommandResult<Vec<CliModelOption>> {
+    match id.as_str() {
+        "codex-cli" => {
+            let discovered = if let Some(binary) = CodexCliProvider::binary_path() {
+                cli_catalog_output(&binary, &["debug", "models"])
+                    .await
+                    .and_then(|stdout| parse_codex_model_catalog(&stdout))
+            } else {
+                None
+            };
+            Ok(discovered.unwrap_or_else(codex_model_fallback))
+        }
+        "grok-cli" => {
+            let discovered = if let Some(binary) = GrokCliProvider::binary_path() {
+                cli_catalog_output(&binary, &["models"])
+                    .await
+                    .and_then(|stdout| parse_grok_models(&stdout))
+            } else {
+                None
+            };
+            Ok(discovered.unwrap_or_else(|| {
+                vec![model_option(
+                    GROK_CLI_DEFAULT_MODEL,
+                    GROK_CLI_DEFAULT_MODEL,
+                    &["low", "medium", "high", "xhigh"],
+                    GROK_CLI_DEFAULT_REASONING_EFFORT,
+                )]
+            }))
+        }
+        "claude-cli" => {
+            let discovered = if let Some(binary) = ClaudeCliProvider::binary_path() {
+                cli_catalog_output(&binary, &["--help"])
+                    .await
+                    .and_then(|stdout| parse_claude_models(&stdout))
+            } else {
+                None
+            };
+            Ok(discovered.unwrap_or_else(|| {
+                vec![
+                    model_option(
+                        "sonnet",
+                        "Claude Sonnet (latest)",
+                        &["low", "medium", "high", "xhigh", "max"],
+                        "high",
+                    ),
+                    model_option(
+                        "opus",
+                        "Claude Opus (latest)",
+                        &["low", "medium", "high", "xhigh", "max"],
+                        "high",
+                    ),
+                ]
+            }))
+        }
+        _ => Err(format!("list_cli_models: unsupported provider id `{id}`")),
+    }
+}
+
 /// Build the `ProviderInfo` entry for Apple Intelligence — or return
 /// `None` when the host can't run it.
 ///
@@ -4092,8 +4315,19 @@ pub async fn set_cli_inference_settings(
         return Err("model must be between 1 and 120 printable characters".into());
     }
     let effort = reasoning_effort.trim().to_lowercase();
-    if !matches!(effort.as_str(), "low" | "medium" | "high" | "xhigh" | "max") {
-        return Err("reasoning effort must be low, medium, high, xhigh, or max".into());
+    let effort_is_supported = match id.as_str() {
+        "grok-cli" => matches!(effort.as_str(), "low" | "medium" | "high" | "xhigh"),
+        "codex-cli" => matches!(
+            effort.as_str(),
+            "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
+        ),
+        "claude-cli" => matches!(effort.as_str(), "low" | "medium" | "high" | "xhigh" | "max"),
+        _ => false,
+    };
+    if !effort_is_supported {
+        return Err(format!(
+            "reasoning effort `{effort}` is not supported by `{id}`"
+        ));
     }
     let mut cfg = state.config.lock().map_err(|_| "config poisoned")?.clone();
     cfg.providers
@@ -4109,6 +4343,66 @@ pub async fn set_cli_inference_settings(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_visible_codex_models_with_per_model_efforts() {
+        let json = r#"{
+          "models": [
+            {
+              "slug": "hidden",
+              "display_name": "Hidden",
+              "default_reasoning_level": "medium",
+              "supported_reasoning_levels": [{"effort":"low"}],
+              "visibility": "hide"
+            },
+            {
+              "slug": "gpt-5.6-luna",
+              "display_name": "GPT-5.6-Luna",
+              "default_reasoning_level": "medium",
+              "supported_reasoning_levels": [
+                {"effort":"low"}, {"effort":"xhigh"}, {"effort":"max"}
+              ],
+              "visibility": "list"
+            }
+          ]
+        }"#;
+
+        let models = parse_codex_model_catalog(json).expect("catalog");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "gpt-5.6-luna");
+        assert_eq!(models[0].reasoning_efforts, ["low", "xhigh", "max"]);
+    }
+
+    #[test]
+    fn parses_grok_models_and_drops_output_copy() {
+        let output =
+            "You are logged in.\n\nAvailable models:\n  * grok-4.6 (default)\n  - grok-4.5\n";
+        let models = parse_grok_models(output).expect("catalog");
+        assert_eq!(
+            models
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            ["grok-4.6", "grok-4.5"]
+        );
+        assert_eq!(
+            models[0].reasoning_efforts,
+            ["low", "medium", "high", "xhigh"]
+        );
+    }
+
+    #[test]
+    fn parses_only_claude_aliases_advertised_by_help() {
+        let help = "--model <model> Use an alias (e.g. 'fable', 'opus', or 'sonnet').\n  -n, --name <name> Name";
+        let models = parse_claude_models(help).expect("catalog");
+        assert_eq!(
+            models
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            ["sonnet", "opus", "fable"]
+        );
+    }
 
     /// Minimal provider double for the data-boundary tests: only
     /// `requires_network` matters to `boundary_preview_for_request`.

@@ -112,6 +112,13 @@ export interface ProviderInfo {
   hint: string | null;
 }
 
+export interface CliModelOption {
+  id: string;
+  label: string;
+  reasoning_efforts: string[];
+  default_reasoning_effort: string;
+}
+
 /**
  * Snapshot of the login-status probe (what command we ran, how it
  * exited, whether we trusted a fallback artifact). Surfaced under the
@@ -473,6 +480,8 @@ export const ipc = {
     invoke<ProviderInfo[]>("list_providers", {
       forceRefresh: opts?.forceRefresh ?? false,
     }),
+  listCliModels: (id: "claude-cli" | "codex-cli" | "grok-cli") =>
+    invoke<CliModelOption[]>("list_cli_models", { id }),
   setProviderKey: (id: string, apiKey: string) =>
     invoke<void>("set_provider_key", { id, apiKey }),
   testProvider: (id: string, prompt?: string) =>

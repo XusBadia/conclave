@@ -1059,7 +1059,7 @@ checksum = "cc14f565cf027a105f7a44ccf9e5b424348421a1d8952a8fc9d499d313107789"
 
 [[package]]
 name = "conclave-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1080,7 +1080,7 @@ dependencies = [
 
 [[package]]
 name = "conclave-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "chrono",
  "directories",
@@ -1095,7 +1095,7 @@ dependencies = [
 
 [[package]]
 name = "conclave-deident"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "conclave-core",
  "proptest",
@@ -1108,7 +1108,7 @@ dependencies = [
 
 [[package]]
 name = "conclave-desktop"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1138,7 +1138,7 @@ dependencies = [
 
 [[package]]
 name = "conclave-evidence"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1156,7 +1156,7 @@ dependencies = [
 
 [[package]]
 name = "conclave-providers"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1180,7 +1180,7 @@ dependencies = [
 
 [[package]]
 name = "conclave-rag"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -1209,7 +1209,7 @@ dependencies = [
 
 [[package]]
 name = "conclave-verdict"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "chrono",

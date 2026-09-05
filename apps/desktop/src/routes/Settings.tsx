@@ -25,6 +25,7 @@ import {
   activeProvider,
   connectedSlotProviders,
   ipc,
+  type CliModelOption,
   type CliDiagnostics,
   type DataBoundaryMode,
   type ProviderInfo,
@@ -1061,6 +1062,8 @@ function CliInferenceSettings({
   const id = provider.id as LocalCliProviderId;
   const [model, setModel] = useState(provider.default_model);
   const [effort, setEffort] = useState(provider.reasoning_effort ?? "high");
+  const [modelOptions, setModelOptions] = useState<CliModelOption[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -1069,6 +1072,62 @@ function CliInferenceSettings({
     setModel(provider.default_model);
     setEffort(provider.reasoning_effort ?? "high");
   }, [provider.default_model, provider.reasoning_effort]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setCatalogLoading(true);
+    void ipc
+      .listCliModels(id)
+      .then((options) => {
+        if (!cancelled) setModelOptions(options);
+      })
+      .catch(() => {
+        if (!cancelled) setModelOptions([]);
+      })
+      .finally(() => {
+        if (!cancelled) setCatalogLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
+  const visibleModelOptions = useMemo(() => {
+    if (modelOptions.some((option) => option.id === model)) return modelOptions;
+    return [
+      {
+        id: model,
+        label: model,
+        reasoning_efforts: ["low", "medium", "high", "xhigh", "max"],
+        default_reasoning_effort: provider.reasoning_effort ?? "high",
+      },
+      ...modelOptions,
+    ];
+  }, [model, modelOptions, provider.reasoning_effort]);
+
+  const selectedModel = useMemo(
+    () => visibleModelOptions.find((option) => option.id === model),
+    [model, visibleModelOptions],
+  );
+  const reasoningEfforts = useMemo(
+    () =>
+      selectedModel?.reasoning_efforts ?? [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+      ],
+    [selectedModel],
+  );
+
+  useEffect(() => {
+    if (reasoningEfforts.includes(effort)) return;
+    setEffort(
+      selectedModel?.default_reasoning_effort ?? reasoningEfforts[0] ?? "high",
+    );
+    setSaved(false);
+  }, [effort, reasoningEfforts, selectedModel?.default_reasoning_effort]);
 
   const save = async () => {
     setSaving(true);
@@ -1088,14 +1147,21 @@ function CliInferenceSettings({
     <div className="mt-4 rounded-lg border border-border-subtle bg-bg-subtle p-3">
       <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_10rem_auto] sm:items-end">
         <Field label={t("settings.cli_model_label")}>
-          <Input
+          <select
             value={model}
             onChange={(event) => {
               setModel(event.target.value);
               setSaved(false);
             }}
-            placeholder={id === "codex-cli" ? "gpt-5.6-luna" : undefined}
-          />
+            disabled={disabled || catalogLoading}
+            className="block w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none focus:ring-conclave disabled:cursor-wait disabled:opacity-60"
+          >
+            {visibleModelOptions.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
+              </option>
+            ))}
+          </select>
         </Field>
         <Field label={t("settings.cli_effort_label")}>
           <select
@@ -1104,22 +1170,21 @@ function CliInferenceSettings({
               setEffort(event.target.value);
               setSaved(false);
             }}
-            className="block w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none focus:ring-conclave"
+            disabled={disabled || catalogLoading}
+            className="block w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none focus:ring-conclave disabled:cursor-wait disabled:opacity-60"
           >
-            {(["low", "medium", "high", "xhigh", "max"] as const).map(
-              (level) => (
-                <option key={level} value={level}>
-                  {level}
-                </option>
-              ),
-            )}
+            {reasoningEfforts.map((level) => (
+              <option key={level} value={level}>
+                {level}
+              </option>
+            ))}
           </select>
         </Field>
         <Button
           size="sm"
           onClick={save}
           loading={saving}
-          disabled={disabled || model.trim().length === 0}
+          disabled={disabled || catalogLoading || model.trim().length === 0}
         >
           {t("settings.cli_settings_save")}
         </Button>
